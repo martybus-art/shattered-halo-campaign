@@ -1,0 +1,163 @@
+{
+  "template": {
+    "name": "Shattered Halo (2x2 Sectors)",
+    "description": "8 zones, each subdivided into a 2x2 grid (A1/A2/B1/B2). Fog-of-war enabled.",
+    "map_json": {
+      "zones": [
+        {
+          "key": "vault_ruins",
+          "name": "Vault Ruins"
+        },
+        {
+          "key": "ash_wastes",
+          "name": "Ash Wastes"
+        },
+        {
+          "key": "halo_spire",
+          "name": "Halo Spire"
+        },
+        {
+          "key": "sunken_manufactorum",
+          "name": "Sunken Manufactorum"
+        },
+        {
+          "key": "warp_scar_basin",
+          "name": "Warp Scar Basin"
+        },
+        {
+          "key": "obsidian_fields",
+          "name": "Obsidian Fields"
+        },
+        {
+          "key": "signal_crater",
+          "name": "Signal Crater"
+        },
+        {
+          "key": "xenos_forest",
+          "name": "Xenos Forest"
+        }
+      ],
+      "sectors": [
+        "A1",
+        "A2",
+        "B1",
+        "B2"
+      ],
+      "adjacency": {
+        "within_zone": [
+          [
+            "A1",
+            "A2"
+          ],
+          [
+            "A1",
+            "B1"
+          ],
+          [
+            "A2",
+            "B2"
+          ],
+          [
+            "B1",
+            "B2"
+          ]
+        ],
+        "between_zones": "ring"
+      }
+    },
+    "rules_json": {
+      "economy": {
+        "nip_cap_per_battle": 6,
+        "ncp_start_per_battle": 1,
+        "banned_strat_types": [
+          "interrupt",
+          "fight_on_death",
+          "revive",
+          "full_rerolls",
+          "auto_advance_charge",
+          "auto_6_charge",
+          "damage_cap",
+          "unit_resurrection"
+        ],
+        "nip_earn": [
+          {
+            "key": "personal_objective",
+            "value": 2
+          },
+          {
+            "key": "faction_objective",
+            "value": 3
+          },
+          {
+            "key": "battle_result_any",
+            "value": 1
+          },
+          {
+            "key": "kill_commander",
+            "value": 1
+          },
+          {
+            "key": "extract_commander",
+            "value": 1
+          },
+          {
+            "key": "heroic_sacrifice",
+            "value": 2
+          }
+        ],
+        "nip_spend_menu": [
+          {
+            "key": "choose_mission",
+            "cost": 3
+          },
+          {
+            "key": "mission_preference",
+            "cost": 2
+          },
+          {
+            "key": "mission_veto",
+            "cost": 2
+          },
+          {
+            "key": "mission_twist",
+            "cost": 1
+          },
+          {
+            "key": "gain_ncp",
+            "cost": 2
+          },
+          {
+            "key": "recon",
+            "cost": 2
+          },
+          {
+            "key": "false_signal",
+            "cost": 2
+          },
+          {
+            "key": "safe_passage",
+            "cost": 2
+          }
+        ]
+      }
+    },
+    "instability_json": {
+      "track_max": 10,
+      "advance": {
+        "per_game_day": 1,
+        "relic_discovered": 1,
+        "relic_activated": 1,
+        "zone_dominated": 1,
+        "secret_agenda_revealed": 1,
+        "escalation_battle": 1
+      },
+      "thresholds": {
+        "2": "Static Whispers",
+        "4": "Zone Flux",
+        "6": "Reality Fracture",
+        "8": "The Lumen Wake",
+        "10": "Endgame"
+      }
+    }
+  }
+}

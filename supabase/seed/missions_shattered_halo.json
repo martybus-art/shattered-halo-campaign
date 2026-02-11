@@ -1,0 +1,268 @@
+{
+  "missions": [
+    {
+      "name": "Sealed Reliquary",
+      "description": "A sealed vault door groans open. Secure the reliquary-core before the Halo purges its memory.",
+      "phase_min": 1,
+      "zone_tags": [
+        "vault_ruins",
+        "ruins"
+      ],
+      "mission_type": "retrieval",
+      "zone_hint": "Vault Ruins"
+    },
+    {
+      "name": "Echoes of the Archivum",
+      "description": "Broken cogitators whisper in dead tongues. Complete a data-rite at the central node.",
+      "phase_min": 1,
+      "zone_tags": [
+        "vault_ruins",
+        "data"
+      ],
+      "mission_type": "ritual",
+      "zone_hint": "Vault Ruins"
+    },
+    {
+      "name": "Ashstorm Ambush",
+      "description": "Toxic winds erase silhouettes. Strike fast\u2014every second the storm learns your name.",
+      "phase_min": 1,
+      "zone_tags": [
+        "ash_wastes",
+        "storm"
+      ],
+      "mission_type": "raid",
+      "zone_hint": "Ash Wastes"
+    },
+    {
+      "name": "Scavenger\u2019s Claim",
+      "description": "A half-buried cache surfaces in the grit. Hold it long enough to strip it bare.",
+      "phase_min": 1,
+      "zone_tags": [
+        "ash_wastes",
+        "salvage"
+      ],
+      "mission_type": "hold",
+      "zone_hint": "Ash Wastes"
+    },
+    {
+      "name": "Crown Signal",
+      "description": "A broadcast pings through the Halo like a heartbeat. Claim the spire and decode its intent.",
+      "phase_min": 1,
+      "zone_tags": [
+        "halo_spire",
+        "signal"
+      ],
+      "mission_type": "hold",
+      "zone_hint": "Halo Spire"
+    },
+    {
+      "name": "Spire Stair Massacre",
+      "description": "Narrow platforms. Long falls. One leader must not leave the stairs alive.",
+      "phase_min": 2,
+      "zone_tags": [
+        "halo_spire",
+        "vertical"
+      ],
+      "mission_type": "assassination",
+      "zone_hint": "Halo Spire"
+    },
+    {
+      "name": "Machine-Spirit Rebellion",
+      "description": "Ancient servitors awaken hostile to all. Bend them, break them, or die beneath their tools.",
+      "phase_min": 1,
+      "zone_tags": [
+        "sunken_manufactorum",
+        "machines"
+      ],
+      "mission_type": "sabotage",
+      "zone_hint": "Sunken Manufactorum"
+    },
+    {
+      "name": "Forgewater Extraction",
+      "description": "Boiling coolant floods the halls. Extract the canisters before they rupture.",
+      "phase_min": 1,
+      "zone_tags": [
+        "sunken_manufactorum",
+        "resource"
+      ],
+      "mission_type": "retrieval",
+      "zone_hint": "Sunken Manufactorum"
+    },
+    {
+      "name": "Reality Fracture Node",
+      "description": "A crack in realspace pulses. Perform the rite\u2014or disrupt it\u2014while the world forgets its edges.",
+      "phase_min": 2,
+      "zone_tags": [
+        "warp_scar_basin",
+        "warp"
+      ],
+      "mission_type": "ritual",
+      "zone_hint": "Warp Scar Basin"
+    },
+    {
+      "name": "Null-Tide Surge",
+      "description": "A null wave approaches. Hold the node at the moment the warp goes silent.",
+      "phase_min": 2,
+      "zone_tags": [
+        "warp_scar_basin",
+        "null"
+      ],
+      "mission_type": "hold",
+      "zone_hint": "Warp Scar Basin"
+    },
+    {
+      "name": "Black Glass Siege",
+      "description": "Shards of obsidian cut armour seals. Destroy the hardpoint or bleed out by inches.",
+      "phase_min": 1,
+      "zone_tags": [
+        "obsidian_fields",
+        "fortress"
+      ],
+      "mission_type": "sabotage",
+      "zone_hint": "Obsidian Fields"
+    },
+    {
+      "name": "Mirrorfire Crossings",
+      "description": "Laser reflections dance across black glass. Every move is a confession.",
+      "phase_min": 2,
+      "zone_tags": [
+        "obsidian_fields",
+        "hazard"
+      ],
+      "mission_type": "raid",
+      "zone_hint": "Obsidian Fields"
+    },
+    {
+      "name": "Intercept Transmission",
+      "description": "The crater amplifies every whisper. Complete two intercepts before the enemy decrypts you.",
+      "phase_min": 1,
+      "zone_tags": [
+        "signal_crater",
+        "signal"
+      ],
+      "mission_type": "retrieval",
+      "zone_hint": "Signal Crater"
+    },
+    {
+      "name": "Broadcast of Lies",
+      "description": "Plant a false transmission: let them chase ghosts while you take the ground.",
+      "phase_min": 2,
+      "zone_tags": [
+        "signal_crater",
+        "propaganda"
+      ],
+      "mission_type": "ritual",
+      "zone_hint": "Signal Crater"
+    },
+    {
+      "name": "Silent Predators",
+      "description": "The trees watch. The ground listens. Survive with your commander intact.",
+      "phase_min": 1,
+      "zone_tags": [
+        "xenos_forest",
+        "predators"
+      ],
+      "mission_type": "hold",
+      "zone_hint": "Xenos Forest"
+    },
+    {
+      "name": "Sporepath Hunt",
+      "description": "Trail spores lead to a marked prey. One leader is being culled\u2014decide whose.",
+      "phase_min": 2,
+      "zone_tags": [
+        "xenos_forest",
+        "hunt"
+      ],
+      "mission_type": "assassination",
+      "zone_hint": "Xenos Forest"
+    },
+    {
+      "name": "Vaultbreaker Run",
+      "description": "Alarm runes ignite. Get in, seize the shard, and escape before the Halo locks the doors.",
+      "phase_min": 2,
+      "zone_tags": [
+        "vault_ruins",
+        "speed"
+      ],
+      "mission_type": "raid",
+      "zone_hint": "Vault Ruins"
+    },
+    {
+      "name": "Ashline Convoy",
+      "description": "A supply crawler limps through ash dunes. Escort it\u2014or strip it to the bones.",
+      "phase_min": 2,
+      "zone_tags": [
+        "ash_wastes",
+        "convoy"
+      ],
+      "mission_type": "retrieval",
+      "zone_hint": "Ash Wastes"
+    },
+    {
+      "name": "Spire Resonance",
+      "description": "The spire begins to sing. Tune it to your will and the Halo will remember your name.",
+      "phase_min": 3,
+      "zone_tags": [
+        "halo_spire",
+        "endgame"
+      ],
+      "mission_type": "ritual",
+      "zone_hint": "Halo Spire"
+    },
+    {
+      "name": "Forge-Heart Overload",
+      "description": "Overload the forge-heart. It will not forgive you, but it might obey.",
+      "phase_min": 3,
+      "zone_tags": [
+        "sunken_manufactorum",
+        "endgame"
+      ],
+      "mission_type": "sabotage",
+      "zone_hint": "Sunken Manufactorum"
+    },
+    {
+      "name": "Warp Scar Coronation",
+      "description": "A throne-shaped absence forms in the air. Complete the rite to seat a \u2018king\u2019.",
+      "phase_min": 3,
+      "zone_tags": [
+        "warp_scar_basin",
+        "endgame"
+      ],
+      "mission_type": "ritual",
+      "zone_hint": "Warp Scar Basin"
+    },
+    {
+      "name": "Obsidian Monolith Wake",
+      "description": "A monolith stirs beneath the glass. Hold the site until it rises\u2014or until you break.",
+      "phase_min": 3,
+      "zone_tags": [
+        "obsidian_fields",
+        "endgame"
+      ],
+      "mission_type": "hold",
+      "zone_hint": "Obsidian Fields"
+    },
+    {
+      "name": "Craterwide Jam",
+      "description": "Blind the Halo. Jam every band. In the silence, something else will speak.",
+      "phase_min": 3,
+      "zone_tags": [
+        "signal_crater",
+        "endgame"
+      ],
+      "mission_type": "sabotage",
+      "zone_hint": "Signal Crater"
+    },
+    {
+      "name": "Forest of Borrowed Faces",
+      "description": "The forest imitates voices. Recover a \u2018face\u2019 from the undergrowth before it learns yours.",
+      "phase_min": 3,
+      "zone_tags": [
+        "xenos_forest",
+        "endgame"
+      ],
+      "mission_type": "raid",
+      "zone_hint": "Xenos Forest"
+    }
+  ]
+}
