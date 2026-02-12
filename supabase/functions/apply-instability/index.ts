@@ -1,0 +1,96 @@
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+
+function d10(): number {
+  return Math.floor(Math.random() * 10) + 1;
+}
+
+serve(async (req) => {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+    const { data: userData, error: uErr } = await userClient.auth.getUser();
+    if (uErr || !userData.user) return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), { status: 401 });
+
+    const body = await req.json().catch(() => ({}));
+    const campaignId = body.campaign_id as string;
+    if (!campaignId) return new Response(JSON.stringify({ ok: false, error: "campaign_id required" }), { status: 400 });
+
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+
+    const { data: mem } = await admin.from("campaign_members").select("role").eq("campaign_id", campaignId).eq("user_id", userData.user.id).maybeSingle();
+    const role = mem?.role ?? "player";
+    if (!(role === "lead" || role === "admin")) return new Response(JSON.stringify({ ok: false, error: "Not authorised" }), { status: 403 });
+
+    const { data: c, error: cErr } = await admin.from("campaigns").select("id,name,template_id,round_number,instability,phase").eq("id", campaignId).single();
+    if (cErr || !c) throw cErr ?? new Error("Campaign not found");
+
+    const newInstability = Math.min(10, (c.instability ?? 0) + 1);
+
+    const { error: upErr } = await admin.from("campaigns").update({ instability: newInstability }).eq("id", campaignId);
+    if (upErr) throw upErr;
+
+    const thresholdBand = newInstability >= 8 ? 8 : (newInstability >= 4 ? 4 : 0);
+    const roll = d10();
+
+    const { data: ev } = await admin
+      .from("instability_events")
+      .select("name,public_text,effect_json")
+      .eq("template_id", c.template_id)
+      .eq("threshold_min", thresholdBand)
+      .eq("d10", roll)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    const eventName = ev?.name ?? "Unlogged Disturbance";
+    const publicText = ev?.public_text ?? "The Halo shudders. Vox returns are inconsistent. Something changes, though no one agrees how.";
+    const effect = ev?.effect_json ?? {};
+
+    await admin.from("campaign_events").insert({
+      campaign_id: campaignId,
+      round_number: c.round_number,
+      instability_after: newInstability,
+      event_name: eventName,
+      event_roll: roll,
+      visibility: "public",
+      effect_json: effect
+    });
+
+    await admin.from("posts").insert({
+      campaign_id: campaignId,
+      round_number: c.round_number,
+      visibility: "public",
+      title: `Halo Instability: ${eventName}`,
+      body: `${publicText}\n\n(Instability now ${newInstability}/10.)`,
+      tags: ["instability", `t${thresholdBand}`, `d10_${roll}`],
+      created_by: userData.user.id
+    });
+
+    let phase = c.phase ?? 1;
+    if (newInstability >= 8) phase = Math.max(phase, 3);
+    else if (newInstability >= 4) phase = Math.max(phase, 2);
+
+    if (phase !== (c.phase ?? 1)) {
+      await admin.from("campaigns").update({ phase }).eq("id", campaignId);
+      await admin.from("posts").insert({
+        campaign_id: campaignId,
+        round_number: c.round_number,
+        visibility: "public",
+        title: `Phase Shift: Phase ${phase}`,
+        body: phase === 2
+          ? "The Halo's war becomes overt. Relics flare. Retreat becomes a luxury no one can afford."
+          : "Collapse approaches. The Halo itself begins to choose who may live long enough to flee.",
+        tags: ["phase", `phase_${phase}`],
+        created_by: userData.user.id
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true, instability: newInstability, thresholdBand, roll, eventName }), { status: 200 });
+  } catch (e) {
+    return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), { status: 500 });
+  }
+});

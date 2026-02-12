@@ -92,3 +92,10 @@ npm run dev
 - Go to `/campaigns` to create campaigns. Any authenticated user can create a campaign and becomes the **Lead**.
 - Invitations are stored in `pending_invites`. When an invited player signs in, the app calls the `accept-invites` function to add them automatically.
 - Lead controls are at `/lead?campaign=<id>`.
+
+
+## Evolution Pack
+- Run `supabase/migrations/004_relics_instability.sql`
+- Run `supabase/seed/seed_evolution_pack.sql`
+- Deploy edge function `apply-instability`
+- Redeploy `assign-missions` (zone-aware + influence-aware)
