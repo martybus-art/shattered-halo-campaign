@@ -190,12 +190,21 @@ const acceptInvites = async () => {
     }
   };
 
-  useEffect(() => {
-      console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
-      console.log("HAS_ANON_KEY", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+useEffect(() => {
+  const run = async () => {
+    await load();
+  };
+  run();
+
+  const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (session?.access_token) {
+      load();
+    }
+  });
+
+  return () => sub.subscription.unsubscribe();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   const myCampaignRows = memberships
     .map((m) => ({
