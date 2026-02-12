@@ -43,30 +43,19 @@ export default function CampaignsPage() {
 const acceptInvites = async () => {
   try {
     const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    if (!token) return; // ✅ don't call the function if not signed in / session not ready
+    if (!session?.access_token) return; // don't call if not signed in
 
-    const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`;
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, // ✅ add apikey
-          "Authorization": `Bearer ${token}`,
-      },
-      body: JSON.stringify({}),
+    const { error } = await supabase.functions.invoke("accept-invites", {
+      body: {},
     });
 
-    // Optional: silence expected 401s on fresh loads
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => "");
-      console.warn("accept-invites failed", resp.status, txt);
+    if (error) {
+      console.warn("accept-invites failed", error);
     }
   } catch (e) {
     console.warn("accept-invites error", e);
   }
 };
-
 
   const load = async () => {
     setLoading(true);
@@ -147,18 +136,37 @@ const acceptInvites = async () => {
 
       const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`;
 
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          template_id: selectedTemplate,
-          campaign_name: campaignName.trim(),
-          player_emails,
-        }),
-      });
+      const { data: { session } } = await supabase.auth.getSession();
+if (!session?.access_token) return alert("Session not ready yet. Refresh and try again.");
+
+const player_emails = emails
+  .split(",")
+  .map((e) => e.trim())
+  .filter(Boolean);
+
+const { data, error } = await supabase.functions.invoke("create-campaign", {
+  body: {
+    template_id: selectedTemplate,
+    campaign_name: campaignName.trim(),
+    player_emails,
+  },
+});
+
+if (error) {
+  alert(`Create failed: ${error.message}`);
+  return;
+}
+
+if (!data?.ok) {
+  alert(`Create failed: ${data?.error ?? "Unknown error"}`);
+  return;
+}
+
+alert("Campaign created! You are the Lead player.");
+setCampaignName("");
+setEmails("");
+await load();
+
 
       const text = await resp.text();
       let json: any = null;
