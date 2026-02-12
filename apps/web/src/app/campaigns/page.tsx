@@ -26,14 +26,6 @@ type Membership = {
   role: string;
 };
 
-useEffect(() => {
-  console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
-  console.log("HAS_ANON_KEY", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-
-  load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
-
 
 export default function CampaignsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
@@ -188,6 +180,8 @@ export default function CampaignsPage() {
   };
 
   useEffect(() => {
+      console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
+      console.log("HAS_ANON_KEY", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
