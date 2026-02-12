@@ -17,13 +17,12 @@ type Campaign = {
   phase: number;
   round_number: number;
   instability: number;
-  created_at?: string;
+  created_at: string;
 };
 
 type Membership = {
   campaign_id: string;
   role: string;
-  campaigns?: Campaign; // if you use select with FK join
 };
 
 export default function CampaignsPage() {
@@ -31,6 +30,7 @@ export default function CampaignsPage() {
 
   const [templates, setTemplates] = useState<Template[]>([]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [campaignsById, setCampaignsById] = useState<Record<string, Campaign>>({});
   const [loading, setLoading] = useState(true);
 
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
@@ -58,16 +58,17 @@ export default function CampaignsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      // Ensure we’re signed in (avoids weird “new login” session timing)
       const { data: userResp } = await supabase.auth.getUser();
       if (!userResp.user) {
         setTemplates([]);
         setMemberships([]);
+        setCampaignsById({});
         return;
       }
 
       await acceptInvites();
 
+      // Templates
       const { data: tpls, error: te } = await supabase
         .from("templates")
         .select("id,name,description")
@@ -77,14 +78,35 @@ export default function CampaignsPage() {
       setTemplates(tpls ?? []);
       if (!selectedTemplate && tpls?.length) setSelectedTemplate(tpls[0].id);
 
-      // Pull memberships (and campaign summaries if you want)
+      // Memberships
       const { data: mem, error: me } = await supabase
         .from("campaign_members")
-        .select("campaign_id,role,campaigns(id,name,phase,round_number,instability,created_at)")
+        .select("campaign_id,role")
         .order("created_at", { ascending: false });
 
       if (me) throw me;
-      setMemberships(mem ?? []);
+      const memRows = (mem ?? []) as Membership[];
+      setMemberships(memRows);
+
+      // Campaign summaries (second query avoids join typing headaches)
+      const ids = memRows.map((m) => m.campaign_id);
+      if (!ids.length) {
+        setCampaignsById({});
+        return;
+      }
+
+      const { data: camps, error: ce } = await supabase
+        .from("campaigns")
+        .select("id,name,phase,round_number,instability,created_at")
+        .in("id", ids);
+
+      if (ce) throw ce;
+
+      const map: Record<string, Campaign> = {};
+      (camps ?? []).forEach((c: any) => {
+        map[c.id] = c as Campaign;
+      });
+      setCampaignsById(map);
     } catch (e: any) {
       console.error(e);
       alert(e?.message ?? String(e));
@@ -100,16 +122,10 @@ export default function CampaignsPage() {
     setCreating(true);
     try {
       const { data: { session }, error: sessErr } = await supabase.auth.getSession();
-      if (sessErr) {
-        alert(sessErr.message);
-        return;
-      }
+      if (sessErr) return alert(sessErr.message);
 
       const token = session?.access_token;
-      if (!token) {
-        alert("Session not ready yet. Refresh the page and try again.");
-        return;
-      }
+      if (!token) return alert("Session not ready yet. Refresh the page and try again.");
 
       const player_emails = emails
         .split(",")
@@ -140,8 +156,7 @@ export default function CampaignsPage() {
       }
 
       if (!resp.ok) {
-        const msg = json?.error ?? text ?? `HTTP ${resp.status}`;
-        alert(`Create failed: ${msg}`);
+        alert(`Create failed: ${json?.error ?? text ?? `HTTP ${resp.status}`}`);
         return;
       }
 
@@ -171,7 +186,7 @@ export default function CampaignsPage() {
     .map((m) => ({
       campaign_id: m.campaign_id,
       role: m.role,
-      campaign: (m as any).campaigns as Campaign | undefined,
+      campaign: campaignsById[m.campaign_id],
     }))
     .filter((x) => !!x.campaign);
 
@@ -250,36 +265,24 @@ export default function CampaignsPage() {
                 <div key={row.campaign_id} className="rounded border border-brass/25 bg-void px-4 py-3">
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                     <div>
-                      <div className="text-brass font-semibold">{row.campaign?.name}</div>
+                      <div className="text-brass font-semibold">{row.campaign!.name}</div>
                       <div className="text-xs text-parchment/60">
-                        Role: {row.role} • Phase {row.campaign?.phase} • Round {row.campaign?.round_number} • Instability{" "}
-                        {row.campaign?.instability}/10
+                        Role: {row.role} • Phase {row.campaign!.phase} • Round {row.campaign!.round_number} • Instability{" "}
+                        {row.campaign!.instability}/10
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <a
-                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-                        href={`/dashboard?campaign=${row.campaign_id}`}
-                      >
+                      <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/dashboard?campaign=${row.campaign_id}`}>
                         Open Dashboard
                       </a>
-                      <a
-                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-                        href={`/map?campaign=${row.campaign_id}`}
-                      >
+                      <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${row.campaign_id}`}>
                         Map
                       </a>
-                      <a
-                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-                        href={`/conflicts?campaign=${row.campaign_id}`}
-                      >
+                      <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/conflicts?campaign=${row.campaign_id}`}>
                         Conflicts
                       </a>
                       {(row.role === "lead" || row.role === "admin") && (
-                        <a
-                          className="px-3 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30"
-                          href={`/lead?campaign=${row.campaign_id}`}
-                        >
+                        <a className="px-3 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30" href={`/lead?campaign=${row.campaign_id}`}>
                           Lead Controls
                         </a>
                       )}
