@@ -26,28 +26,69 @@ export default function CampaignsPage() {
     }).catch(() => null);
   };
 
-  const load = async () => {
-    const { data: userResp } = await supabase.auth.getUser();
-    const uid = userResp.user?.id;
-    if (!uid) return;
-
-    await acceptInvites();
-
-    const { data: t } = await supabase.from("templates").select("id,name,description").order("created_at", { ascending: true });
-    setTemplates(t ?? []);
-    if (!selectedTemplate && t?.length) setSelectedTemplate(t[0].id);
-
-    const { data: mem } = await supabase.from("campaign_members").select("campaign_id,role").eq("user_id", uid);
-    const ids = (mem ?? []).map((m: any) => m.campaign_id);
-    if (!ids.length) {
-      setMyCampaigns([]);
+const createCampaign = async () => {
+  try {
+    const { data: { session }, error: sessErr } = await supabase.auth.getSession();
+    if (sessErr) {
+      alert(sessErr.message);
       return;
     }
 
-    const { data: cs } = await supabase.from("campaigns").select("id,name,phase,round_number,instability").in("id", ids);
-    const roleById = new Map((mem ?? []).map((m: any) => [m.campaign_id, m.role]));
-    setMyCampaigns((cs ?? []).map((c: any) => ({ ...c, role: roleById.get(c.id) ?? "player" })));
-  };
+    const token = session?.access_token;
+    if (!token) {
+      alert("Session not ready yet. Refresh the page and try again.");
+      return;
+    }
+
+    const player_emails = emails
+      .split(",")
+      .map((e) => e.trim())
+      .filter(Boolean);
+
+    const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`;
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        template_id: selectedTemplate,
+        campaign_name: campaignName,
+        player_emails,
+      }),
+    });
+
+    const text = await resp.text();
+    let json: any = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // leave json null
+    }
+
+    if (!resp.ok) {
+      const msg = json?.error ?? text ?? `HTTP ${resp.status}`;
+      alert(`Create failed: ${msg}`);
+      return;
+    }
+
+    if (!json?.ok) {
+      alert(`Create failed: ${json?.error ?? "Unknown error"}`);
+      return;
+    }
+
+    alert("Campaign created! You are the Lead player.");
+    setCampaignName("");
+    setEmails("");
+    await load();
+  } catch (e: any) {
+    console.error(e);
+    alert(`Create failed: ${e?.message ?? e}`);
+  }
+};
+
 
   useEffect(() => { load(); }, []);
 
