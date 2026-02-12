@@ -37,9 +37,14 @@ export default function ConflictsPage() {
   }, []);
 
   const load = async () => {
-    const { data: c } = await supabase.from("campaigns").select("round_number,template_id,phase").eq("id", campaignId).single();
+    const { data: c, error: cErr }= await supabase.from("campaigns").select("round_number,template_id,phase").eq("id", campaignId).single();
     if (!c) return alert("Campaign not found");
     setRound(c.round_number);
+  
+    if (cErr || !c) {
+  console.error(cErr?.message ?? "Campaign not found");
+  return;
+}
 
     const { data: conf, error: ce } = await supabase.from("conflicts").select("*").eq("campaign_id", campaignId).eq("round_number", c.round_number);
     if (ce) return alert(ce.message);
