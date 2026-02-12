@@ -59,8 +59,6 @@ if (!user) return alert("Not signed in");
 const { data: { session } } = await supabase.auth.getSession();
 if (!session?.access_token) return alert("Session not ready. Refresh the page and try again.");
 
-    if (!token) return alert("Not signed in");
-
     const resp = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
