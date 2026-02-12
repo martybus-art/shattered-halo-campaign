@@ -28,36 +28,11 @@ export default function LeadControls() {
     const { data: mem } = await supabase.from("campaign_members").select("role").eq("campaign_id", cid).eq("user_id", uid).single();
     setRole(mem?.role ?? "player");
 
-const { data: c, error: cErr } = await supabase
-  .from("campaigns")
-  .select("id,name,phase,round_number,instability")
-  .eq("id", cid)
-  .single();
+    const { data: c } = await supabase.from("campaigns").select("id,name,phase,round_number,instability").eq("id", cid).single();
+    setCampaign(c ?? null);
 
-if (cErr || !c) {
-  alert(cErr?.message ?? "Campaign not found");
-  setCampaign(null);
-  setRound(null);
-  return;
-}
-
-setCampaign(c);
-
-const { data: r, error: rErr } = await supabase
-  .from("rounds")
-  .select("stage")
-  .eq("campaign_id", cid)
-  .eq("round_number", c.round_number)
-  .single();
-
-if (rErr) {
-  // Not fatal — you can still view the campaign.
-  setRound(null);
-  return;
-}
-
-setRound(r);
-
+    const { data: r } = await supabase.from("rounds").select("stage").eq("campaign_id", cid).eq("round_number", c.round_number).single();
+    setRound(r ?? null);
   };
 
   useEffect(() => {
@@ -122,10 +97,19 @@ setRound(r);
               onClick={() => callFn("assign-missions")}>
               Assign Missions
             </button>
-          </Card>
-        </div>
+            </Card>
 
-        <Card title="What’s next">
+  <Card title="Apply Instability">
+    <p className="text-parchment/70 text-sm">Increments Halo Instability by 1 and rolls an event from the appropriate d10 table. Also posts a public bulletin.</p>
+    <button disabled={!allowed} className="mt-3 w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40"
+      onClick={() => callFn("apply-instability")}>
+      Apply Instability (Game Day)
+    </button>
+  </Card>
+</div>
+
+<Card title="What’s next">
+
           <ul className="list-disc pl-5 space-y-2 text-parchment/75">
             <li>Add “Process Movement” + “Detect Conflicts” functions to fully remove admin work.</li>
             <li>Add “Resolve Recon” and “Apply Underdog Choices” functions.</li>

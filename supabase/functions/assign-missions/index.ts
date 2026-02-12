@@ -1,77 +1,122 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
+function rand<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
-    const { campaign_id } = (await req.json()) as { campaign_id: string };
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+    const { data: userData, error: uErr } = await userClient.auth.getUser();
+    if (uErr || !userData.user) return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), { status: 401 });
 
-    const { data: campaign, error: cErr } = await supabase
-      .from("campaigns")
-      .select("id, template_id, round_number, phase")
-      .eq("id", campaign_id)
-      .single();
-    if (cErr) throw cErr;
+    const body = await req.json().catch(() => ({}));
+    const campaignId = body.campaign_id as string;
+    if (!campaignId) return new Response(JSON.stringify({ ok: false, error: "campaign_id required" }), { status: 400 });
 
-    // Fetch conflicts needing mission assignment
-    const { data: conflicts, error: confErr } = await supabase
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+
+    const { data: mem } = await admin.from("campaign_members").select("role").eq("campaign_id", campaignId).eq("user_id", userData.user.id).maybeSingle();
+    const role = mem?.role ?? "player";
+    if (!(role === "lead" || role === "admin")) return new Response(JSON.stringify({ ok: false, error: "Not authorised" }), { status: 403 });
+
+    const { data: c, error: cErr } = await admin.from("campaigns").select("id,template_id,round_number,phase,instability").eq("id", campaignId).single();
+    if (cErr || !c) throw cErr ?? new Error("Campaign not found");
+
+    const { data: conflicts, error: coErr } = await admin
       .from("conflicts")
-      .select("id, zone_key, sector_key, mission_status")
-      .eq("campaign_id", campaign_id)
-      .eq("round_number", campaign.round_number)
-      .in("mission_status", ["unassigned", "pending_influence"]);
-    if (confErr) throw confErr;
+      .select("id,zone_key,sector_key,mission_id,mission_status")
+      .eq("campaign_id", campaignId)
+      .eq("round_number", c.round_number);
 
-    // Pull active missions for this phase
-    const { data: missions, error: mErr } = await supabase
+    if (coErr) throw coErr;
+
+    const { data: missions, error: mErr } = await admin
       .from("missions")
-      .select("id, name, phase_min, zone_tags, mission_type, description")
-      .eq("template_id", campaign.template_id)
+      .select("id,name,description,mission_type,phase_min,zone_tags")
+      .eq("template_id", c.template_id)
       .eq("is_active", true);
+
     if (mErr) throw mErr;
+    const pool = (missions ?? []).filter((m: any) => (m.phase_min ?? 1) <= (c.phase ?? 1));
 
-    const phaseMissions = missions.filter((m) => (m.phase_min ?? 1) <= campaign.phase);
+    const results: any[] = [];
 
-    const chooseRandom = <T>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
+    for (const conf of (conflicts ?? [])) {
+      if (conf.mission_id) continue;
 
-    for (const conf of conflicts ?? []) {
-      // If players used influence, read influence rows and apply the highest priority rule:
-      // choose (3 NIP) > preference (2 NIP) > veto (2 NIP) > none
-      const { data: infl } = await supabase
+      const tagged = pool.filter((m: any) => Array.isArray(m.zone_tags) ? m.zone_tags.includes(conf.zone_key) : false);
+      let candidates = tagged.length ? tagged : pool;
+
+      const { data: infl } = await admin
         .from("mission_influence")
-        .select("influence_type, payload, nip_spent, user_id")
-        .eq("conflict_id", conf.id);
+        .select("influence_type,nip_spent,payload,created_at,user_id")
+        .eq("conflict_id", conf.id)
+        .order("created_at", { ascending: true });
 
-      let missionId: string | null = null;
-      const inflArr = infl ?? [];
+      const influences = infl ?? [];
 
-      const choose = inflArr.find((x) => x.influence_type === "choose" && (x.payload as any)?.mission_id);
-      if (choose) missionId = (choose.payload as any).mission_id;
-
-      if (!missionId) {
-        // preference expects payload: {mission_ids:[...]} already drawn client-side or via helper; fallback:
-        const pref = inflArr.find((x) => x.influence_type === "preference");
-        if (pref && (pref.payload as any)?.mission_id) missionId = (pref.payload as any).mission_id;
+      const vetoes = influences.filter((x: any) => x.influence_type === "veto");
+      for (const _v of vetoes) {
+        if (candidates.length > 1) {
+          const drop = rand(candidates);
+          candidates = candidates.filter((m: any) => m.id !== drop.id);
+        }
       }
 
-      if (!missionId) {
-        // veto just forces reroll - handled by client; if present, we still randomize here once.
-        const candidates = phaseMissions;
-        missionId = candidates.length ? chooseRandom(candidates).id : null;
+      const choose = influences.find((x: any) => x.influence_type === "choose" && x.payload?.mission_id);
+      let chosen: any = null;
+
+      if (choose) {
+        const wanted = candidates.find((m: any) => m.id === choose.payload.mission_id) || pool.find((m: any) => m.id === choose.payload.mission_id);
+        if (wanted) chosen = wanted;
       }
 
-      if (!missionId) continue;
+      if (!chosen) {
+        const pref = influences.find((x: any) => x.influence_type === "preference");
+        if (pref && candidates.length >= 2) {
+          const a = rand(candidates);
+          let b = rand(candidates);
+          if (b.id == a.id && candidates.length > 1) b = candidates.find((m: any) => m.id !== a.id) ?? b;
+          chosen = rand([a, b]);
+        }
+      }
 
-      await supabase
+      if (!chosen) chosen = rand(candidates.length ? candidates : pool);
+
+      if (!chosen) continue;
+
+      const { error: upErr } = await admin
         .from("conflicts")
-        .update({ mission_id: missionId, mission_status: "assigned" })
+        .update({ mission_id: chosen.id, mission_status: "assigned" })
         .eq("id", conf.id);
+
+      if (upErr) throw upErr;
+
+      const twists = influences.filter((x: any) => x.influence_type === "twist");
+      if (twists.length) {
+        const tnames = twists.map((t: any) => t.payload?.twist ?? "unknown_twist");
+        await admin.from("posts").insert({
+          campaign_id: campaignId,
+          round_number: c.round_number,
+          visibility: "public",
+          title: "Mission Twist Declared",
+          body: `A battlefield twist has been invoked for this engagement: ${tnames.join(", ")}.`,
+          tags: ["twist", "mission"],
+          created_by: userData.user.id
+        });
+      }
+
+      results.push({ conflict_id: conf.id, mission_id: chosen.id, mission_name: chosen.name });
     }
 
-    return new Response(JSON.stringify({ ok: true, assigned: (conflicts ?? []).length }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, assigned: results.length, results }), { status: 200 });
   } catch (e) {
     return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), { status: 500 });
   }
