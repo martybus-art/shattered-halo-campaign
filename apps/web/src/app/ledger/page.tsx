@@ -6,14 +6,29 @@ import { Card } from "@/components/Card";
 
 type Entry = { round_number: number; entry_type: string; currency: string; amount: number; reason: string; created_at: string; };
 
+function getQueryCampaign(): string | null {
+  if (typeof window === "undefined") return null;
+  const u = new URL(window.location.href);
+  return u.searchParams.get("campaign");
+}
+
 export default function LedgerPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [campaignId, setCampaignId] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
 
+  useEffect(() => {
+    const q = getQueryCampaign();
+    if (q) setCampaignId(q);
+  }, []);
+
   const load = async () => {
-    const { data, error } = await supabase.from("ledger").select("round_number,entry_type,currency,amount,reason,created_at")
-      .eq("campaign_id", campaignId).order("created_at", { ascending: false }).limit(100);
+    const { data, error } = await supabase
+      .from("ledger")
+      .select("round_number,entry_type,currency,amount,reason,created_at")
+      .eq("campaign_id", campaignId)
+      .order("created_at", { ascending: false })
+      .limit(200);
     if (error) return alert(error.message);
     setEntries(data ?? []);
   };
@@ -21,7 +36,7 @@ export default function LedgerPage() {
   useEffect(() => { if (campaignId) load(); }, [campaignId]);
 
   return (
-    <Frame title="Ledger" right={<a className="underline" href="/dashboard">Dashboard</a>}>
+    <Frame title="Ledger" right={<a className="underline" href={`/dashboard?campaign=${campaignId}`}>Dashboard</a>}>
       <div className="space-y-6">
         <Card title="Load Ledger">
           <div className="flex gap-3">

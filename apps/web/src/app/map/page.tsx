@@ -25,13 +25,27 @@ const ZONES: { key: string; name: string }[] = [
 
 const SECTORS = ["A1", "A2", "B1", "B2"];
 
+function getQueryCampaign(): string | null {
+  if (typeof window === "undefined") return null;
+  const u = new URL(window.location.href);
+  return u.searchParams.get("campaign");
+}
+
 export default function MapPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [campaignId, setCampaignId] = useState("");
   const [rows, setRows] = useState<Sector[]>([]);
 
+  useEffect(() => {
+    const q = getQueryCampaign();
+    if (q) setCampaignId(q);
+  }, []);
+
   const load = async () => {
-    const { data, error } = await supabase.from("sectors").select("zone_key,sector_key,owner_user_id,revealed_public,fortified").eq("campaign_id", campaignId);
+    const { data, error } = await supabase
+      .from("sectors")
+      .select("zone_key,sector_key,owner_user_id,revealed_public,fortified")
+      .eq("campaign_id", campaignId);
     if (error) return alert(error.message);
     setRows(data ?? []);
   };
@@ -41,7 +55,7 @@ export default function MapPage() {
   const sectorAt = (zone: string, key: string) => rows.find(r => r.zone_key === zone && r.sector_key === key);
 
   return (
-    <Frame title="Tactical Hololith" right={<a className="underline" href="/dashboard">Dashboard</a>}>
+    <Frame title="Tactical Hololith" right={<a className="underline" href={`/dashboard?campaign=${campaignId}`}>Dashboard</a>}>
       <div className="space-y-6">
         <Card title="Campaign Map">
           <div className="flex gap-3">

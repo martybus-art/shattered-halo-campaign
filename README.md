@@ -87,3 +87,8 @@ npm run dev
 - Discord webhook for bulletins
 - Elo-like “threat level” + dynamic bounties
 - GM/host “one-click game day” flow that batches 2–3 rounds
+
+## Campaign creation (no-GM friendly)
+- Go to `/campaigns` to create campaigns. Any authenticated user can create a campaign and becomes the **Lead**.
+- Invitations are stored in `pending_invites`. When an invited player signs in, the app calls the `accept-invites` function to add them automatically.
+- Lead controls are at `/lead?campaign=<id>`.

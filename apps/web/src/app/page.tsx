@@ -32,7 +32,7 @@ export default function Home() {
             <div className="space-y-3">
               <p className="text-parchment/80">Signed in as <span className="text-parchment">{userEmail}</span></p>
               <div className="flex gap-3">
-                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href="/dashboard">Go to Dashboard</a>
+                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href="/campaigns">Go to Dashboard</a>
                 <button className="px-4 py-2 rounded bg-blood/30 border border-blood/50 hover:bg-blood/40" onClick={signOut}>Sign out</button>
               </div>
             </div>

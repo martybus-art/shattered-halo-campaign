@@ -18,19 +18,28 @@ type Conflict = {
 
 type Mission = { id: string; name: string; description: string; mission_type: string; phase_min: number; zone_tags: any };
 
+function getQueryCampaign(): string | null {
+  if (typeof window === "undefined") return null;
+  const u = new URL(window.location.href);
+  return u.searchParams.get("campaign");
+}
+
 export default function ConflictsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [campaignId, setCampaignId] = useState("");
   const [round, setRound] = useState<number>(1);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
-  const [templateId, setTemplateId] = useState<string>("");
+
+  useEffect(() => {
+    const q = getQueryCampaign();
+    if (q) setCampaignId(q);
+  }, []);
 
   const load = async () => {
-    const { data: c } = await supabase.from("campaigns").select("round_number,template_id").eq("id", campaignId).single();
+    const { data: c } = await supabase.from("campaigns").select("round_number,template_id,phase").eq("id", campaignId).single();
     if (!c) return alert("Campaign not found");
     setRound(c.round_number);
-    setTemplateId(c.template_id);
 
     const { data: conf, error: ce } = await supabase.from("conflicts").select("*").eq("campaign_id", campaignId).eq("round_number", c.round_number);
     if (ce) return alert(ce.message);
@@ -38,7 +47,8 @@ export default function ConflictsPage() {
 
     const { data: ms, error: me } = await supabase.from("missions").select("*").eq("template_id", c.template_id).eq("is_active", true);
     if (me) return alert(me.message);
-    setMissions(ms ?? []);
+    // phase gating client-side
+    setMissions((ms ?? []).filter((m: any) => (m.phase_min ?? 1) <= (c.phase ?? 1)));
   };
 
   useEffect(() => { if (campaignId) load(); }, [campaignId]);
@@ -48,7 +58,6 @@ export default function ConflictsPage() {
     const uid = userResp.user?.id;
     if (!uid) return alert("Not signed in");
 
-    // Insert influence row (RLS ensures only involved players can insert)
     const { error: ie } = await supabase.from("mission_influence").insert({
       conflict_id: conflictId,
       user_id: uid,
@@ -58,11 +67,16 @@ export default function ConflictsPage() {
     });
     if (ie) return alert(ie.message);
 
-    alert("Influence recorded. Mission assignment occurs when the system runs /admin automation.");
+    alert("Influence recorded. Lead can run mission assignment.");
+  };
+
+  const randomMissionId = () => {
+    const pick = missions[Math.floor(Math.random()*missions.length)];
+    return pick?.id;
   };
 
   return (
-    <Frame title="Engagements" right={<a className="underline" href="/dashboard">Dashboard</a>}>
+    <Frame title="Engagements" right={<a className="underline" href={`/dashboard?campaign=${campaignId}`}>Dashboard</a>}>
       <div className="space-y-6">
         <Card title="Load Conflicts">
           <div className="flex gap-3">
@@ -88,23 +102,23 @@ export default function ConflictsPage() {
 
                     <button className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
                       onClick={() => {
-                        const pick = missions[Math.floor(Math.random()*missions.length)];
-                        if (!pick) return alert("No missions loaded");
-                        influence(c.id, "choose", { mission_id: pick.id }, 3);
+                        const mid = randomMissionId();
+                        if (!mid) return alert("No missions loaded");
+                        influence(c.id, "choose", { mission_id: mid }, 3);
                       }}>Choose (3 NIP)</button>
 
                     <button className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
                       onClick={() => influence(c.id, "twist", { twist: "power_flicker" }, 1)}>Add Twist (1 NIP)</button>
                   </div>
 
-                  <p className="text-xs text-parchment/60">Production: the assign-missions function can respect 'choose' and 'veto'. Preference UI can draw 2 missions filtered by zone tags.</p>
+                  <p className="text-xs text-parchment/60">Tip: Lead can click “Assign Missions” in Lead Controls after players spend influence.</p>
                 </div>
               </div>
             </Card>
           ))}
           {!conflicts.length && (
             <Card title="No conflicts">
-              <p className="text-parchment/70">If you expect a battle, ensure movement has been processed and conflicts detected.</p>
+              <p className="text-parchment/70">No scheduled conflicts for you this round.</p>
             </Card>
           )}
         </div>

@@ -22,35 +22,76 @@ type Campaign = {
   instability: number;
 };
 
+type Membership = { campaign_id: string; role: string };
+
+function getQueryParam(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  const u = new URL(window.location.href);
+  return u.searchParams.get(name);
+}
+
 export default function Dashboard() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [campaignId, setCampaignId] = useState<string>("");
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [state, setState] = useState<PlayerState | null>(null);
   const [role, setRole] = useState<string>("player");
+  const [memberships, setMemberships] = useState<Membership[]>([]);
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
-  // In production, you'd have a campaign selector. For MVP: paste campaign ID.
-  const load = async () => {
-    const { data: userResp } = await supabase.auth.getUser();
-    const uid = userResp.user?.id;
-    if (!uid) return;
+  const acceptInvites = async () => {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) return;
+    await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({})
+    }).catch(() => null);
+  };
 
-    const { data: c, error: ce } = await supabase.from("campaigns").select("*").eq("id", campaignId).single();
+  const loadMemberships = async (uid: string) => {
+    const { data: mem, error } = await supabase.from("campaign_members").select("campaign_id,role").eq("user_id", uid);
+    if (error) return alert(error.message);
+    setMemberships(mem ?? []);
+
+    const q = getQueryParam("campaign");
+    if (q) setCampaignId(q);
+    else if (!campaignId && mem?.length) setCampaignId(mem[0].campaign_id);
+  };
+
+  const loadCampaign = async (uid: string, cid: string) => {
+    const { data: c, error: ce } = await supabase.from("campaigns").select("id,name,phase,round_number,instability").eq("id", cid).single();
     if (ce) return alert(ce.message);
     setCampaign(c);
 
-    const { data: mem, error: me } = await supabase.from("campaign_members").select("role").eq("campaign_id", campaignId).eq("user_id", uid).single();
+    const { data: mem, error: me } = await supabase.from("campaign_members").select("role").eq("campaign_id", cid).eq("user_id", uid).single();
     if (me) return alert("You are not a member of this campaign.");
     setRole(mem.role);
 
-    const { data: ps, error: pe } = await supabase.from("player_state").select("*").eq("campaign_id", campaignId).eq("user_id", uid).single();
+    const { data: ps, error: pe } = await supabase.from("player_state").select("*").eq("campaign_id", cid).eq("user_id", uid).single();
     if (pe) return alert(pe.message);
     setState(ps);
   };
 
   useEffect(() => {
-    if (campaignId) load();
+    (async () => {
+      const { data: userResp } = await supabase.auth.getUser();
+      const uid = userResp.user?.id;
+      if (!uid) return;
+      await acceptInvites();
+      await loadMemberships(uid);
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      if (!campaignId) return;
+      const { data: userResp } = await supabase.auth.getUser();
+      const uid = userResp.user?.id;
+      if (!uid) return;
+      await loadCampaign(uid, campaignId);
+    })();
   }, [campaignId]);
 
   const makePublicRecapPrompt = async () => {
@@ -61,7 +102,7 @@ export default function Dashboard() {
       .eq("campaign_id", campaign.id)
       .eq("visibility", "public")
       .order("round_number", { ascending: false })
-      .limit(20);
+      .limit(40);
 
     const prompt = [
       `Campaign: ${campaign.name}`,
@@ -92,7 +133,7 @@ export default function Dashboard() {
       .eq("campaign_id", campaign.id)
       .eq("visibility", "private")
       .order("round_number", { ascending: false })
-      .limit(20);
+      .limit(40);
 
     const prompt = [
       `Campaign: ${campaign.name}`,
@@ -118,17 +159,27 @@ export default function Dashboard() {
   };
 
   return (
-    <Frame title="Command Throne" right={<a className="underline" href="/map">Map</a>}>
+    <Frame title="Command Throne" right={<a className="underline" href="/campaigns">Campaigns</a>}>
       <div className="space-y-6">
-        <Card title="Join a Campaign">
-          <div className="flex flex-col md:flex-row gap-3">
-            <input className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
-              placeholder="Paste Campaign ID (uuid)" value={campaignId} onChange={(e) => setCampaignId(e.target.value)} />
-            <button className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" onClick={load}>
-              Load
-            </button>
-          </div>
-          <p className="mt-2 text-parchment/70 text-sm">MVP note: add a campaign picker later. This keeps secrets safe while you iterate.</p>
+        <Card title="Campaign Picker">
+          {memberships.length ? (
+            <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
+              <select className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
+                value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
+                {memberships.map(m => (
+                  <option key={m.campaign_id} value={m.campaign_id}>{m.campaign_id} ({m.role})</option>
+                ))}
+              </select>
+              <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${campaignId}`}>Map</a>
+              <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
+              {(role === "lead" || role === "admin") && (
+                <a className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30" href={`/lead?campaign=${campaignId}`}>Lead Controls</a>
+              )}
+            </div>
+          ) : (
+            <p className="text-parchment/70">No campaigns found. Create one in Campaigns.</p>
+          )}
+          <p className="mt-2 text-xs text-parchment/60">Share deep links like <span className="text-brass">/dashboard?campaign=&lt;id&gt;</span>.</p>
         </Card>
 
         {campaign && state && (
@@ -148,7 +199,7 @@ export default function Dashboard() {
             </Card>
 
             <Card title="Catch-up Choice (Underdog)">
-              <p className="text-parchment/80">If the system flags you as <span className="text-brass">Underdog</span>, choose one benefit for the round:</p>
+              <p className="text-parchment/80">If flagged as <span className="text-brass">Underdog</span>, choose one benefit for the round:</p>
               <select className="mt-3 w-full px-3 py-2 rounded bg-void border border-brass/30"
                 value={underdogChoice} onChange={(e) => setUnderdogChoice(e.target.value)}>
                 <option>+2 NIP</option>
@@ -156,7 +207,7 @@ export default function Dashboard() {
                 <option>Free Recon</option>
                 <option>Safe Passage (1 move cannot be intercepted)</option>
               </select>
-              <p className="mt-2 text-parchment/70 text-sm">Production note: store this choice in a `round_choices` table and apply in automation.</p>
+              <p className="mt-2 text-parchment/70 text-sm">Next step: persist choice per round and apply via automation.</p>
             </Card>
 
             <Card title="Recaps & Whispers">
@@ -171,14 +222,14 @@ export default function Dashboard() {
                   onClick={makePrivateWhisperPrompt}>
                   Copy PRIVATE whisper prompt (You)
                 </button>
-                <p className="text-parchment/70 text-sm">Public recap uses only public posts (no secrets). Private whisper includes your secret location + notes.</p>
               </div>
             </Card>
 
-            <Card title="Next Actions">
+            <Card title="Quick Links">
               <div className="flex flex-wrap gap-3">
-                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href="/conflicts">Conflicts & Missions</a>
-                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href="/ledger">Ledger</a>
+                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${campaignId}`}>Map</a>
+                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
+                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/ledger?campaign=${campaignId}`}>Ledger</a>
               </div>
             </Card>
           </div>
