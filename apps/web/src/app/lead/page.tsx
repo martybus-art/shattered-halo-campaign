@@ -28,11 +28,36 @@ export default function LeadControls() {
     const { data: mem } = await supabase.from("campaign_members").select("role").eq("campaign_id", cid).eq("user_id", uid).single();
     setRole(mem?.role ?? "player");
 
-    const { data: c } = await supabase.from("campaigns").select("id,name,phase,round_number,instability").eq("id", cid).single();
-    setCampaign(c ?? null);
+const { data: c, error: cErr } = await supabase
+  .from("campaigns")
+  .select("id,name,phase,round_number,instability")
+  .eq("id", cid)
+  .single();
 
-    const { data: r } = await supabase.from("rounds").select("stage").eq("campaign_id", cid).eq("round_number", c.round_number).single();
-    setRound(r ?? null);
+if (cErr || !c) {
+  alert(cErr?.message ?? "Campaign not found");
+  setCampaign(null);
+  setRound(null);
+  return;
+}
+
+setCampaign(c);
+
+const { data: r, error: rErr } = await supabase
+  .from("rounds")
+  .select("stage")
+  .eq("campaign_id", cid)
+  .eq("round_number", c.round_number)
+  .single();
+
+if (rErr) {
+  // Not fatal — you can still view the campaign.
+  setRound(null);
+  return;
+}
+
+setRound(r);
+
   };
 
   useEffect(() => {
