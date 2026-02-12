@@ -53,8 +53,12 @@ export default function CampaignsPage() {
 
   const createCampaign = async () => {
     const player_emails = emails.split(",").map(e => e.trim()).filter(Boolean);
-    const { data: session } = await supabase.auth.getSession();
-    const token = session.session?.access_token;
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) return alert("Not signed in");
+
+const { data: { session } } = await supabase.auth.getSession();
+if (!session?.access_token) return alert("Session not ready. Refresh the page and try again.");
+
     if (!token) return alert("Not signed in");
 
     const resp = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`, {
