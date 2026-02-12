@@ -40,22 +40,33 @@ export default function CampaignsPage() {
   const [emails, setEmails] = useState<string>("");
   const [creating, setCreating] = useState(false);
 
-  const acceptInvites = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      if (!token) return;
+const acceptInvites = async () => {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return; // ✅ don't call the function if not signed in / session not ready
 
-      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`;
-      await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({}),
-      }).catch(() => null);
-    } catch {
-      // ignore
+    const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, // ✅ add apikey
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    // Optional: silence expected 401s on fresh loads
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      console.warn("accept-invites failed", resp.status, txt);
     }
-  };
+  } catch (e) {
+    console.warn("accept-invites error", e);
+  }
+};
+
 
   const load = async () => {
     setLoading(true);
