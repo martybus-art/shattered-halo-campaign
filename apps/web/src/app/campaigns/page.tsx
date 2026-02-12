@@ -1,172 +1,296 @@
 "use client";
+
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 
-type Template = { id: string; name: string; description: string };
-type CampaignRow = { id: string; name: string; phase: number; round_number: number; instability: number; role: string };
+type Template = {
+  id: string;
+  name: string;
+  description: string | null;
+};
+
+type Campaign = {
+  id: string;
+  name: string;
+  phase: number;
+  round_number: number;
+  instability: number;
+  created_at?: string;
+};
+
+type Membership = {
+  campaign_id: string;
+  role: string;
+  campaigns?: Campaign; // if you use select with FK join
+};
 
 export default function CampaignsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
+
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [myCampaigns, setMyCampaigns] = useState<CampaignRow[]>([]);
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [loading, setLoading] = useState(true);
+
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
-  const [campaignName, setCampaignName] = useState("");
-  const [emails, setEmails] = useState("");
+  const [campaignName, setCampaignName] = useState<string>("");
+  const [emails, setEmails] = useState<string>("");
+  const [creating, setCreating] = useState(false);
 
   const acceptInvites = async () => {
-    const { data: sess } = await supabase.auth.getSession();
-    const token = sess.session?.access_token;
-    if (!token) return;
-    await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-      body: JSON.stringify({})
-    }).catch(() => null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) return;
+
+      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`;
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({}),
+      }).catch(() => null);
+    } catch {
+      // ignore
+    }
   };
 
-const createCampaign = async () => {
-  try {
-    const { data: { session }, error: sessErr } = await supabase.auth.getSession();
-    if (sessErr) {
-      alert(sessErr.message);
-      return;
-    }
-
-    const token = session?.access_token;
-    if (!token) {
-      alert("Session not ready yet. Refresh the page and try again.");
-      return;
-    }
-
-    const player_emails = emails
-      .split(",")
-      .map((e) => e.trim())
-      .filter(Boolean);
-
-    const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`;
-
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        template_id: selectedTemplate,
-        campaign_name: campaignName,
-        player_emails,
-      }),
-    });
-
-    const text = await resp.text();
-    let json: any = null;
+  const load = async () => {
+    setLoading(true);
     try {
-      json = JSON.parse(text);
-    } catch {
-      // leave json null
+      // Ensure we’re signed in (avoids weird “new login” session timing)
+      const { data: userResp } = await supabase.auth.getUser();
+      if (!userResp.user) {
+        setTemplates([]);
+        setMemberships([]);
+        return;
+      }
+
+      await acceptInvites();
+
+      const { data: tpls, error: te } = await supabase
+        .from("templates")
+        .select("id,name,description")
+        .order("created_at", { ascending: false });
+
+      if (te) throw te;
+      setTemplates(tpls ?? []);
+      if (!selectedTemplate && tpls?.length) setSelectedTemplate(tpls[0].id);
+
+      // Pull memberships (and campaign summaries if you want)
+      const { data: mem, error: me } = await supabase
+        .from("campaign_members")
+        .select("campaign_id,role,campaigns(id,name,phase,round_number,instability,created_at)")
+        .order("created_at", { ascending: false });
+
+      if (me) throw me;
+      setMemberships(mem ?? []);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message ?? String(e));
+    } finally {
+      setLoading(false);
     }
-
-    if (!resp.ok) {
-      const msg = json?.error ?? text ?? `HTTP ${resp.status}`;
-      alert(`Create failed: ${msg}`);
-      return;
-    }
-
-    if (!json?.ok) {
-      alert(`Create failed: ${json?.error ?? "Unknown error"}`);
-      return;
-    }
-
-    alert("Campaign created! You are the Lead player.");
-    setCampaignName("");
-    setEmails("");
-    await load();
-  } catch (e: any) {
-    console.error(e);
-    alert(`Create failed: ${e?.message ?? e}`);
-  }
-};
-
-
-  useEffect(() => { load(); }, []);
+  };
 
   const createCampaign = async () => {
-    const player_emails = emails.split(",").map(e => e.trim()).filter(Boolean);
-const { data: { user } } = await supabase.auth.getUser();
-if (!user) return alert("Not signed in");
+    if (!selectedTemplate) return alert("Select a template.");
+    if (!campaignName.trim()) return alert("Enter a campaign name.");
 
-const { data: { session } } = await supabase.auth.getSession();
-if (!session?.access_token) return alert("Session not ready. Refresh the page and try again.");
+    setCreating(true);
+    try {
+      const { data: { session }, error: sessErr } = await supabase.auth.getSession();
+      if (sessErr) {
+        alert(sessErr.message);
+        return;
+      }
 
-    const resp = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-      body: JSON.stringify({ template_id: selectedTemplate, campaign_name: campaignName, player_emails })
-    });
+      const token = session?.access_token;
+      if (!token) {
+        alert("Session not ready yet. Refresh the page and try again.");
+        return;
+      }
 
-    const json = await resp.json();
-    if (!json.ok) return alert(json.error);
+      const player_emails = emails
+        .split(",")
+        .map((e) => e.trim())
+        .filter(Boolean);
 
-    alert("Campaign created! You are the Lead player.");
-    setCampaignName("");
-    setEmails("");
-    await load();
+      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`;
+
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          template_id: selectedTemplate,
+          campaign_name: campaignName.trim(),
+          player_emails,
+        }),
+      });
+
+      const text = await resp.text();
+      let json: any = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        // non-json response
+      }
+
+      if (!resp.ok) {
+        const msg = json?.error ?? text ?? `HTTP ${resp.status}`;
+        alert(`Create failed: ${msg}`);
+        return;
+      }
+
+      if (!json?.ok) {
+        alert(`Create failed: ${json?.error ?? "Unknown error"}`);
+        return;
+      }
+
+      alert("Campaign created! You are the Lead player.");
+      setCampaignName("");
+      setEmails("");
+      await load();
+    } catch (e: any) {
+      console.error(e);
+      alert(`Create failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setCreating(false);
+    }
   };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const myCampaignRows = memberships
+    .map((m) => ({
+      campaign_id: m.campaign_id,
+      role: m.role,
+      campaign: (m as any).campaigns as Campaign | undefined,
+    }))
+    .filter((x) => !!x.campaign);
 
   return (
     <Frame title="Campaigns" right={<a className="underline" href="/dashboard">Dashboard</a>}>
-      <div className="grid md:grid-cols-2 gap-6">
-        <Card title="My Campaigns">
+      <div className="space-y-6">
+        <Card title="Create Campaign">
           <div className="space-y-3">
-            {myCampaigns.length === 0 && <p className="text-parchment/70">No campaigns yet. Create one.</p>}
-            {myCampaigns.map(c => (
-              <div key={c.id} className="rounded border border-brass/20 bg-void p-3">
-                <div className="flex justify-between">
-                  <div className="font-gothic">{c.name}</div>
-                  <div className="text-xs text-brass">{c.role.toUpperCase()}</div>
-                </div>
-                <div className="text-xs text-parchment/70 mt-1">
-                  Phase {c.phase} • Round {c.round_number} • Instability {c.instability}/10
-                </div>
-                <div className="mt-2 flex gap-2 flex-wrap">
-                  <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/dashboard?campaign=${c.id}`}>Open</a>
-                  <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${c.id}`}>Map</a>
-                  {(c.role === "lead" || c.role === "admin") && (
-                    <a className="px-3 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30" href={`/lead?campaign=${c.id}`}>Lead Controls</a>
-                  )}
-                </div>
-              </div>
-            ))}
+            <div>
+              <div className="text-sm text-parchment/70 mb-1">Template</div>
+              <select
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+                value={selectedTemplate}
+                onChange={(e) => setSelectedTemplate(e.target.value)}
+                disabled={loading || creating}
+              >
+                {!templates.length && <option value="">No templates found</option>}
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              {templates.length ? (
+                <p className="mt-1 text-xs text-parchment/60">
+                  {templates.find((t) => t.id === selectedTemplate)?.description ?? ""}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-parchment/60">
+                  You need at least one template row in <span className="text-brass">templates</span>.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <div className="text-sm text-parchment/70 mb-1">Campaign name</div>
+              <input
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+                value={campaignName}
+                onChange={(e) => setCampaignName(e.target.value)}
+                placeholder="e.g. Embers of the Shattered Halo (Season 1)"
+                disabled={loading || creating}
+              />
+            </div>
+
+            <div>
+              <div className="text-sm text-parchment/70 mb-1">Invite emails (comma-separated)</div>
+              <input
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+                value={emails}
+                onChange={(e) => setEmails(e.target.value)}
+                placeholder="friend1@example.com, friend2@example.com"
+                disabled={loading || creating}
+              />
+              <p className="mt-1 text-xs text-parchment/60">
+                Invites are stored in <span className="text-brass">pending_invites</span>. Players auto-join when they sign in.
+              </p>
+            </div>
+
+            <button
+              className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40"
+              onClick={createCampaign}
+              disabled={creating || loading || !templates.length}
+            >
+              {creating ? "Creating…" : "Create (you become Lead)"}
+            </button>
           </div>
         </Card>
 
-        <Card title="Create Campaign">
-          <div className="space-y-3">
-            <label className="text-sm text-parchment/80">Template</label>
-            <select className="w-full px-3 py-2 rounded bg-void border border-brass/30"
-              value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)}>
-              {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-
-            <label className="text-sm text-parchment/80">Campaign name</label>
-            <input className="w-full px-3 py-2 rounded bg-void border border-brass/30"
-              value={campaignName} onChange={(e) => setCampaignName(e.target.value)} placeholder="Embers of the Shattered Halo – Season 1" />
-
-            <label className="text-sm text-parchment/80">Invite players (comma separated emails)</label>
-            <input className="w-full px-3 py-2 rounded bg-void border border-brass/30"
-              value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="a@x.com, b@y.com, c@z.com" />
-
-            <button className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-              onClick={createCampaign}>
-              Create (you become Lead)
-            </button>
-
-            <p className="text-xs text-parchment/60">
-              Invites are stored as <span className="text-brass">Pending</span> until recipients sign in. On first login, they are auto-added.
-            </p>
-          </div>
+        <Card title="My Campaigns">
+          {loading ? (
+            <p className="text-parchment/70">Loading…</p>
+          ) : myCampaignRows.length ? (
+            <div className="space-y-3">
+              {myCampaignRows.map((row) => (
+                <div key={row.campaign_id} className="rounded border border-brass/25 bg-void px-4 py-3">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                    <div>
+                      <div className="text-brass font-semibold">{row.campaign?.name}</div>
+                      <div className="text-xs text-parchment/60">
+                        Role: {row.role} • Phase {row.campaign?.phase} • Round {row.campaign?.round_number} • Instability{" "}
+                        {row.campaign?.instability}/10
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
+                        href={`/dashboard?campaign=${row.campaign_id}`}
+                      >
+                        Open Dashboard
+                      </a>
+                      <a
+                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
+                        href={`/map?campaign=${row.campaign_id}`}
+                      >
+                        Map
+                      </a>
+                      <a
+                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
+                        href={`/conflicts?campaign=${row.campaign_id}`}
+                      >
+                        Conflicts
+                      </a>
+                      {(row.role === "lead" || row.role === "admin") && (
+                        <a
+                          className="px-3 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30"
+                          href={`/lead?campaign=${row.campaign_id}`}
+                        >
+                          Lead Controls
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-parchment/70">No campaigns yet. Create one above.</p>
+          )}
         </Card>
       </div>
     </Frame>
