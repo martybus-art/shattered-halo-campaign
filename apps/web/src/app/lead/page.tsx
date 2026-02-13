@@ -68,20 +68,12 @@ setRound(r);
   useEffect(() => { if (campaignId) load(campaignId); }, [campaignId]);
 
   const callFn = async (fn: string) => {
-    const { data: sess } = await supabase.auth.getSession();
-    const token = sess.session?.access_token;
-    if (!token) return alert("Not signed in");
-
-    const resp = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/${fn}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-      body: JSON.stringify({ campaign_id: campaignId })
+    const { data, error } = await supabase.functions.invoke(fn, {
+      body: { campaign_id: campaignId },
     });
-
-    const json = await resp.json();
-    if (!json.ok) return alert(json.error ?? "Function failed");
-    await load(campaignId);
-    alert(`${fn} OK`);
+    if (error) return alert(error.message);
+    if (!data?.ok) return alert(data?.error || "Failed");
+    alert("Done");
   };
 
   const allowed = role === "lead" || role === "admin";
