@@ -1,4 +1,5 @@
-import { createClient } from "@supabase/supabase-js";
+// apps/web/src/lib/supabaseBrowser.ts
+import { createBrowserClient } from "@supabase/ssr";
 
 export function supabaseBrowser() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
