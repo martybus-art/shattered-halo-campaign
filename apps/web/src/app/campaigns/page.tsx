@@ -150,7 +150,9 @@ export default function CampaignsPage() {
       });
 
       if (error) {
-        alert(`Create failed: ${error.message}`);
+          // shows status like 401/500
+          alert(`Create failed: ${error.message} (status ${error.context?.status ?? "?"})`);
+          console.warn("create-campaign invoke error", error);
         return;
       }
 
