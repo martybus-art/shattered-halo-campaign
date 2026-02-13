@@ -150,11 +150,20 @@ export default function CampaignsPage() {
       });
 
       if (error) {
-          // shows status like 401/500
-          alert(`Create failed: ${error.message} (status ${error.context?.status ?? "?"})`);
-          console.warn("create-campaign invoke error", error);
-        return;
-      }
+  console.error("invoke error:", error);
+
+  // 👇 this is the money
+  try {
+    const text = await error.context.text();
+    console.error("function response text:", text);
+  } catch (e) {
+    console.error("no error context body available", e);
+  }
+
+  throw error;
+}
+
+console.log("data:", data);
 
       if (!data?.ok) {
         alert(`Create failed: ${data?.error ?? "Unknown error"}`);
