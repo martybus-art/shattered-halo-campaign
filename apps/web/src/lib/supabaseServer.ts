@@ -1,6 +1,6 @@
 // lib/supabase/server.ts
-import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 
 export function supabaseServer() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -18,8 +18,7 @@ export function supabaseServer() {
             cookieStore.set(name, value, options);
           });
         } catch {
-          // In Server Components, setting cookies may throw. That’s OK:
-          // only middleware/route handlers can reliably set cookies.
+          // Server Components can't always set cookies; middleware/route handlers can.
         }
       },
     },
