@@ -40,14 +40,9 @@ export default function Dashboard() {
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
   const acceptInvites = async () => {
-    const { data: sess } = await supabase.auth.getSession();
-    const token = sess.session?.access_token;
-    if (!token) return;
-    await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-      body: JSON.stringify({})
-    }).catch(() => null);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    await supabase.functions.invoke("accept-invites", { body: {} });
   };
 
   const loadMemberships = async (uid: string) => {

@@ -1,35 +1,116 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
-type Json = Record<string, unknown>;
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+type AdvanceReq = { campaign_id: string };
 
 serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
-
-    const { campaign_id } = (await req.json()) as { campaign_id: string };
-
-    // Fetch campaign + current round stage
-    const { data: campaign, error: cErr } = await supabase
-      .from("campaigns")
-      .select("id, template_id, round_number, phase, instability, status")
-      .eq("id", campaign_id)
-      .single();
-    if (cErr) throw cErr;
-
-    if (campaign.status !== "active") {
-      return new Response(JSON.stringify({ ok: false, error: "Campaign not active" }), { status: 400 });
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ ok: false, error: "Method not allowed" }), {
+        status: 405,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    const { data: round, error: rErr } = await supabase
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey =
+      Deno.env.get("SERVICE_ROLE_KEY") ||
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
+      "";
+
+    const authHeader = req.headers.get("Authorization") ?? "";
+
+    // Validate caller
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: userData, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !userData.user) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { campaign_id } = (await req.json()) as AdvanceReq;
+    if (!campaign_id) {
+      return new Response(JSON.stringify({ ok: false, error: "Missing campaign_id" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+
+    // Role check: only lead/admin can advance stages
+    const { data: member, error: mErr } = await admin
+      .from("campaign_members")
+      .select("role")
+      .eq("campaign_id", campaign_id)
+      .eq("user_id", userData.user.id)
+      .maybeSingle();
+
+    if (mErr) {
+      return new Response(JSON.stringify({ ok: false, error: mErr.message }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const role = member?.role ?? "";
+    if (role !== "lead" && role !== "admin") {
+      return new Response(JSON.stringify({ ok: false, error: "Forbidden" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Fetch campaign + current stage
+    const { data: campaign, error: cErr } = await admin
+      .from("campaigns")
+      .select("id, round_number, status")
+      .eq("id", campaign_id)
+      .single();
+
+    if (cErr || !campaign) {
+      return new Response(JSON.stringify({ ok: false, error: cErr?.message ?? "Campaign not found" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (campaign.status !== "active") {
+      return new Response(JSON.stringify({ ok: false, error: "Campaign not active" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: round, error: rErr } = await admin
       .from("rounds")
       .select("stage")
       .eq("campaign_id", campaign_id)
       .eq("round_number", campaign.round_number)
       .maybeSingle();
-    if (rErr) throw rErr;
+
+    if (rErr) {
+      return new Response(JSON.stringify({ ok: false, error: rErr.message }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const stage = round?.stage ?? "movement";
 
@@ -39,35 +120,51 @@ serve(async (req) => {
       return idx === -1 ? "movement" : order[Math.min(idx + 1, order.length - 1)];
     };
 
-    const newStage = nextStage(stage);
-
-    // Ensure round record exists
+    // Ensure round exists
     if (!round) {
-      await supabase.from("rounds").insert({ campaign_id, round_number: campaign.round_number, stage: "movement" });
-      return new Response(JSON.stringify({ ok: true, stage: "movement" }), { status: 200 });
+      await admin.from("rounds").insert({ campaign_id, round_number: campaign.round_number, stage: "movement" });
+      return new Response(JSON.stringify({ ok: true, stage: "movement" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // If we are moving from publish -> new round
+    // publish -> new round
     if (stage === "publish") {
-      // close current round
-      await supabase.from("rounds").update({ stage: "closed", closed_at: new Date().toISOString() })
-        .eq("campaign_id", campaign_id).eq("round_number", campaign.round_number);
+      await admin
+        .from("rounds")
+        .update({ stage: "closed", closed_at: new Date().toISOString() })
+        .eq("campaign_id", campaign_id)
+        .eq("round_number", campaign.round_number);
 
       const nextRound = campaign.round_number + 1;
 
-      await supabase.from("campaigns").update({ round_number: nextRound }).eq("id", campaign_id);
+      await admin.from("campaigns").update({ round_number: nextRound }).eq("id", campaign_id);
 
-      await supabase.from("rounds").insert({ campaign_id, round_number: nextRound, stage: "movement" });
+      await admin.from("rounds").insert({ campaign_id, round_number: nextRound, stage: "movement" });
 
-      return new Response(JSON.stringify({ ok: true, stage: "movement", round_number: nextRound }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, stage: "movement", round_number: nextRound }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // Otherwise just advance stage
-    await supabase.from("rounds").update({ stage: newStage })
-      .eq("campaign_id", campaign_id).eq("round_number", campaign.round_number);
+    const newStage = nextStage(stage);
 
-    return new Response(JSON.stringify({ ok: true, stage: newStage }), { status: 200 });
-  } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), { status: 500 });
+    await admin
+      .from("rounds")
+      .update({ stage: newStage })
+      .eq("campaign_id", campaign_id)
+      .eq("round_number", campaign.round_number);
+
+    return new Response(JSON.stringify({ ok: true, stage: newStage }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (e: any) {
+    return new Response(JSON.stringify({ ok: false, error: e?.message ?? "Server error" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
