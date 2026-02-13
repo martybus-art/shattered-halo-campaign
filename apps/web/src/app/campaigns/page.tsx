@@ -5,7 +5,6 @@ import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 
-
 type Template = {
   id: string;
   name: string;
@@ -26,7 +25,6 @@ type Membership = {
   role: string;
 };
 
-
 export default function CampaignsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
@@ -40,22 +38,26 @@ export default function CampaignsPage() {
   const [emails, setEmails] = useState<string>("");
   const [creating, setCreating] = useState(false);
 
-const acceptInvites = async () => {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return; // don't call if not signed in
+  const acceptInvites = async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-    const { error } = await supabase.functions.invoke("accept-invites", {
-      body: {},
-    });
+      if (!session?.access_token) return;
 
-    if (error) {
-      console.warn("accept-invites failed", error);
+      const { error } = await supabase.functions.invoke("accept-invites", {
+        body: {},
+      });
+
+      if (error) {
+        // not fatal; just log
+        console.warn("accept-invites failed:", error);
+      }
+    } catch (e) {
+      console.warn("accept-invites error:", e);
     }
-  } catch (e) {
-    console.warn("accept-invites error", e);
-  }
-};
+  };
 
   const load = async () => {
     setLoading(true);
@@ -77,8 +79,9 @@ const acceptInvites = async () => {
         .order("created_at", { ascending: false });
 
       if (te) throw te;
-      setTemplates(tpls ?? []);
-      if (!selectedTemplate && tpls?.length) setSelectedTemplate(tpls[0].id);
+      const tplRows = (tpls ?? []) as Template[];
+      setTemplates(tplRows);
+      if (!selectedTemplate && tplRows.length) setSelectedTemplate(tplRows[0].id);
 
       // Memberships
       const { data: mem, error: me } = await supabase
@@ -87,10 +90,11 @@ const acceptInvites = async () => {
         .order("created_at", { ascending: false });
 
       if (me) throw me;
+
       const memRows = (mem ?? []) as Membership[];
       setMemberships(memRows);
 
-      // Campaign summaries (second query avoids join typing headaches)
+      // Campaign summaries
       const ids = memRows.map((m) => m.campaign_id);
       if (!ids.length) {
         setCampaignsById({});
@@ -123,66 +127,35 @@ const acceptInvites = async () => {
 
     setCreating(true);
     try {
-      const { data: { session }, error: sessErr } = await supabase.auth.getSession();
-      if (sessErr) return alert(sessErr.message);
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      const token = session?.access_token;
-      if (!token) return alert("Session not ready yet. Refresh the page and try again.");
+      if (!session?.access_token) {
+        alert("Session not ready yet. Refresh and try again.");
+        return;
+      }
 
-      const player_emails = emails
+      const inviteEmails = emails
         .split(",")
         .map((e) => e.trim())
         .filter(Boolean);
 
-      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-campaign`;
+      const { data, error } = await supabase.functions.invoke("create-campaign", {
+        body: {
+          template_id: selectedTemplate,
+          campaign_name: campaignName.trim(),
+          player_emails: inviteEmails,
+        },
+      });
 
-      const { data: { session } } = await supabase.auth.getSession();
-if (!session?.access_token) return alert("Session not ready yet. Refresh and try again.");
-
-const player_emails = emails
-  .split(",")
-  .map((e) => e.trim())
-  .filter(Boolean);
-
-const { data, error } = await supabase.functions.invoke("create-campaign", {
-  body: {
-    template_id: selectedTemplate,
-    campaign_name: campaignName.trim(),
-    player_emails,
-  },
-});
-
-if (error) {
-  alert(`Create failed: ${error.message}`);
-  return;
-}
-
-if (!data?.ok) {
-  alert(`Create failed: ${data?.error ?? "Unknown error"}`);
-  return;
-}
-
-alert("Campaign created! You are the Lead player.");
-setCampaignName("");
-setEmails("");
-await load();
-
-
-      const text = await resp.text();
-      let json: any = null;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        // non-json response
-      }
-
-      if (!resp.ok) {
-        alert(`Create failed: ${json?.error ?? text ?? `HTTP ${resp.status}`}`);
+      if (error) {
+        alert(`Create failed: ${error.message}`);
         return;
       }
 
-      if (!json?.ok) {
-        alert(`Create failed: ${json?.error ?? "Unknown error"}`);
+      if (!data?.ok) {
+        alert(`Create failed: ${data?.error ?? "Unknown error"}`);
         return;
       }
 
@@ -198,21 +171,14 @@ await load();
     }
   };
 
-useEffect(() => {
-  const run = async () => {
-    await load();
-  };
-  run();
+  useEffect(() => {
+    // Helpful visibility for env correctness
+    console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
+    console.log("HAS_ANON_KEY", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 
-  const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-    if (session?.access_token) {
-      load();
-    }
-  });
-
-  return () => sub.subscription.unsubscribe();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const myCampaignRows = memberships
     .map((m) => ({
@@ -304,17 +270,29 @@ useEffect(() => {
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/dashboard?campaign=${row.campaign_id}`}>
+                      <a
+                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
+                        href={`/dashboard?campaign=${row.campaign_id}`}
+                      >
                         Open Dashboard
                       </a>
-                      <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${row.campaign_id}`}>
+                      <a
+                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
+                        href={`/map?campaign=${row.campaign_id}`}
+                      >
                         Map
                       </a>
-                      <a className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/conflicts?campaign=${row.campaign_id}`}>
+                      <a
+                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
+                        href={`/conflicts?campaign=${row.campaign_id}`}
+                      >
                         Conflicts
                       </a>
                       {(row.role === "lead" || row.role === "admin") && (
-                        <a className="px-3 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30" href={`/lead?campaign=${row.campaign_id}`}>
+                        <a
+                          className="px-3 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30"
+                          href={`/lead?campaign=${row.campaign_id}`}
+                        >
                           Lead Controls
                         </a>
                       )}
