@@ -6,10 +6,10 @@ import { createServerClient } from "@supabase/ssr";
  * Server-side Supabase client using Next.js cookies.
  * Use in Server Components, Route Handlers, and Server Actions.
  */
-export function supabaseServer() {
+export async function supabaseServer() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
 
   return createServerClient(url, anon, {
     cookies: {
