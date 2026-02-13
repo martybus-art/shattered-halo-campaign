@@ -10,8 +10,16 @@ export default function Home() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then((res) => setUserEmail(res.data.user?.email ?? null));
-  }, []);
+  (async () => {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      console.warn(error);
+      setUserEmail(null);
+      return;
+    }
+    setUserEmail(data.user?.email ?? null);
+  })();
+}, [supabase]);
 
   const sendMagicLink = async () => {
     const { error } = await supabase.auth.signInWithOtp({ email });
