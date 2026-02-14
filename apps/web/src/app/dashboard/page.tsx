@@ -40,20 +40,39 @@ export default function Dashboard() {
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
 const acceptInvites = async () => {
-     try {
-       const { data, error } = await supabase.functions.invoke("accept-invites", {
-         body: {},
-       });
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      console.log("No session");
+      return;
+    }
 
-       if (error) {
-         console.warn("accept-invites failed:", error);
-       } else {
-         console.log("✅ Invites accepted:", data);
-       }
-     } catch (e) {
-       console.warn("accept-invites error:", e);
-     }
-   };
+    // Use fetch directly with explicit headers
+    const response = await fetch(
+      `https://yzqzlajmehzilxfruskq.supabase.co/functions/v1/accept-invites`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({})
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.warn("accept-invites failed:", error);
+      return;
+    }
+
+    const data = await response.json();
+    console.log("✅ Invites accepted:", data);
+  } catch (e) {
+    console.warn("accept-invites error:", e);
+  }
+};
 
   const loadMemberships = async (uid: string) => {
     const { data: mem, error } = await supabase.from("campaign_members").select("campaign_id,role").eq("user_id", uid);
