@@ -46,20 +46,26 @@ const acceptInvites = async () => {
     return;
   }
   
-  console.log("Token (first 20 chars):", session.access_token.substring(0, 20));
-  console.log("Token length:", session.access_token.length);
+  console.log("Calling function with token");
   
-  const { data, error } = await supabase.functions.invoke("accept-invites", {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`
-    },
-    body: {}
-  });
+  // Try using fetch directly instead of supabase.functions.invoke
+  const response = await fetch(
+    `https://yzqzlajmehzilxfruskq.supabase.co/functions/v1/accept-invites`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({})
+    }
+  );
   
-  if (error) {
-    console.error("Accept invites error:", error);
-  } else {
-    console.log("Success:", data);
+  const result = await response.json();
+  console.log("Response:", response.status, result);
+  
+  if (!response.ok) {
+    console.error("Error:", result);
   }
 };
 
