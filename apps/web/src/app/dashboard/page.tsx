@@ -41,6 +41,8 @@ export default function Dashboard() {
 
 const acceptInvites = async () => {
   console.log("Starting acceptInvites...");
+  console.log("SUPABASE_URL:", process.env.NEXT_PUBLIC_SUPABASE_URL);
+  console.log("ANON_KEY (first 30):", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.substring(0, 30));
   
   // First, verify the user is authenticated
   const { data: { user }, error: userError } = await supabase.auth.getUser();
