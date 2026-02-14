@@ -40,9 +40,6 @@ export default function Dashboard() {
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
 const acceptInvites = async () => {
-  console.log("=== DEBUGGING ===");
-  console.log("Anon key (first 20):", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.substring(0, 20));
-  
   try {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) {
@@ -50,10 +47,9 @@ const acceptInvites = async () => {
       return;
     }
 
-    console.log("Token (first 30):", session.access_token.substring(0, 30));
-    
+    // Use fetch directly with explicit headers
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`,
+      `https://yzqzlajmehzilxfruskq.supabase.co/functions/v1/accept-invites`,
       {
         method: 'POST',
         headers: {
@@ -65,11 +61,16 @@ const acceptInvites = async () => {
       }
     );
 
-    console.log("Response status:", response.status);
-    const result = await response.json();
-    console.log("Response:", result);
+    if (!response.ok) {
+      const error = await response.json();
+      console.warn("accept-invites failed:", error);
+      return;
+    }
+
+    const data = await response.json();
+    console.log("✅ Invites accepted:", data);
   } catch (e) {
-    console.error("Error:", e);
+    console.warn("accept-invites error:", e);
   }
 };
 
