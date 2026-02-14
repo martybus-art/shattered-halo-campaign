@@ -21,13 +21,24 @@ serve(async (req) => {
       "";
 
     const authHeader = req.headers.get("Authorization") ?? "";
+    
+    // Extract the token from the Authorization header
+    const token = authHeader.replace("Bearer ", "");
+    if (!token) {
+      console.error("No token provided");
+      return new Response(JSON.stringify({ ok: false, error: "No token provided" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    // Create client and validate user with the token
+    const userClient = createClient(supabaseUrl, anonKey);
 
-    const { data: userData, error: userErr } = await userClient.auth.getUser();
+    const { data: userData, error: userErr } = await userClient.auth.getUser(token);
+    
     if (userErr || !userData.user) {
+      console.error("User validation error:", userErr?.message);
       return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -51,6 +62,7 @@ serve(async (req) => {
       .ilike("email", email);
 
     if (invErr) {
+      console.error("Invite fetch error:", invErr.message);
       return new Response(JSON.stringify({ ok: false, error: invErr.message }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -72,17 +84,30 @@ serve(async (req) => {
       role: "player",
     }));
 
-    await admin.from("campaign_members").insert(inserts);
+    const { error: insertErr } = await admin.from("campaign_members").insert(inserts);
+    
+    if (insertErr) {
+      console.error("Insert error:", insertErr.message);
+      // Don't fail on duplicate key errors - this is expected
+      if (!insertErr.message.includes("duplicate") && !insertErr.message.includes("unique")) {
+        return new Response(JSON.stringify({ ok: false, error: insertErr.message }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
 
     // Delete invites after acceptance
     const inviteIds = rows.map((r) => r.id);
     await admin.from("pending_invites").delete().in("id", inviteIds);
 
+    console.log(`Accepted ${rows.length} invites for user ${userData.user.id}`);
     return new Response(JSON.stringify({ ok: true, accepted: rows.length }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e: any) {
+    console.error("Unexpected error:", e?.message ?? "Server error");
     return new Response(JSON.stringify({ ok: false, error: e?.message ?? "Server error" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
