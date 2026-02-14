@@ -40,13 +40,28 @@ export default function Dashboard() {
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
 const acceptInvites = async () => {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    console.log("No session found!");
+  console.log("Starting acceptInvites...");
+  
+  // First, verify the user is authenticated
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  console.log("User:", user?.email, "Error:", userError);
+  
+  if (userError || !user) {
+    console.error("User not authenticated");
     return;
   }
   
-  console.log("Calling accept-invites with token");
+  // Get a fresh session
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  console.log("Session exists:", !!session, "Error:", sessionError);
+  
+  if (!session?.access_token) {
+    console.log("No access token found");
+    return;
+  }
+  
+  console.log("Token preview:", session.access_token.substring(0, 20) + "...");
+  console.log("Calling accept-invites");
   
   try {
     const response = await fetch(
@@ -63,9 +78,14 @@ const acceptInvites = async () => {
     );
     
     const result = await response.json();
-    console.log("Accept invites response:", response.status, result);
+    console.log("Response status:", response.status);
+    console.log("Response body:", result);
+    
+    if (response.ok) {
+      console.log("✅ Success!");
+    }
   } catch (e) {
-    console.error("Accept invites error:", e);
+    console.error("Fetch error:", e);
   }
 };
 
