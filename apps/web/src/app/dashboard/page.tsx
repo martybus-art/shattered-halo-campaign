@@ -39,9 +39,15 @@ export default function Dashboard() {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
-  const acceptInvites = async () => {
+const acceptInvites = async () => {
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) return;
+  if (!session?.access_token) {
+    console.log("No session found!");
+    return;
+  }
+  
+  console.log("Token (first 20 chars):", session.access_token.substring(0, 20));
+  console.log("Token length:", session.access_token.length);
   
   const { data, error } = await supabase.functions.invoke("accept-invites", {
     headers: {
@@ -52,6 +58,8 @@ export default function Dashboard() {
   
   if (error) {
     console.error("Accept invites error:", error);
+  } else {
+    console.log("Success:", data);
   }
 };
 
