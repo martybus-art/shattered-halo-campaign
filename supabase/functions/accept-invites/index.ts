@@ -13,42 +13,37 @@ serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceRoleKey =
-      Deno.env.get("SERVICE_ROLE_KEY") ||
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
-      "";
+    // Create a Supabase client with the Auth context of the logged in user
+    const supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      {
+        global: {
+          headers: { Authorization: req.headers.get("Authorization")! },
+        },
+      }
+    );
 
-    const authHeader = req.headers.get("Authorization") ?? "";
-    
-    // Extract the token from the Authorization header
-    const token = authHeader.replace("Bearer ", "");
-    if (!token) {
-      console.error("No token provided");
-      return new Response(JSON.stringify({ ok: false, error: "No token provided" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    // Get the user from the session
+    const {
+      data: { user },
+    } = await supabaseClient.auth.getUser();
 
-    // Create client and validate user with the token
-    const userClient = createClient(supabaseUrl, anonKey);
-
-    const { data: userData, error: userErr } = await userClient.auth.getUser(token);
-    
-    if (userErr || !userData.user) {
-      console.error("User validation error:", userErr?.message);
+    if (!user) {
       return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const admin = createClient(supabaseUrl, serviceRoleKey);
+    // Use service role key for admin operations
+    const supabaseAdmin = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    );
 
     // Find pending invites for this user's email
-    const email = (userData.user.email ?? "").toLowerCase();
+    const email = (user.email ?? "").toLowerCase();
     if (!email) {
       return new Response(JSON.stringify({ ok: false, error: "User has no email" }), {
         status: 400,
@@ -56,7 +51,7 @@ serve(async (req) => {
       });
     }
 
-    const { data: invites, error: invErr } = await admin
+    const { data: invites, error: invErr } = await supabaseAdmin
       .from("pending_invites")
       .select("id,campaign_id")
       .ilike("email", email);
@@ -80,15 +75,15 @@ serve(async (req) => {
     // Insert membership rows (ignore duplicates)
     const inserts = rows.map((r) => ({
       campaign_id: r.campaign_id,
-      user_id: userData.user.id,
+      user_id: user.id,
       role: "player",
     }));
 
-    const { error: insertErr } = await admin.from("campaign_members").insert(inserts);
-    
+    const { error: insertErr } = await supabaseAdmin.from("campaign_members").insert(inserts);
+
     if (insertErr) {
       console.error("Insert error:", insertErr.message);
-      // Don't fail on duplicate key errors - this is expected
+      // Don't fail on duplicate key errors
       if (!insertErr.message.includes("duplicate") && !insertErr.message.includes("unique")) {
         return new Response(JSON.stringify({ ok: false, error: insertErr.message }), {
           status: 500,
@@ -99,9 +94,9 @@ serve(async (req) => {
 
     // Delete invites after acceptance
     const inviteIds = rows.map((r) => r.id);
-    await admin.from("pending_invites").delete().in("id", inviteIds);
+    await supabaseAdmin.from("pending_invites").delete().in("id", inviteIds);
 
-    console.log(`Accepted ${rows.length} invites for user ${userData.user.id}`);
+    console.log(`Accepted ${rows.length} invites for user ${user.id}`);
     return new Response(JSON.stringify({ ok: true, accepted: rows.length }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

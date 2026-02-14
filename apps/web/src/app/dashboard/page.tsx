@@ -40,56 +40,20 @@ export default function Dashboard() {
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
 const acceptInvites = async () => {
-  console.log("Starting acceptInvites...");
-  console.log("SUPABASE_URL:", process.env.NEXT_PUBLIC_SUPABASE_URL);
-  console.log("ANON_KEY (first 30):", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.substring(0, 30));
-  
-  // First, verify the user is authenticated
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  console.log("User:", user?.email, "Error:", userError);
-  
-  if (userError || !user) {
-    console.error("User not authenticated");
-    return;
-  }
-  
-  // Get a fresh session
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-  console.log("Session exists:", !!session, "Error:", sessionError);
-  
-  if (!session?.access_token) {
-    console.log("No access token found");
-    return;
-  }
-  
-  console.log("Token preview:", session.access_token.substring(0, 20) + "...");
-  console.log("Calling accept-invites");
-  
-  try {
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({})
-      }
-    );
-    
-    const result = await response.json();
-    console.log("Response status:", response.status);
-    console.log("Response body:", result);
-    
-    if (response.ok) {
-      console.log("✅ Success!");
-    }
-  } catch (e) {
-    console.error("Fetch error:", e);
-  }
-};
+     try {
+       const { data, error } = await supabase.functions.invoke("accept-invites", {
+         body: {},
+       });
+
+       if (error) {
+         console.warn("accept-invites failed:", error);
+       } else {
+         console.log("✅ Invites accepted:", data);
+       }
+     } catch (e) {
+       console.warn("accept-invites error:", e);
+     }
+   };
 
   const loadMemberships = async (uid: string) => {
     const { data: mem, error } = await supabase.from("campaign_members").select("campaign_id,role").eq("user_id", uid);
