@@ -73,6 +73,12 @@ const acceptInvites = async () => {
   }
 };
 
+// Add a logout button temporarily
+const forceLogout = async () => {
+  await supabase.auth.signOut();
+  window.location.href = '/';
+};
+
   const loadMemberships = async (uid: string) => {
     const { data: mem, error } = await supabase.from("campaign_members").select("campaign_id,role").eq("user_id", uid);
     if (error) return alert(error.message);
@@ -182,7 +188,13 @@ const acceptInvites = async () => {
   };
 
   return (
-    <Frame title="Command Throne" right={<a className="underline" href="/campaigns">Campaigns</a>}>
+    <Frame title="Command Throne" right={
+    <div className="flex gap-3 items-center">
+      <button onClick={forceLogout} className="px-3 py-1 bg-red-600 text-white rounded">
+        Force Logout (Debug)
+      </button>
+      <a className="underline" href="/campaigns">Campaigns</a>
+    </div>
       <div className="space-y-6">
         <Card title="Campaign Picker">
           {memberships.length ? (
