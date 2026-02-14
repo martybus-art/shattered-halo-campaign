@@ -40,10 +40,20 @@ export default function Dashboard() {
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
   const acceptInvites = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return;
-    await supabase.functions.invoke("accept-invites", { body: {} });
-  };
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return;
+  
+  const { data, error } = await supabase.functions.invoke("accept-invites", {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`
+    },
+    body: {}
+  });
+  
+  if (error) {
+    console.error("Accept invites error:", error);
+  }
+};
 
   const loadMemberships = async (uid: string) => {
     const { data: mem, error } = await supabase.from("campaign_members").select("campaign_id,role").eq("user_id", uid);
