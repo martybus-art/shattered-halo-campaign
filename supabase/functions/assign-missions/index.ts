@@ -1,32 +1,70 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { getAuthenticatedUser, getServiceRoleKey, getSupabaseUrl } from "../_shared/auth.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
 
 function rand<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
 serve(async (req) => {
-  try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceRoleKey = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
 
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const { data: userData, error: uErr } = await userClient.auth.getUser();
-    if (uErr || !userData.user) return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), { status: 401 });
+  try {
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ ok: false, error: "Method not allowed" }), {
+        status: 405,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { user, error: uErr } = await getAuthenticatedUser(req);
+    if (uErr || !user) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const body = await req.json().catch(() => ({}));
     const campaignId = body.campaign_id as string;
-    if (!campaignId) return new Response(JSON.stringify({ ok: false, error: "campaign_id required" }), { status: 400 });
+    if (!campaignId) {
+      return new Response(JSON.stringify({ ok: false, error: "campaign_id required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    const admin = createClient(supabaseUrl, serviceRoleKey);
+    const admin = createClient(getSupabaseUrl(), getServiceRoleKey());
 
-    const { data: mem } = await admin.from("campaign_members").select("role").eq("campaign_id", campaignId).eq("user_id", userData.user.id).maybeSingle();
+    const { data: mem } = await admin
+      .from("campaign_members")
+      .select("role")
+      .eq("campaign_id", campaignId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
     const role = mem?.role ?? "player";
-    if (!(role === "lead" || role === "admin")) return new Response(JSON.stringify({ ok: false, error: "Not authorised" }), { status: 403 });
+    if (!(role === "lead" || role === "admin")) {
+      return new Response(JSON.stringify({ ok: false, error: "Not authorised" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    const { data: c, error: cErr } = await admin.from("campaigns").select("id,template_id,round_number,phase,instability").eq("id", campaignId).single();
+    const { data: c, error: cErr } = await admin
+      .from("campaigns")
+      .select("id,template_id,round_number,phase,instability")
+      .eq("id", campaignId)
+      .single();
+
     if (cErr || !c) throw cErr ?? new Error("Campaign not found");
 
     const { data: conflicts, error: coErr } = await admin
@@ -48,7 +86,7 @@ serve(async (req) => {
 
     const results: any[] = [];
 
-    for (const conf of (conflicts ?? [])) {
+    for (const conf of conflicts ?? []) {
       if (conf.mission_id) continue;
 
       const tagged = pool.filter((m: any) => Array.isArray(m.zone_tags) ? m.zone_tags.includes(conf.zone_key) : false);
@@ -74,7 +112,9 @@ serve(async (req) => {
       let chosen: any = null;
 
       if (choose) {
-        const wanted = candidates.find((m: any) => m.id === choose.payload.mission_id) || pool.find((m: any) => m.id === choose.payload.mission_id);
+        const wanted =
+          candidates.find((m: any) => m.id === choose.payload.mission_id) ||
+          pool.find((m: any) => m.id === choose.payload.mission_id);
         if (wanted) chosen = wanted;
       }
 
@@ -89,7 +129,6 @@ serve(async (req) => {
       }
 
       if (!chosen) chosen = rand(candidates.length ? candidates : pool);
-
       if (!chosen) continue;
 
       const { error: upErr } = await admin
@@ -109,15 +148,21 @@ serve(async (req) => {
           title: "Mission Twist Declared",
           body: `A battlefield twist has been invoked for this engagement: ${tnames.join(", ")}.`,
           tags: ["twist", "mission"],
-          created_by: userData.user.id
+          created_by: user.id,
         });
       }
 
       results.push({ conflict_id: conf.id, mission_id: chosen.id, mission_name: chosen.name });
     }
 
-    return new Response(JSON.stringify({ ok: true, assigned: results.length, results }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, assigned: results.length, results }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), { status: 500 });
+    return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

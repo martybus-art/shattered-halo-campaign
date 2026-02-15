@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { getAuthenticatedUser, getServiceRoleKey, getSupabaseUrl } from "../_shared/auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,22 +23,8 @@ serve(async (req) => {
       });
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceRoleKey =
-      Deno.env.get("SERVICE_ROLE_KEY") ||
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
-      "";
-
-    const authHeader = req.headers.get("Authorization") ?? "";
-
-    // Validate caller
-    const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-
-    const { data: userData, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !userData.user) {
+    const { user, error: userErr } = await getAuthenticatedUser(req);
+    if (userErr || !user) {
       return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -52,14 +39,13 @@ serve(async (req) => {
       });
     }
 
-    const admin = createClient(supabaseUrl, serviceRoleKey);
+    const admin = createClient(getSupabaseUrl(), getServiceRoleKey());
 
-    // Role check: only lead/admin can advance stages
     const { data: member, error: mErr } = await admin
       .from("campaign_members")
       .select("role")
       .eq("campaign_id", campaign_id)
-      .eq("user_id", userData.user.id)
+      .eq("user_id", user.id)
       .maybeSingle();
 
     if (mErr) {
@@ -77,7 +63,6 @@ serve(async (req) => {
       });
     }
 
-    // Fetch campaign + current stage
     const { data: campaign, error: cErr } = await admin
       .from("campaigns")
       .select("id, round_number, status")
@@ -120,7 +105,6 @@ serve(async (req) => {
       return idx === -1 ? "movement" : order[Math.min(idx + 1, order.length - 1)];
     };
 
-    // Ensure round exists
     if (!round) {
       await admin.from("rounds").insert({ campaign_id, round_number: campaign.round_number, stage: "movement" });
       return new Response(JSON.stringify({ ok: true, stage: "movement" }), {
@@ -129,7 +113,6 @@ serve(async (req) => {
       });
     }
 
-    // publish -> new round
     if (stage === "publish") {
       await admin
         .from("rounds")
@@ -138,9 +121,7 @@ serve(async (req) => {
         .eq("round_number", campaign.round_number);
 
       const nextRound = campaign.round_number + 1;
-
       await admin.from("campaigns").update({ round_number: nextRound }).eq("id", campaign_id);
-
       await admin.from("rounds").insert({ campaign_id, round_number: nextRound, stage: "movement" });
 
       return new Response(JSON.stringify({ ok: true, stage: "movement", round_number: nextRound }), {
