@@ -45,7 +45,7 @@ export default function Home() {
               <div className="flex gap-3">
                 <a
                   className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-                  href="/campaigns"
+                  href="/dashboard"
                 >
                   Go to Dashboard
                 </a>
