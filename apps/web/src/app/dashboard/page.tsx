@@ -109,7 +109,7 @@ const forceLogout = async () => {
     
     let PlayerState = ps;
 
-    if (!playerState) {
+    if (!PlayerState) {
   // Create a default row — this requires an INSERT RLS policy OR doing it via an edge function with service role
   const { data: inserted, error: insErr } = await supabase
     .from("player_state")
