@@ -98,10 +98,39 @@ const forceLogout = async () => {
     if (me) return alert("You are not a member of this campaign.");
     setRole(mem.role);
 
-    const { data: ps, error: pe } = await supabase.from("player_state").select("*").eq("campaign_id", cid).eq("user_id", uid).single();
-    if (pe) return alert(pe.message);
-    setState(ps);
-  };
+    const { data: ps, error: pe } = await supabase
+    .from("player_state")
+    .select("*")
+    .eq("campaign_id", cid)
+    .eq("user_id", uid)
+    .maybeSingle();
+    
+    if (pe) throw pe;
+    
+    let PlayerState = ps;
+
+    if (!playerState) {
+  // Create a default row — this requires an INSERT RLS policy OR doing it via an edge function with service role
+  const { data: inserted, error: insErr } = await supabase
+    .from("player_state")
+    .insert({
+      campaign_id: campaignId,
+      user_id: userId,
+      // add whatever defaults you need here:
+      nip: 0,
+      ncp: 0,
+      narrative_points: 0,
+      secret_location: null,
+      public_location: null
+    })
+    .select("*")
+    .single();
+
+  if (insErr) throw insErr;
+  playerState = inserted;
+}
+
+};
 
   useEffect(() => {
     (async () => {

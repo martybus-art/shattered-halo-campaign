@@ -1,0 +1,61 @@
+:root{
+  --void:#0e0e11;
+  --steel:#17181d;
+  --brass:#b08d57;
+  --parchment:#e8dcc6;
+  --blood:#7a1f1f;
+}
+
+/* Works without Tailwind */
+.ui-frame{
+  min-height:100vh;
+  color:var(--parchment);
+  background: var(--void);
+}
+.ui-backdrop{
+  position:relative;
+  overflow:hidden;
+}
+.ui-backdrop::before{
+  content:"";
+  position:absolute; inset:0;
+  background: radial-gradient(circle at 20% 10%, rgba(176,141,87,.14), transparent 45%),
+              radial-gradient(circle at 80% 0%, rgba(122,31,31,.10), transparent 45%),
+              rgba(0,0,0,.72);
+  backdrop-filter: blur(8px);
+}
+.ui-backdrop > *{ position:relative; z-index:1; }
+
+.ui-panel{
+  background: rgba(23,24,29,.86);
+  border:1px solid rgba(176,141,87,.35);
+  border-radius:14px;
+  padding:18px;
+  box-shadow: 0 12px 35px rgba(0,0,0,.35);
+}
+
+.ui-btn{
+  display:inline-flex;
+  gap:10px;
+  align-items:center;
+  justify-content:center;
+  padding:10px 14px;
+  border-radius:12px;
+  border:1px solid rgba(176,141,87,.45);
+  background: rgba(176,141,87,.12);
+  color: var(--parchment);
+  cursor:pointer;
+}
+.ui-btn:hover{ background: rgba(176,141,87,.18); }
+.ui-btn-danger{
+  border-color: rgba(122,31,31,.6);
+  background: rgba(122,31,31,.18);
+}
+.ui-badge{
+  display:inline-flex;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid rgba(176,141,87,.4);
+  background: rgba(0,0,0,.35);
+  font-size:12px;
+}
