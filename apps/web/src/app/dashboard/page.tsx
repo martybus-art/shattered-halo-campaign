@@ -114,8 +114,8 @@ const forceLogout = async () => {
   const { data: inserted, error: insErr } = await supabase
     .from("player_state")
     .insert({
-      campaign_id: campaignId,
-      user_id: userId,
+      campaign_id: cid,
+      user_id: uid,
       // add whatever defaults you need here:
       nip: 0,
       ncp: 0,
