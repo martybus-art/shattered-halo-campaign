@@ -127,7 +127,7 @@ const forceLogout = async () => {
     .single();
 
   if (insErr) throw insErr;
-  playerState = inserted;
+  PlayerState = inserted;
 }
 
 };
