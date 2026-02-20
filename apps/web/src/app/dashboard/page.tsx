@@ -119,7 +119,6 @@ const forceLogout = async () => {
       // add whatever defaults you need here:
       nip: 0,
       ncp: 0,
-      narrative_points: 0,
       secret_location: null,
       public_location: null
     })
