@@ -85,7 +85,7 @@ const forceLogout = async () => {
     .select("campaign_id, role, campaigns(name)")
     .eq("user_id", uid);
     if (error) return alert(error.message);
-    ssetMemberships((mem ?? []).map(m => ({
+    setMemberships((mem ?? []).map(m => ({
     campaign_id: m.campaign_id,
     role: m.role,
     campaign_name: (m.campaigns as any)?.name ?? m.campaign_id,
