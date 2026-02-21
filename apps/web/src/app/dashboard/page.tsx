@@ -224,7 +224,7 @@ const forceLogout = async () => {
               <select className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
                 value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
                 {memberships.map(m => (
-                  <option key={m.campaign_id} value={m.campaign_id}>{m.campaign_id} ({m.role})</option>
+                  <option key={m.campaign_id} value={m.campaign_id}>{m.campaign} ({m.role})</option>
                 ))}
               </select>
               <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${campaignId}`}>Map</a>

@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { corsHeaders, json, requireUser, adminClient } from "../_shared/utils.ts";
 import { getAuthenticatedUser, getServiceRoleKey, getSupabaseUrl } from "../_shared/auth.ts";
 
 const corsHeaders = {
@@ -9,8 +11,8 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") {return new Response("ok", { headers: corsHeaders });
+  if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
   }
 
   try {
@@ -23,23 +25,49 @@ serve(async (req) => {
       });
     }
 
-    const body = await req.json();
-    const { template_id, campaign_name, player_emails } = body;
+    const admin = adminClient();
+
+    const body = await req.json().catch(() => ({}));
+    const template_id = body?.template_id;
+    const campaign_name = body?.campaign_name;
+    const player_emails = Array.isArray(body?.player_emails) ? body.player_emails : [];
+
+    const ruleset_id = body?.ruleset_id ?? null;
+    const rules_overrides = body?.rules_overrides ?? {};
+    const map_id = body?.map_id ?? null;
 
     if (!template_id || !campaign_name) {
-      return new Response(JSON.stringify({ ok: false, error: "Missing fields" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    return json(400, { ok: false, error: "Missing template_id or campaign_name" });
+  }
+  if (typeof rules_overrides !== "object" || Array.isArray(rules_overrides)) {
+    return json(400, { ok: false, error: "rules_overrides must be an object" });
+  }
+
+      // Validate template exists (nicer than FK error)
+    const { data: tpl, error: tplErr } = await admin.from("templates").select("id").eq("id", template_id).maybeSingle();
+    if (tplErr) return json(500, { ok: false, error: "Template lookup failed", details: tplErr.message });
+    if (!tpl) return json(400, { ok: false, error: "Template not found" });
+    
+    // Optional validate ruleset/map when provided
+    if (ruleset_id) {
+      const { data: rs, error: rsErr } = await admin.from("rulesets").select("id").eq("id", ruleset_id).maybeSingle();
+      if (rsErr) return json(500, { ok: false, error: "Ruleset lookup failed", details: rsErr.message });
+      if (!rs) return json(400, { ok: false, error: "Ruleset not found" });
     }
-
-    const admin = createClient(getSupabaseUrl(), getServiceRoleKey());
-
+   if (map_id) {
+      const { data: mp, error: mpErr } = await admin.from("maps").select("id").eq("id", map_id).maybeSingle();
+      if (mpErr) return json(500, { ok: false, error: "Map lookup failed", details: mpErr.message });
+      if (!mp) return json(400, { ok: false, error: "Map not found" });
+    }
+    
     const { data: campaign, error: cErr } = await admin
       .from("campaigns")
       .insert({
         template_id,
-        name: campaign_name,
+        map_id,
+        ruleset_id,
+        rules_overrides,
+        name: String(campaign_name),
         phase: 1,
         round_number: 1,
         instability: 0,
@@ -47,38 +75,26 @@ serve(async (req) => {
       .select()
       .single();
 
-    if (cErr || !campaign) {
-      return new Response(JSON.stringify({ ok: false, error: cErr?.message ?? "Insert failed" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (cErr || !campaign) return json(500, { ok: false, error: "Campaign insert failed", details: cErr?.message });
 
-    await admin.from("campaign_members").insert({
-      campaign_id: campaign.id,
-      user_id: user.id,
-      role: "lead",
-    });
+  const { error: memErr } = await admin.from("campaign_members").insert({
+    campaign_id: campaign.id,
+    user_id: user.userId,
+    role: "lead",
+  });
+  if (memErr) return json(500, { ok: false, error: "Lead membership insert failed", details: memErr.message });
 
-    if (Array.isArray(player_emails)) {
-      const invites = player_emails.map((email: string) => ({
-        campaign_id: campaign.id,
-        email,
-      }));
 
-      if (invites.length) {
-        await admin.from("pending_invites").insert(invites);
-      }
-    }
+    const invites = player_emails
+    .map((e: any) => String(e).trim().toLowerCase())
+    .filter(Boolean)
+    .map((email: string) => ({ campaign_id: campaign.id, email }));
 
-    return new Response(JSON.stringify({ ok: true, campaign_id: campaign.id }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  } catch (e: any) {
-    return new Response(JSON.stringify({ ok: false, error: e?.message ?? "Server error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  if (invites.length) {
+    const { error: invErr } = await admin.from("pending_invites").insert(invites);
+    if (invErr) return json(500, { ok: false, error: "Invite insert failed", details: invErr.message });
   }
+
+      return json(200, { ok: true, campaign_id: campaign.id });
 });
+
