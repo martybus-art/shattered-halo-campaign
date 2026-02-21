@@ -7,23 +7,28 @@ export function getSupabaseUrl(): string {
 }
 
 export function getPublishableKey(): string {
-  const value = Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY") || "";
-  if (!value) throw new Error("Missing SUPABASE_PUBLISHABLE_KEY or SUPABASE_ANON_KEY");
+  // supports both old and new naming
+  const value =
+    Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ||
+    Deno.env.get("SB_PUBLISHABLE_KEY") ||
+    Deno.env.get("SUPABASE_ANON_KEY") ||
+    "";
+  if (!value) throw new Error("Missing SUPABASE_PUBLISHABLE_KEY/SB_PUBLISHABLE_KEY/SUPABASE_ANON_KEY");
   return value;
 }
 
 export function getServiceRoleKey(): string {
-  const value = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SERVICE_ROLE_KEY") || "";
+  const value =
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
+    Deno.env.get("SERVICE_ROLE_KEY") ||
+    "";
   if (!value) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY or SERVICE_ROLE_KEY");
   return value;
 }
 
 export function extractBearerToken(req: Request): string {
   const authHeader = req.headers.get("Authorization") ?? "";
-  if (!authHeader.toLowerCase().startsWith("bearer ")) {
-    return "";
-  }
-
+  if (!authHeader.toLowerCase().startsWith("bearer ")) return "";
   return authHeader.slice(7).trim();
 }
 
@@ -36,16 +41,20 @@ export async function getAuthenticatedUser(req: Request) {
     return { user: null, error: new Error("Missing bearer token") };
   }
 
-  const userClient = createClient(supabaseUrl, publishableKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        apikey: publishableKey,
-      },
-    },
+  // ✅ ECC/ES256-safe approach for Edge Functions
+  const authClient = createClient(supabaseUrl, publishableKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data, error } = await userClient.auth.getUser(accessToken);
-  return { user: data.user, error };
+  const { data, error } = await authClient.auth.getClaims(accessToken);
+  if (error || !data?.claims?.sub) {
+    return { user: null, error: error ?? new Error("Invalid token") };
+  }
+
+  const user = {
+    id: data.claims.sub as string,
+    email: (data.claims.email ?? null) as string | null,
+  };
+
+  return { user, error: null };
 }
