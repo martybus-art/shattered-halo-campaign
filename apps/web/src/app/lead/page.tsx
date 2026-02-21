@@ -48,7 +48,7 @@ const { data: r, error: rErr } = await supabase
   .select("stage")
   .eq("campaign_id", cid)
   .eq("round_number", c.round_number)
-  .single();
+  .maybeSingle();
 
 if (rErr) {
   // Not fatal — you can still view the campaign.
@@ -68,8 +68,14 @@ setRound(r);
   useEffect(() => { if (campaignId) load(campaignId); }, [campaignId]);
 
   const callFn = async (fn: string) => {
+    // Explicitly attach the access token for Edge Functions.
+    // (In some setups, invoke() won't include Authorization automatically.)
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+
     const { data, error } = await supabase.functions.invoke(fn, {
       body: { campaign_id: campaignId },
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     if (error) return alert(error.message);
     if (!data?.ok) return alert(data?.error || "Failed");

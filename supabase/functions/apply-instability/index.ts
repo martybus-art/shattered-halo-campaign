@@ -27,7 +27,7 @@ serve(async (req) => {
 
     const { user, error: uErr } = await getAuthenticatedUser(req);
     if (uErr || !user) {
-      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
+      return new Response(JSON.stringify({ ok: false, error: uErr ? `Not authenticated: ${uErr.message}` : "Not authenticated" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
