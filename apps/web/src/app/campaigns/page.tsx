@@ -182,6 +182,8 @@ export default function CampaignsPage() {
           template_id: selectedTemplate,
           campaign_name: campaignName.trim(),
           player_emails: inviteEmails,
+          rules_overrides: rulesOverrides,
+          //ruleset_id + map_id if you add thme too
         },
       });
 
