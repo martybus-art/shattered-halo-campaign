@@ -382,18 +382,3 @@ s3_region = "env(S3_REGION)"
 s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
-
-[functions.accept-invites]
-verify_jwt = false
-
-[functions.create-campaign]
-verify_jwt = false
-
-[functions.advance-round]
-verify_jwt = false
-
-[functions.assign-missions]
-verify_jwt = false
-
-[functions.apply-instability]
-verify_jwt = false
