@@ -58,7 +58,15 @@ export default function CampaignsPage() {
   const [selectedRuleset, setSelectedRuleset] = useState<string>("");
   const [selectedMap, setSelectedMap] = useState<string>("");
 
-  const [rulesOverrides, setRulesOverrides] = useState<any>({
+  type RulesOverrides = {
+  fog?: { enabled: boolean };
+  instability?: { enabled: boolean };
+  missions?: { mode: string };
+  economy?: { enabled?: boolean; catchup?: { enabled: boolean; bonus: number } };
+  narrative?: { cp_exchange?: { enabled: boolean } };
+  };
+
+  const [rulesOverrides, setRulesOverrides] = useState<RulesOverrides>({
   fog: { enabled: true },
   instability: { enabled: true },
   missions: { mode: "weighted_random_nip" },
