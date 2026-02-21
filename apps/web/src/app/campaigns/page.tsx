@@ -25,6 +25,21 @@ type Membership = {
   role: string;
 };
 
+type Ruleset = { 
+  id: string; 
+  name: string; 
+  description: string | null; 
+  key: string 
+};
+
+type MapRow = { 
+  id: string; 
+  name: string; 
+  description: string | null; 
+  version: number 
+};
+
+
 export default function CampaignsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
@@ -37,6 +52,20 @@ export default function CampaignsPage() {
   const [campaignName, setCampaignName] = useState<string>("");
   const [emails, setEmails] = useState<string>("");
   const [creating, setCreating] = useState(false);
+
+  const [rulesets, setRulesets] = useState<Ruleset[]>([]);
+  const [maps, setMaps] = useState<MapRow[]>([]);
+  const [selectedRuleset, setSelectedRuleset] = useState<string>("");
+  const [selectedMap, setSelectedMap] = useState<string>("");
+
+  const [rulesOverrides, setRulesOverrides] = useState<any>({
+  fog: { enabled: true },
+  instability: { enabled: true },
+  missions: { mode: "weighted_random_nip" },
+  economy: { catchup: { enabled: true, bonus: 1 } },
+  narrative: { cp_exchange: { enabled: true } },
+  });
+  
 
   const acceptInvites = async () => {
     try {
@@ -119,6 +148,13 @@ export default function CampaignsPage() {
     } finally {
       setLoading(false);
     }
+    const { data: rs } = await supabase.from("rulesets").select("id,key,name,description").eq("is_active", true).order("created_at", { ascending: false });
+    setRulesets((rs ?? []) as any);
+    if (!selectedRuleset && rs?.length) setSelectedRuleset(rs[0].id);
+
+    const { data: mp } = await supabase.from("maps").select("id,name,description,version").eq("is_active", true).order("created_at", { ascending: false });
+    setMaps((mp ?? []) as any);
+    if (!selectedMap && mp?.length) setSelectedMap(mp[0].id);
   };
 
   const createCampaign = async () => {
@@ -240,7 +276,63 @@ console.log("data:", data);
                 disabled={loading || creating}
               />
             </div>
+            
+            <div className="mt-4 rounded-2xl border border-brass/30 bg-iron/70 p-4">
+              <div className="text-sm font-semibold uppercase tracking-[0.18em] text-brass/90">
+                Optional Rules
+              </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label className="flex items-center gap-3">
+                <input type="checkbox"
+                  checked={!!rulesOverrides.economy?.enabled}
+                  onChange={(e) =>
+                    setRulesOverrides((r) => ({...r, economy: { ...(r.economy ?? {}), enabled: e.target.checked },
+                    }))
+                  }
+                />
+                <span>Economy (NIP/NCP)</span>
+              </label>
 
+              <label className="flex items-center gap-3">
+                <input type="checkbox"
+                  checked={!!rulesOverrides.fog?.enabled}
+                  onChange={(e) =>
+                    setRulesOverrides((r) => ({...r, fog: { ...(r.fog ?? {}), enabled: e.target.checked },
+                    }))
+                  }
+                />
+                <span>Fog of War</span>
+              </label>
+
+              <label className="flex items-center gap-3">
+                <input type="checkbox"
+                  checked={!!rulesOverrides.instability?.enabled}
+                  onChange={(e) =>
+                    setRulesOverrides((r) => ({...r, instability: { ...(r.instability ?? {}), enabled: e.target.checked },
+                    }))
+                  }
+                />
+                <span>Instability Events</span>
+              </label>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-xs text-parchment/70">Mission Selection</span>
+                <select
+                  value={rulesOverrides.missions?.mode ?? "weighted_random_nip"}
+                  onChange={(e) =>
+                    setRulesOverrides((r) => ({...r, missions: { ...(r.missions ?? {}), mode: e.target.value },
+                    }))
+                }
+                className="rounded-lg border border-brass/30 bg-black/30 px-3 py-2"
+        >
+          <option value="random">Random</option>
+          <option value="player_choice">Player Choice</option>
+          <option value="player_choice_nip">Player Choice + NIP Influence</option>
+          <option value="weighted_random_nip">Weighted Random + NIP Influence</option>
+        </select>
+      </div>
+    </div>
+  </div>
             <div>
               <div className="text-sm text-parchment/70 mb-1">Invite emails (comma-separated)</div>
               <input

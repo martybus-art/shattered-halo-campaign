@@ -47,13 +47,13 @@ Deno.serve(async (req) => {
     .from("campaigns")
     .insert({
       template_id,
-      map_id,
-      ruleset_id,
-      rules_overrides,
       name: String(campaign_name),
       phase: 1,
       round_number: 1,
       instability: 0,
+      ruleset_id,
+      rules_overrides,
+      map_id,     
     })
     .select()
     .single();
