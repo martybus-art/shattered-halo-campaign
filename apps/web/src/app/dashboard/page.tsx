@@ -22,7 +22,7 @@ type Campaign = {
   instability: number;
 };
 
-type Membership = { campaign_id: string; role: string };
+type Membership = { campaign_id: string; role: string; campaign_name: string };
 
 function getQueryParam(name: string): string | null {
   if (typeof window === "undefined") return null;
@@ -80,9 +80,17 @@ const forceLogout = async () => {
 };
 
   const loadMemberships = async (uid: string) => {
-    const { data: mem, error } = await supabase.from("campaign_members").select("campaign_id,role").eq("user_id", uid);
+    const { data: mem, error } = await supabase
+    .from("campaign_members")
+    .select("campaign_id, role, campaigns(name)")
+    .eq("user_id", uid);
     if (error) return alert(error.message);
-    setMemberships(mem ?? []);
+    ssetMemberships((mem ?? []).map(m => ({
+    campaign_id: m.campaign_id,
+    role: m.role,
+    campaign_name: (m.campaigns as any)?.name ?? m.campaign_id,
+  }))
+);
 
     const q = getQueryParam("campaign");
     if (q) setCampaignId(q);
@@ -224,7 +232,7 @@ const forceLogout = async () => {
               <select className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
                 value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
                 {memberships.map(m => (
-                  <option key={m.campaign_id} value={m.campaign_id}>{m.campaign} ({m.role})</option>
+                  <option key={m.campaign_id} value={m.campaign_id}>{m.campaign_name} ({m.role})</option>
                 ))}
               </select>
               <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${campaignId}`}>Map</a>
