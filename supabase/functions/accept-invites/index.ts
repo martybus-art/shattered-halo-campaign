@@ -13,21 +13,16 @@ serve(async (req) => {
   }
 
   try {
-    // Create a Supabase client with the Auth context of the logged in user
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      {
-        global: {
-          headers: { Authorization: req.headers.get("Authorization")! },
-        },
-      }
-    );
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Get the user from the session
-    const {
-      data: { user },
-    } = await supabaseClient.auth.getUser();
+    // User-scoped client (respects RLS)
+    const supabaseClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: req.headers.get("Authorization")! } },
+    });
+
+    const { data: { user } } = await supabaseClient.auth.getUser();
 
     if (!user) {
       return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
@@ -36,11 +31,8 @@ serve(async (req) => {
       });
     }
 
-    // Use service role key for admin operations
-    const supabaseAdmin = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-    );
+    // Admin client (bypasses RLS)
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
     // Find pending invites for this user's email
     const email = (user.email ?? "").toLowerCase();

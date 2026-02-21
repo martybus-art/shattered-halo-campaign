@@ -8,18 +8,18 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        void: "#0b0d10",
-        iron: "#111318",
-        brass: "#8a6d3b",
-        blood: "#6b0f1a",
-        parchment: "#d8c7a3"
+        void: "#0e0e11",
+        steel: "#1a1a1f",
+        brass: "#b08d57",
+        parchment: "#e8dcc6",
+        blood: "#7a1f1f",
       },
       fontFamily: {
         gothic: ["ui-serif", "Georgia", "serif"],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"]
       },
       boxShadow: {
-        reliquary: "0 0 0 1px rgba(138,109,59,0.35), 0 10px 30px rgba(0,0,0,0.6)"
+        halo: "0 0 20px rgba(176,141,87,0.35)",
       }
     }
   },
