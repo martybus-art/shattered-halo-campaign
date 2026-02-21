@@ -226,7 +226,7 @@ const forceLogout = async () => {
   return (
     <Frame title="Command Throne" right={<a className="underline" href="/campaigns">Campaigns</a>}>
       <div className="space-y-6">
-        <Card title="Campaign Picker">
+        <Card title="My Campaigns">
           {memberships.length ? (
             <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
               <select className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
