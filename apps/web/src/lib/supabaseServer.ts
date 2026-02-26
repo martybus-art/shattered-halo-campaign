@@ -8,7 +8,7 @@ import { createServerClient } from "@supabase/ssr";
  */
 export async function supabaseServer() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
   const cookieStore = await cookies();
 
   return createServerClient(url, anon, {

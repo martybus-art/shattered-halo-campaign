@@ -17,7 +17,7 @@ serve(async (req) => {
     if (!result?.user) {
       return json(401, { ok: false, error: "Unauthorised" });
     }
-const user = result.user;
+    const user = result.user;
 
     const admin = adminClient();
 

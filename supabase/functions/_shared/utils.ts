@@ -15,15 +15,16 @@ export function json(status: number, body: unknown) {
 
 export function getEnv() {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const publishableKey =
-    Deno.env.get("SB_PUBLISHABLE_KEY") ||
-    Deno.env.get("SUPABASE_ANON_KEY") ||
-    "";
+  const publishableKey = Deno.env.get("SB_PUBLISHABLE_KEY") || "";
+    //Deno.env.get("SUPABASE_ANON_KEY") || "";
 
   const serviceRoleKey =
     Deno.env.get("SERVICE_ROLE_KEY") ||
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
     "";
+
+  if (!supabaseUrl) throw new Error("Missing SUPABASE_URL in function secrets");
+  if (!publishableKey) throw new Error("Missing SB_PUBLISHABLE_KEY / SUPABASE_PUBLISHABLE_KEY in function secrets");
 
   return { supabaseUrl, publishableKey, serviceRoleKey };
 }
@@ -41,16 +42,17 @@ export async function requireUser(req: Request) {
   if (!token) return null;
 
   const authClient = createClient(supabaseUrl, publishableKey, {
-    global: { headers: { Authorization: `Bearer ${token}` } },  // ← this is the fix
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  
-  const { data, error } = await authClient.auth.getUser();
-  if (error || !data?.user) {
-    return { user: null, error: error ?? new Error("Invalid Token")};
-  }
+
+  const { data, error } = await authClient.auth.getClaims(token);
+  if (error || !data?.claims?.sub) return null;
+
   return {
-     user: { id: data.user.id, email: data.user.email ?? null },
+    user: {
+      id: data.claims.sub as string,
+      email: (data.claims.email ?? null) as string | null,
+    },
     error: null,
   };
 }
