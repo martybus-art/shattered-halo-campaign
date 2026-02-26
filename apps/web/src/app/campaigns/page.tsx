@@ -67,7 +67,7 @@ export default function CampaignsPage() {
   };
 
   const [rulesOverrides, setRulesOverrides] = useState({
-    economy: { catchup: { enabled: true, bonus: 1 } },
+    economy: { enabled: true, catchup: { enabled: true, bonus: 1 } },
     fog: { enabled: true },
     instability: { enabled: true },
     missions: { enabled: true ,mode: "weighted_random_nip" },
