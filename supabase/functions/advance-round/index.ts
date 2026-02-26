@@ -1,12 +1,15 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-import { getAuthenticatedUser, getServiceRoleKey, getSupabaseUrl } from "../_shared/auth.ts";
+import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+const { userId } = await requireUser(req);
+const admin = adminClient();
 
 type AdvanceReq = { campaign_id: string };
 
@@ -23,14 +26,6 @@ serve(async (req) => {
       });
     }
 
-    const { user, error: userErr } = await getAuthenticatedUser(req);
-    if (userErr || !user) {
-      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     const { campaign_id } = (await req.json()) as AdvanceReq;
     if (!campaign_id) {
       return new Response(JSON.stringify({ ok: false, error: "Missing campaign_id" }), {
@@ -39,13 +34,11 @@ serve(async (req) => {
       });
     }
 
-    const admin = createClient(getSupabaseUrl(), getServiceRoleKey());
-
     const { data: member, error: mErr } = await admin
       .from("campaign_members")
       .select("role")
       .eq("campaign_id", campaign_id)
-      .eq("user_id", user.id)
+      .eq("user_id", userId.id)
       .maybeSingle();
 
     if (mErr) {

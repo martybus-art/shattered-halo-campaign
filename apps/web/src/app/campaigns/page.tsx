@@ -66,12 +66,12 @@ export default function CampaignsPage() {
   narrative?: { cp_exchange?: { enabled: boolean } };
   };
 
-  const [rulesOverrides, setRulesOverrides] = useState<RulesOverrides>({
-  fog: { enabled: true },
-  instability: { enabled: true },
-  missions: { mode: "weighted_random_nip" },
-  economy: { catchup: { enabled: true, bonus: 1 } },
-  narrative: { cp_exchange: { enabled: true } },
+  const [rulesOverrides, setRulesOverrides] = useState({
+    economy: { catchup: { enabled: true, bonus: 1 } },
+    fog: { enabled: true },
+    instability: { enabled: true },
+    missions: { enabled: true ,mode: "weighted_random_nip" },
+    narrative: { cp_exchange: { enabled: true } },
   });
   
 

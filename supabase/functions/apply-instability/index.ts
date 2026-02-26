@@ -1,12 +1,15 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-import { getAuthenticatedUser, getServiceRoleKey, getSupabaseUrl } from "../_shared/auth.ts";
+import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+const { userId } = await requireUser(req);
+const admin = adminClient();
+
 
 function d10(): number {
   return Math.floor(Math.random() * 10) + 1;
@@ -24,14 +27,7 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    const { user, error: uErr } = await getAuthenticatedUser(req);
-    if (uErr || !user) {
-      return new Response(JSON.stringify({ ok: false, error: uErr ? `Not authenticated: ${uErr.message}` : "Not authenticated" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    
 
     const body = await req.json().catch(() => ({}));
     const campaignId = body.campaign_id as string;
@@ -42,13 +38,13 @@ serve(async (req) => {
       });
     }
 
-    const admin = createClient(getSupabaseUrl(), getServiceRoleKey());
+    
 
     const { data: mem } = await admin
       .from("campaign_members")
       .select("role")
       .eq("campaign_id", campaignId)
-      .eq("user_id", user.id)
+      .eq("user_id", userId.id)
       .maybeSingle();
 
     const role = mem?.role ?? "player";
@@ -106,7 +102,7 @@ serve(async (req) => {
       title: `Halo Instability: ${eventName}`,
       body: `${publicText}\n\n(Instability now ${newInstability}/10.)`,
       tags: ["instability", `t${thresholdBand}`, `d10_${roll}`],
-      created_by: user.id,
+      created_by: userId.id,
     });
 
     let phase = c.phase ?? 1;
@@ -124,7 +120,7 @@ serve(async (req) => {
           ? "The Halo's war becomes overt. Relics flare. Retreat becomes a luxury no one can afford."
           : "Collapse approaches. The Halo itself begins to choose who may live long enough to flee.",
         tags: ["phase", `phase_${phase}`],
-        created_by: user.id,
+        created_by: userId.id,
       });
     }
 

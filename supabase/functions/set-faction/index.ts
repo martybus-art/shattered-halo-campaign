@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { corsHeaders, json, requireUser, adminClient } from "../_shared/utils.ts";
+import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
 const FACTIONS: Record<string, string> = {
   space_marines: "Space Marines",
@@ -25,12 +25,14 @@ const FACTIONS: Record<string, string> = {
   leagues_of_votann: "Leagues of Votann",
 };
 
+
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
 
-  const user = await requireUser(req);
-  if (!user) return json(401, { ok: false, error: "Unauthorized" });
+  const { userId } = await requireUser(req);
+  if (!userId) return json(401, { ok: false, error: "Unauthorized" });
 
   const admin = adminClient();
   const body = await req.json().catch(() => ({}));
@@ -46,7 +48,7 @@ Deno.serve(async (req) => {
     .from("campaign_members")
     .select("campaign_id,user_id,faction_key,faction_locked")
     .eq("campaign_id", campaign_id)
-    .eq("user_id", user.userId)
+    .eq("user_id", userId.id)
     .maybeSingle();
 
   if (mErr) return json(500, { ok: false, error: "Membership lookup failed", details: mErr.message });
@@ -60,7 +62,7 @@ Deno.serve(async (req) => {
     .from("campaign_members")
     .update({ faction_key, faction_name, faction_locked: true, faction_set_at: new Date().toISOString() })
     .eq("campaign_id", campaign_id)
-    .eq("user_id", user.userId);
+    .eq("user_id", userId.id);
 
   if (uErr) return json(500, { ok: false, error: "Update failed", details: uErr.message });
 

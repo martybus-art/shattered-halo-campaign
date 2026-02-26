@@ -1,12 +1,15 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
-import { getAuthenticatedUser, getServiceRoleKey, getSupabaseUrl } from "../_shared/auth.ts";
+import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+const admin = adminClient();
+const { userId } = await requireUser(req);
 
 function rand<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -25,8 +28,8 @@ serve(async (req) => {
       });
     }
 
-    const { user, error: uErr } = await getAuthenticatedUser(req);
-    if (uErr || !user) {
+    const { userId, error: uErr } = await requireUser(req);
+    if (uErr || !userId) {
       return new Response(JSON.stringify({ ok: false, error: uErr ? `Not authenticated: ${uErr.message}` : "Not authenticated" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
