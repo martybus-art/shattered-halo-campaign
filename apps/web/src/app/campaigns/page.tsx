@@ -232,7 +232,7 @@ console.log("data:", data);
   useEffect(() => {
     // Helpful visibility for env correctness
     console.log("SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
-    console.log("HAS_ANON_KEY", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+    console.log("HAS_ANON_KEY", !!process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -73,6 +73,11 @@ setRound(r);
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
 
+    if (!token) {
+    alert("Session expired. Please refresh the page and try again.");
+    return;
+  }
+
     const { data, error } = await supabase.functions.invoke(fn, {
       body: { campaign_id: campaignId },
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -80,6 +85,7 @@ setRound(r);
     if (error) return alert(error.message);
     if (!data?.ok) return alert(data?.error || "Failed");
     alert("Done");
+    await load(campaignId); 
   };
 
   const allowed = role === "lead" || role === "admin";
