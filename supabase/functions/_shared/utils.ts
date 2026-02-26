@@ -19,8 +19,8 @@ export function getEnv() {
     //Deno.env.get("SUPABASE_ANON_KEY") || "";
 
   const serviceRoleKey =
-    Deno.env.get("SERVICE_ROLE_KEY") ||
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
+    Deno.env.get("SB_SERVICE_ROLE_KEY") ||
+    //Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
     "";
 
   if (!supabaseUrl) throw new Error("Missing SUPABASE_URL in function secrets");
@@ -39,6 +39,10 @@ export async function requireUser(req: Request) {
 
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+  console.log("AUTH: token present =", !!token);
+  console.log("AUTH: publishableKey present =", !!publishableKey);
+
   if (!token) return null;
 
   const authClient = createClient(supabaseUrl, publishableKey, {
@@ -46,6 +50,10 @@ export async function requireUser(req: Request) {
   });
 
   const { data, error } = await authClient.auth.getClaims(token);
+  
+  console.log("AUTH: getClaims error =", error?.message ?? "none");
+  console.log("AUTH: claims sub =", data?.claims?.sub ?? "missing");
+  
   if (error || !data?.claims?.sub) return null;
 
   return {

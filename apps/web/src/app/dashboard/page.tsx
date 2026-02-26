@@ -41,7 +41,7 @@ export default function Dashboard() {
 
 const acceptInvites = async () => {
   console.log("=== DEBUGGING ===");
-  console.log("Anon key (first 20):", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.substring(0, 20));
+  console.log("Anon key (first 20):", process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.substring(0, 20));
   
   try {
     const { data: { session } } = await supabase.auth.getSession();
@@ -58,7 +58,7 @@ const acceptInvites = async () => {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
-          'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          'apikey': process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({})
