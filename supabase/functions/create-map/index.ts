@@ -1,8 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
-
-const { userId } = await requireUser(req);
-const admin = adminClient();
 
 type MapJson = {
   zones: Array<{ id: string; name: string; sectors: Array<{ id: string; name?: string }> }>;
@@ -23,10 +19,17 @@ function validateMap(map: MapJson, maxPlayers: number) {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
 
   try {
-    const body = await req.json().catch(() => ({}));
+    // ✅ moved inside handler, correct auth pattern
+    const result = await requireUser(req);
+    if (!result?.user) return json(401, { ok: false, error: "Unauthorised" });
+    const user = result.user;
 
+    const admin = adminClient(); // ✅ moved inside handler
+
+    const body = await req.json().catch(() => ({}));
     const campaign_id = body.campaign_id as string | undefined;
     const name = (body.name ?? "Custom Map") as string;
     const description = (body.description ?? null) as string | null;
@@ -36,23 +39,16 @@ Deno.serve(async (req) => {
     if (!campaign_id) return json(400, { ok: false, error: "Missing campaign_id" });
     if (!map_json) return json(400, { ok: false, error: "Missing map_json" });
 
-    const supabaseUrl = getSupabaseUrl();
-    const serviceRoleKey = getServiceRoleKey();
-    if (!supabaseUrl || !serviceRoleKey) return json(500, { ok: false, error: "Missing server env keys" });
-
-    // lead-only
     const { data: mem } = await admin
       .from("campaign_members")
       .select("role")
       .eq("campaign_id", campaign_id)
-      .eq("user_id", userId)
+      .eq("user_id", user.id)      // ✅ user.id
       .maybeSingle();
 
     if (!mem) return json(403, { ok: false, error: "Not a member" });
     if (mem.role !== "lead") return json(403, { ok: false, error: "Only lead can upload/attach maps" });
 
-    // Design rules
-    // Your default is 8 players and 2x2 sectors per zone.
     const maxPlayers = 8;
     validateMap(map_json, maxPlayers);
 
@@ -66,7 +62,7 @@ Deno.serve(async (req) => {
         visibility: "private",
         recommended_players: maxPlayers,
         max_players: maxPlayers,
-        created_by: userId,
+        created_by: user.id,       // ✅ user.id
       })
       .select("id")
       .single();

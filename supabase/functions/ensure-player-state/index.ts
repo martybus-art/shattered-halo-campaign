@@ -5,8 +5,10 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
 
-  const user = await requireUser(req);
-  if (!user) return json(401, { ok: false, error: "Unauthorized" });
+  // ✅ correct auth pattern
+  const result = await requireUser(req);
+  if (!result?.user) return json(401, { ok: false, error: "Unauthorized" });
+  const user = result.user;
 
   const admin = adminClient();
   const body = await req.json().catch(() => ({}));
@@ -14,12 +16,11 @@ Deno.serve(async (req) => {
 
   if (!campaign_id) return json(400, { ok: false, error: "Missing campaign_id" });
 
-  // Ensure membership
   const { data: mem, error: mErr } = await admin
     .from("campaign_members")
     .select("campaign_id")
     .eq("campaign_id", campaign_id)
-    .eq("user_id", user.userId)
+    .eq("user_id", user.id)          // ✅ user.id
     .maybeSingle();
 
   if (mErr) return json(500, { ok: false, error: "Membership lookup failed", details: mErr.message });
@@ -29,7 +30,7 @@ Deno.serve(async (req) => {
     .from("player_state")
     .select("*")
     .eq("campaign_id", campaign_id)
-    .eq("user_id", user.userId)
+    .eq("user_id", user.id)          // ✅ user.id
     .maybeSingle();
 
   if (eErr) return json(500, { ok: false, error: "player_state lookup failed", details: eErr.message });
@@ -39,7 +40,7 @@ Deno.serve(async (req) => {
     .from("player_state")
     .insert({
       campaign_id,
-      user_id: user.userId,
+      user_id: user.id,              // ✅ user.id
       nip: 0,
       ncp: 0,
       narrative_points: 0

@@ -1,15 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
-
-const { userId } = await requireUser(req);
-const admin = adminClient();
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -17,91 +7,51 @@ serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const result = await requireUser(req);
+    if (!result?.user) return json(401, { ok: false, error: "Not authenticated" });
+    const user = result.user;
 
-    // User-scoped client (respects RLS)
-    const supabaseClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: req.headers.get("Authorization")! } },
-    });
+    if (!user.email) return json(400, { ok: false, error: "User has no email" });
 
-    const { data: { user } } = await supabaseClient.auth.getUser();
+    const admin = adminClient();
+    const email = user.email.toLowerCase();
 
-    if (!user) {
-      return new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Admin client (bypasses RLS)
-    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
-
-    // Find pending invites for this user's email
-    const email = (user.email ?? "").toLowerCase();
-    if (!email) {
-      return new Response(JSON.stringify({ ok: false, error: "User has no email" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const { data: invites, error: invErr } = await supabaseAdmin
+    const { data: invites, error: invErr } = await admin
       .from("pending_invites")
       .select("id,campaign_id")
       .ilike("email", email);
 
     if (invErr) {
       console.error("Invite fetch error:", invErr.message);
-      return new Response(JSON.stringify({ ok: false, error: invErr.message }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json(500, { ok: false, error: invErr.message });
     }
 
     const rows = invites ?? [];
-    if (!rows.length) {
-      return new Response(JSON.stringify({ ok: true, accepted: 0 }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (!rows.length) return json(200, { ok: true, accepted: 0 });
 
-    // Insert membership rows (ignore duplicates)
     const inserts = rows.map((r) => ({
       campaign_id: r.campaign_id,
       user_id: user.id,
       role: "player",
     }));
 
-    const { error: insertErr } = await supabaseAdmin.from("campaign_members").insert(inserts);
+    const { error: insertErr } = await admin.from("campaign_members").insert(inserts);
 
     if (insertErr) {
       console.error("Insert error:", insertErr.message);
-      // Don't fail on duplicate key errors
       if (!insertErr.message.includes("duplicate") && !insertErr.message.includes("unique")) {
-        return new Response(JSON.stringify({ ok: false, error: insertErr.message }), {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return json(500, { ok: false, error: insertErr.message });
       }
     }
 
-    // Delete invites after acceptance
     const inviteIds = rows.map((r) => r.id);
-    await supabaseAdmin.from("pending_invites").delete().in("id", inviteIds);
+    await admin.from("pending_invites").delete().in("id", inviteIds);
 
     console.log(`Accepted ${rows.length} invites for user ${user.id}`);
-    return new Response(JSON.stringify({ ok: true, accepted: rows.length }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json(200, { ok: true, accepted: rows.length });
+
   } catch (e: any) {
     console.error("Unexpected error:", e?.message ?? "Server error");
-    return new Response(JSON.stringify({ ok: false, error: e?.message ?? "Server error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json(500, { ok: false, error: e?.message ?? "Server error" });
   }
 });

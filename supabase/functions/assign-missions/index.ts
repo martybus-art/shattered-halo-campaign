@@ -1,15 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
-
-const admin = adminClient();
-const { userId } = await requireUser(req);
 
 function rand<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -22,44 +12,32 @@ serve(async (req) => {
 
   try {
     if (req.method !== "POST") {
-      return new Response(JSON.stringify({ ok: false, error: "Method not allowed" }), {
-        status: 405,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json(405, { ok: false, error: "Method not allowed" });
     }
 
-    const { userId, error: uErr } = await requireUser(req);
-    if (uErr || !userId) {
-      return new Response(JSON.stringify({ ok: false, error: uErr ? `Not authenticated: ${uErr.message}` : "Not authenticated" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    // ✅ correct auth pattern
+    const result = await requireUser(req);
+    if (!result?.user) return json(401, { ok: false, error: "Not authenticated" });
+    const user = result.user;
+
+    const admin = adminClient(); // ✅ moved inside handler, using shared helper
 
     const body = await req.json().catch(() => ({}));
     const campaignId = body.campaign_id as string;
     if (!campaignId) {
-      return new Response(JSON.stringify({ ok: false, error: "campaign_id required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json(400, { ok: false, error: "campaign_id required" });
     }
-
-    const admin = createClient(getSupabaseUrl(), getServiceRoleKey());
 
     const { data: mem } = await admin
       .from("campaign_members")
       .select("role")
       .eq("campaign_id", campaignId)
-      .eq("user_id", user.id)
+      .eq("user_id", user.id)       // ✅ user.id
       .maybeSingle();
 
     const role = mem?.role ?? "player";
     if (!(role === "lead" || role === "admin")) {
-      return new Response(JSON.stringify({ ok: false, error: "Not authorised" }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json(403, { ok: false, error: "Not authorised" });
     }
 
     const { data: c, error: cErr } = await admin
@@ -151,21 +129,16 @@ serve(async (req) => {
           title: "Mission Twist Declared",
           body: `A battlefield twist has been invoked for this engagement: ${tnames.join(", ")}.`,
           tags: ["twist", "mission"],
-          created_by: user.id,
+          created_by: user.id,       // ✅ user.id
         });
       }
 
       results.push({ conflict_id: conf.id, mission_id: chosen.id, mission_name: chosen.name });
     }
 
-    return new Response(JSON.stringify({ ok: true, assigned: results.length, results }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json(200, { ok: true, assigned: results.length, results });
+
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: (e as Error).message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json(500, { ok: false, error: (e as Error).message });
   }
 });

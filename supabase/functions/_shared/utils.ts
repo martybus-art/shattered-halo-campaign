@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -40,13 +40,19 @@ export async function requireUser(req: Request) {
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   if (!token) return null;
 
-  const authClient = createClient(supabaseUrl, publishableKey);
-  const { data, error } = await authClient.auth.getClaims(token);
-  if (error || !data?.claims?.sub) return null;
-
-  const userId = data.claims.sub as string;
-  const email = (data.claims.email ?? "") as string;
-  return { userId, email };
+  const authClient = createClient(supabaseUrl, publishableKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },  // ← this is the fix
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  
+  const { data, error } = await authClient.auth.getUser();
+  if (error || !data?.user) {
+    return { user: null, error: error ?? new Error("Invalid Token")};
+  }
+  return {
+     user: { id: data.user.id, email: data.user.email ?? null },
+    error: null,
+  };
 }
 
 export function adminClient() {

@@ -5,8 +5,9 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
 
-  const user = await requireUser(req);
-  if (!user) return json(401, { ok: false, error: "Unauthorized" });
+  const result = await requireUser(req);
+  if (!result?.user) return json(401, { ok: false, error: "Unauthorized" });
+  const user = result.user;
 
   const admin = adminClient();
 
@@ -62,7 +63,7 @@ Deno.serve(async (req) => {
 
   const { error: memErr } = await admin.from("campaign_members").insert({
     campaign_id: campaign.id,
-    user_id: user.userId,
+    user_id: user.id,
     role: "lead",
   });
   if (memErr) return json(500, { ok: false, error: "Lead membership insert failed", details: memErr.message });
