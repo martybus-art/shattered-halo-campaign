@@ -128,9 +128,8 @@ const forceLogout = async () => {
       nip: 0,
       ncp: 0,
       secret_location: null,
-      public_location: null
       current_zone_key: "unknown",
-      current_sector_key: null, // or "unknown" if you have a NOT NULL there too
+      current_sector_key: "unknown", // or "unknown" if you have a NOT NULL there too
       public_location: "Unknown",
     })
     .select("*")
