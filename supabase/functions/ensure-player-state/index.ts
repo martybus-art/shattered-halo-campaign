@@ -43,7 +43,10 @@ Deno.serve(async (req) => {
       user_id: user.id,              // ✅ user.id
       nip: 0,
       ncp: 0,
-      narrative_points: 0
+      narrative_points: 0,
+      current_zone_key: "unknown",
+      current_sector_key: "unknown", // or "unknown" if you have a NOT NULL there too
+      public_location: "Unknown",
     })
     .select("*")
     .single();
