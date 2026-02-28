@@ -473,7 +473,7 @@ export default function Home() {
                     </a>
                   )}
                 </div>
-
+              )}
               {/* ── Faction picker ── */}
               {selectedCampaignId && (() => {
                 const sm = memberships.find((m) => m.campaign_id === selectedCampaignId);
