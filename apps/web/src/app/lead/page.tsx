@@ -44,9 +44,8 @@ export default function LeadControls() {
   const [inviteStatus, setInviteStatus]   = useState<string>("");
   const [sendingInvite, setSendingInvite] = useState<boolean>(false);
 
-  // Late allocation state (per-player from the members list)
-  const [allocatingId, setAllocatingId]   = useState<string>("");
-  const [allocateStatus, setAllocateStatus] = useState<string>("");
+
+
 
   // Start campaign status
   const [startStatus, setStartStatus] = useState<string>("");
@@ -161,6 +160,66 @@ export default function LeadControls() {
     await load(campaignId);
   };
 
+  const archiveCampaign = async () => {
+    if (!campaignId || !campaign) return;
+    setArchiving(true);
+    try {
+      // Fetch all related data for export
+      const [membersRes, roundsRes, ledgerRes, conflictsRes] = await Promise.all([
+        supabase.from("campaign_members").select("*").eq("campaign_id", campaignId),
+        supabase.from("rounds").select("*").eq("campaign_id", campaignId),
+        supabase.from("ledger").select("*").eq("campaign_id", campaignId),
+        supabase.from("conflicts").select("*").eq("campaign_id", campaignId),
+      ]);
+
+      const archive = {
+        exported_at: new Date().toISOString(),
+        campaign,
+        members: membersRes.data ?? [],
+        rounds: roundsRes.data ?? [],
+        ledger: ledgerRes.data ?? [],
+        conflicts: conflictsRes.data ?? [],
+      };
+
+      const blob = new Blob([JSON.stringify(archive, null, 2)], { type: "application/json" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `${campaign.name.replace(/[^a-z0-9]/gi, "_")}_archive.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert("Archive failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  const deleteCampaign = async () => {
+    if (!campaignId) return;
+    setDeleting(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      const { data, error } = await supabase.functions.invoke("delete-campaign", {
+        body: { campaign_id: campaignId },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Delete failed");
+
+      alert("Campaign deleted.");
+      window.location.href = "/";
+    } catch (e: any) {
+      alert("Delete failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setDeleting(false);
+      setDeleteConfirm(false);
+    }
+  };
+
   const sendInvites = async () => {
     const emails = inviteEmails
       .split(",")
@@ -206,25 +265,6 @@ export default function LeadControls() {
     }
   };
 
-  const allocateLatePlayer = async (userId: string) => {
-    setAllocatingId(userId);
-    setAllocateStatus("");
-    const token = await getToken();
-    if (!token) { setAllocatingId(""); return; }
-
-    const { data, error } = await supabase.functions.invoke("start-campaign", {
-      body: { campaign_id: campaignId, mode: "late", late_user_id: userId },
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    if (error) {
-      setAllocateStatus(`Error: ${error.message}`);
-    } else {
-      setAllocateStatus(`Done — allocated ${data?.allocated ?? 0} sector(s).`);
-    }
-    setAllocatingId("");
-    await load(campaignId);
-  };
 
   // ── Style helpers ─────────────────────────────────────────
   const roleBadge = (r: string) => {
@@ -245,21 +285,6 @@ export default function LeadControls() {
 
         {/* ── 1. Campaign ── */}
         <Card title="Campaign">
-          <div className="flex flex-col md:flex-row gap-3">
-            <input
-              className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
-              placeholder="Campaign ID"
-              value={campaignId}
-              onChange={(e) => setCampaignId(e.target.value)}
-            />
-            <button
-              className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-              onClick={() => load(campaignId)}
-            >
-              Load
-            </button>
-          </div>
-
           {campaign && (
             <div className="mt-4 space-y-1 text-parchment/80">
               <div className="flex items-center gap-3">
@@ -303,6 +328,49 @@ export default function LeadControls() {
                   <p className="mt-2 text-xs text-parchment/60">{startStatus}</p>
                 )}
               </div>
+
+              {/* ── Archive / Delete ── */}
+              {allowed && (
+                <div className="pt-3 border-t border-brass/20">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      disabled={archiving}
+                      className="px-3 py-1.5 rounded bg-iron/40 border border-parchment/20 hover:bg-iron/60 text-xs text-parchment/60 disabled:opacity-40"
+                      onClick={archiveCampaign}
+                    >
+                      {archiving ? "Exporting…" : "↓ Export Archive"}
+                    </button>
+
+                    {!deleteConfirm ? (
+                      <button
+                        className="px-3 py-1.5 rounded bg-blood/10 border border-blood/30 hover:bg-blood/20 text-xs text-blood/70"
+                        onClick={() => setDeleteConfirm(true)}
+                      >
+                        Delete Campaign
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-blood/80">
+                          Delete <span className="font-semibold">{campaign.name}</span>? This cannot be undone.
+                        </span>
+                        <button
+                          disabled={deleting}
+                          className="px-3 py-1.5 rounded bg-blood/30 border border-blood/60 hover:bg-blood/40 text-xs text-blood font-semibold disabled:opacity-40"
+                          onClick={deleteCampaign}
+                        >
+                          {deleting ? "Deleting…" : "Confirm Delete"}
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded border border-parchment/20 text-xs text-parchment/50 hover:text-parchment/70"
+                          onClick={() => setDeleteConfirm(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -367,21 +435,9 @@ export default function LeadControls() {
                       {m.user_id.slice(0, 8)}…
                     </div>
 
-                    {/* Late Allocate button — only shown when campaign is running */}
-                    {campaignStarted && allowed && (
-                      <button
-                        disabled={allocatingId === m.user_id}
-                        className="shrink-0 px-3 py-1 rounded text-xs bg-blood/20 border border-blood/40 hover:bg-blood/30 disabled:opacity-40"
-                        onClick={() => allocateLatePlayer(m.user_id)}
-                      >
-                        {allocatingId === m.user_id ? "Allocating…" : "Allocate"}
-                      </button>
-                    )}
                   </div>
                 ))}
-                {allocateStatus && (
-                  <p className="text-xs text-parchment/60 pt-1">{allocateStatus}</p>
-                )}
+
               </div>
             )}
 
@@ -418,7 +474,7 @@ export default function LeadControls() {
                       )}
                     </div>
                     <div className="text-xs text-parchment/50 mt-0.5">
-                      Once the player joins, click <span className="text-blood/70">Allocate</span> next to their name above to reassign 1 sector from the dominant player to them.
+                      Late players will need their starting location allocated by the lead after they join — use the Start Campaign function again to reallocate.
                     </div>
                   </div>
                 </label>

@@ -17,13 +17,6 @@ type Ruleset = {
   key: string;
 };
 
-type MapRow = {
-  id: string;
-  name: string;
-  description: string | null;
-  version: number;
-};
-
 export default function CampaignsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
@@ -36,9 +29,8 @@ export default function CampaignsPage() {
   const [emails, setEmails] = useState<string>("");
 
   const [rulesets, setRulesets] = useState<Ruleset[]>([]);
-  const [maps, setMaps] = useState<MapRow[]>([]);
   const [selectedRuleset, setSelectedRuleset] = useState<string>("");
-  const [selectedMap, setSelectedMap] = useState<string>("");
+  const [campaignSize, setCampaignSize] = useState<"small"|"medium"|"large">("medium");
 
   const [inviteMessage, setInviteMessage]   = useState<string>("");
   const [generatingMsg, setGeneratingMsg]   = useState(false);
@@ -71,13 +63,6 @@ export default function CampaignsPage() {
       setRulesets((rs ?? []) as Ruleset[]);
       if (!selectedRuleset && rs?.length) setSelectedRuleset(rs[0].id);
 
-      const { data: mp } = await supabase
-        .from("maps")
-        .select("id,name,description,version")
-        .eq("is_active", true)
-        .order("created_at", { ascending: false });
-      setMaps((mp ?? []) as MapRow[]);
-      if (!selectedMap && mp?.length) setSelectedMap(mp[0].id);
     } catch (e: any) {
       console.error(e);
       alert(e?.message ?? String(e));
@@ -134,7 +119,7 @@ export default function CampaignsPage() {
           player_emails: inviteEmails,
           ruleset_id: selectedRuleset || null,
           rules_overrides: rulesOverrides,
-          map_id: selectedMap || null,
+          campaign_size: campaignSize,
           invite_message: inviteMessage.trim() || null,
         },
       });
@@ -233,25 +218,37 @@ export default function CampaignsPage() {
               </div>
             )}
 
-            {/* Optional map */}
-            {maps.length > 0 && (
-              <div>
-                <div className="text-sm text-parchment/70 mb-1">
-                  Map <span className="text-parchment/40">(optional)</span>
-                </div>
-                <select
-                  className="w-full px-3 py-2 rounded bg-void border border-brass/30"
-                  value={selectedMap}
-                  onChange={(e) => setSelectedMap(e.target.value)}
-                  disabled={loading || creating}
-                >
-                  <option value="">— None —</option>
-                  {maps.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name} (v{m.version})</option>
-                  ))}
-                </select>
+            {/* Campaign size — determines map zone count and max players */}
+            <div>
+              <div className="text-sm text-parchment/70 mb-2">Campaign size</div>
+              <div className="grid grid-cols-3 gap-3">
+                {([
+                  { key: "small",  label: "Small",  zones: 4,  max: 4,  grid: "4 zones · 4 sectors/zone" },
+                  { key: "medium", label: "Medium", zones: 8,  max: 8,  grid: "8 zones · 4 sectors/zone" },
+                  { key: "large",  label: "Large",  zones: 12, max: 12, grid: "12 zones · 4 sectors/zone" },
+                ] as const).map((s) => (
+                  <button
+                    key={s.key}
+                    type="button"
+                    disabled={loading || creating}
+                    onClick={() => setCampaignSize(s.key)}
+                    className={[
+                      "flex flex-col items-center rounded border px-3 py-3 transition-colors text-center disabled:opacity-40",
+                      campaignSize === s.key
+                        ? "border-brass/60 bg-brass/10 text-parchment"
+                        : "border-brass/20 bg-void hover:border-brass/40 text-parchment/70",
+                    ].join(" ")}
+                  >
+                    <span className="font-semibold text-sm">{s.label}</span>
+                    <span className="text-xs text-parchment/50 mt-0.5">Max {s.max} players</span>
+                    <span className="text-xs text-parchment/30 mt-0.5">{s.grid}</span>
+                  </button>
+                ))}
               </div>
-            )}
+              <p className="mt-1 text-xs text-parchment/40">
+                Map is auto-generated from the size you select. Sectors use a 2×2 grid per zone.
+              </p>
+            </div>
 
             {/* Rules overrides */}
             <div className="rounded-2xl border border-brass/30 bg-iron/70 p-4">
