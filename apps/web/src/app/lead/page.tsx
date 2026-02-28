@@ -44,8 +44,10 @@ export default function LeadControls() {
   const [inviteStatus, setInviteStatus]   = useState<string>("");
   const [sendingInvite, setSendingInvite] = useState<boolean>(false);
 
-
-
+  // Archive / Delete
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleting, setDeleting]           = useState(false);
+  const [archiving, setArchiving]         = useState(false);
 
   // Start campaign status
   const [startStatus, setStartStatus] = useState<string>("");
