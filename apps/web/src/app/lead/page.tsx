@@ -10,6 +10,7 @@ type Campaign = {
   phase: number;
   round_number: number;
   instability: number;
+  invite_message: string | null;
 };
 
 type Round = { stage: string };
@@ -81,7 +82,7 @@ export default function LeadControls() {
 
     const { data: c, error: cErr } = await supabase
       .from("campaigns")
-      .select("id,name,phase,round_number,instability")
+      .select("id,name,phase,round_number,instability,invite_message")
       .eq("id", cid)
       .single();
 
