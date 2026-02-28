@@ -1,10 +1,10 @@
 # Shattered Halo Campaign — Master Reference Document
 
 **Repo:** https://github.com/martybus-art/shattered-halo-campaign  
-**Live site:** https://shattered-halo-campaign.vercel.app  
+**Live site:** https://40kcampaigngame.fun  
 **Supabase project:** `yzqzlajmehzilxfruskq` (ap-northeast-1 / Tokyo)  
 **Postgres version:** 17.6.1  
-**Last updated:** 2026-02-28  
+**Last updated:** 2026-02-28 (session 4)  
 **Code baseline commit:** `6ea665763bccb37f1f29666f9928c191e4ac6191`
 
 > ⚠️ **IMPORTANT:** The live database is ahead of the migration files in several places.
@@ -38,11 +38,11 @@ apps/web/
     middleware.ts
     app/
       layout.tsx
-      page.tsx                    <- root/home page
+      page.tsx                    <- profile/home page (login, pending invites, campaign selector)
       globals.css
       api/
         version/route.ts
-      campaigns/page.tsx          <- create & list campaigns
+      campaigns/page.tsx          <- create campaign only (My Campaigns removed)
       conflicts/page.tsx
       dashboard/page.tsx          <- player command throne
       lead/page.tsx               <- lead/admin controls
@@ -67,16 +67,17 @@ supabase/
     _shared/
       rules.ts                    <- EffectiveRules type, deepMerge, loadEffectiveRules
       utils.ts                    <- corsHeaders, json, adminClient, requireUser
-    accept-invites/index.ts
+    accept-invites/index.ts       <- list/accept/decline modes (replaces auto-accept)
     advance-round/index.ts
     apply-instability/index.ts
     assign-missions/index.ts
-    create-campaign/index.ts
+    create-campaign/index.ts      <- now saves invite_message, sends emails via Auth
     create-map/index.ts
     ensure-player-state/index.ts
     lead-set-faction/index.ts
     set-faction/index.ts
-    start-campaign/index.ts       <- EMPTY FILE - not yet implemented
+    invite-players/index.ts       <- new: sends invite emails via Supabase Auth SMTP
+    start-campaign/index.ts       <- fully implemented (initial + late allocation modes)
   seed/
     missions_shattered_halo.json
     seed_evolution_pack.sql
@@ -84,6 +85,22 @@ supabase/
 
 public/art/factions/              <- see Factions section
 ```
+
+
+### `Frame.tsx` props
+```ts
+type FrameProps = {
+  title?:       string           // page subtitle shown next to SHATTERED HALO
+  children:     React.ReactNode
+  right?:       React.ReactNode  // legacy slot, kept for compatibility
+  campaignId?:  string           // enables campaign nav links when provided
+  role?:        string           // shows Lead Controls link when 'lead' or 'admin'
+  currentPage?: "home" | "dashboard" | "map" | "conflicts" | "lead" | "campaigns"
+}
+```
+Nav strip always renders. Campaign links (Dashboard, Map, Conflicts, Lead Controls)
+only appear when `campaignId` is provided. `+ New Campaign` always shows right-aligned.
+`Profile` always shows left. Pass no `campaignId` to show Profile + New Campaign only.
 
 ---
 
@@ -141,6 +158,7 @@ Row counts shown are current live counts. All tables are in `public` schema.
 | `ruleset_id` | uuid FK -> rulesets | YES | |
 | `map_id` | uuid FK -> maps | YES | |
 | `rules_overrides` | jsonb | NO | `'{}'` |
+| `invite_message` | text | YES | NULL | AI-generated narrative shown to invited players |
 
 ### `campaign_members` - 1 row
 | Column | Type | Nullable | Default | Notes |
@@ -309,7 +327,7 @@ Clarify intent before building on it.
 | `created_by` | uuid FK -> auth.users | YES | |
 | `created_at` | timestamptz | NO | `now()` |
 
-### `pending_invites` - 1 row
+### `pending_invites`  NOTE: live table has an extra `role` column not in migration files - 1 row
 | Column | Type | Nullable | Default |
 |---|---|---|---|
 | `id` | uuid PK | NO | `gen_random_uuid()` |
@@ -448,6 +466,12 @@ Source: `supabase/functions/advance-round/index.ts`
 
 ## TypeScript Types
 
+### `src/app/page.tsx` (profile/home)
+```ts
+type Membership     = { campaign_id: string; role: string; faction_name: string | null; commander_name: string | null; campaign: { name: string; phase: number; round_number: number; instability: number } | null }
+type PendingInvite  = { id: string; campaign_id: string; campaign_name: string; invite_message: string | null }
+```
+
 ### `src/app/campaigns/page.tsx`
 ```ts
 type Template   = { id: string; name: string; description: string | null }
@@ -469,6 +493,13 @@ type RulesOverrides = {
 type PlayerState = { campaign_id: string; user_id: string; current_zone_key: string; current_sector_key: string; nip: number; ncp: number; status: string }
 type Campaign    = { id: string; name: string; phase: number; round_number: number; instability: number }
 type Membership  = { campaign_id: string; role: string; campaign_name: string }
+```
+
+### `src/app/lead/page.tsx`
+```ts
+type Campaign = { id: string; name: string; phase: number; round_number: number; instability: number }
+type Round    = { stage: string }
+type Member   = { user_id: string; role: string; faction_name: string | null; faction_key: string | null; commander_name: string | null; faction_locked: boolean }
 ```
 
 ### `src/components/theme.ts`
@@ -513,16 +544,17 @@ Lookup: `getFactionTheme(key?: string | null): FactionTheme | null`
 
 | Function | Role required | Purpose |
 |---|---|---|
-| `accept-invites` | any authenticated | Auto-joins pending invites for current user |
+| `accept-invites` | any authenticated | `list` / `accept` / `decline` modes — player-controlled invite handling |
 | `advance-round` | `lead` or `admin` | Steps round through the stage sequence |
 | `apply-instability` | service role | Rolls instability events at end of round |
 | `assign-missions` | service role | Assigns missions to conflicts (NIP-weighted) |
-| `create-campaign` | any authenticated | Creates campaign, sets caller as `lead` |
+| `create-campaign` | any authenticated | Creates campaign, sets caller as `lead`, saves invite_message, sends invite emails |
 | `create-map` | service role | Creates map/sector rows from template |
 | `ensure-player-state` | service role | Upserts player_state row for a user |
 | `lead-set-faction` | `lead` | Sets another player's faction |
 | `set-faction` | `player` (self) | Sets own faction |
-| `start-campaign` | - | EMPTY - not implemented |
+| `invite-players` | `lead` or `admin` | Inserts pending_invites rows + sends emails via Supabase Auth SMTP |
+| `start-campaign` | `lead` | Allocates secret starting locations (initial + late modes) |
 
 ---
 
@@ -597,6 +629,36 @@ These improvements require Supabase Pro tier or above. Revisit if you upgrade.
 
 ---
 
+---
+
+## Deployment Checklist
+
+### Deploying a new Edge Function
+1. Push the function file to `supabase/functions/<name>/index.ts`
+2. Deploy via Supabase CLI: `supabase functions deploy <name>`
+3. In Supabase Dashboard → Edge Functions → select function → Settings:
+   - **Disable "Verify JWT with legacy secret"** — this project uses ES256 tokens.
+     Leaving it enabled causes all requests to return 401 before your code runs.
+     Authentication is handled inside each function via `requireUser()` which
+     uses `getClaims()` with the correct algorithm.
+4. Confirm the function appears in the Supabase functions list as "Active"
+
+### Deploying a DB migration
+1. Write migration as `supabase/migrations/NNN_description.sql`
+2. Run in Supabase SQL Editor (copy/paste)
+3. Verify with `SELECT column_name FROM information_schema.columns WHERE table_name = 'x'`
+4. Update SHATTERED_HALO_REFERENCE.md with new columns/tables
+5. Commit both the migration file and updated reference doc
+
+### Environment secrets for Edge Functions
+Functions access secrets via `Deno.env.get()`. Required secrets (set in Supabase
+Dashboard → Edge Functions → Secrets):
+```
+SUPABASE_URL
+SB_PUBLISHABLE_KEY      <- anon/publishable key
+SB_SERVICE_ROLE_KEY     <- service role key (admin operations)
+```
+
 ## Change Log
 
 | # | Date | Files | Change |
@@ -608,3 +670,15 @@ These improvements require Supabase Pro tier or above. Revisit if you upgrade.
 | 005 | 2026-02-28 | REFERENCE.md | Added Pro Tier Recommendations section. Logged leaked password protection (P1) as blocked on free tier |
 | 006 | 2026-02-28 | SQL Editor + supabase/migrations/006_perf_rls_fixes.sql | Wrapped all auth.uid()/auth.role() calls in (select ...) across 40+ policies. Merged duplicate permissive policies. Dropped duplicate constraint player_state_unique_user_campaign |
 | 007 | 2026-02-28 | supabase/migrations/007_catchup_schema.sql | Documented all live DB schema drift: rulesets, maps, player_state_secret tables; ruleset_id/map_id/rules_overrides on campaigns; faction_key/faction_locked/faction_set_at on campaign_members; public_location/secret_location/starting_location on player_state |
+| 008 | 2026-02-28 | All frontend pages | Added shared navigation to Frame.tsx: Profile link (always), campaign links (when campaignId passed), Lead Controls (lead/admin only), + New Campaign (always, right-aligned). Title links to / |
+| 009 | 2026-02-28 | apps/web/src/app/page.tsx | Converted root page to profile/home page: display name (saved to auth metadata), pending invites card (accept/decline), campaign selector with role badges and action buttons |
+| 010 | 2026-02-28 | apps/web/src/app/campaigns/page.tsx | Stripped to create-campaign only. My Campaigns card removed. After create, redirects to / |
+| 011 | 2026-02-28 | apps/web/src/app/lead/page.tsx | Restructured: Campaign card has Start button + Running/Not Started badge. Active Players card has Invite form (email input + late player toggle). Advance Stage + Assign Missions promoted as primary actions. Allocate button per player row (late allocation with one click) |
+| 012 | 2026-02-28 | supabase/functions/accept-invites/index.ts | Replaced auto-accept-all with list/accept/decline modes. list returns pending invites with campaign names + invite_message. accept/decline verify email ownership before acting |
+| 013 | 2026-02-28 | supabase/functions/invite-players/index.ts | New function: inserts pending_invites rows + calls admin.auth.admin.inviteUserByEmail() per email routing through Supabase SMTP/Resend. Handles existing users gracefully (invite row inserted, email skipped) |
+| 014 | 2026-02-28 | supabase/functions/create-campaign/index.ts | Now saves invite_message column, sends invite emails via inviteUserByEmail() for initial player list |
+| 015 | 2026-02-28 | supabase/migrations/008_add_invite_message.sql | Added invite_message TEXT column to campaigns table |
+| 016 | 2026-02-28 | apps/web/src/app/campaigns/page.tsx | Added AI narrative generation (calls Claude API) with "Generate with AI" button. Generates grimdark 40K invite blurb from campaign name. Editable before campaign creation |
+| 017 | 2026-02-28 | apps/web/src/app/dashboard/page.tsx, campaigns/page.tsx | Removed auto-accept-invites calls. Invite handling moved to profile page only |
+| 018 | 2026-02-28 | REFERENCE.md | Added Deployment Checklist section. Key note: all edge functions must have "Verify JWT with legacy secret" DISABLED — project uses ES256 tokens, requireUser() handles auth via getClaims() |
+

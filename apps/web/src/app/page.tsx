@@ -2,12 +2,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
+import { FACTION_THEMES, getFactionTheme } from "@/components/theme";
 import { Card } from "@/components/Card";
 
 type Membership = {
   campaign_id: string;
   role: string;
+  faction_key: string | null;
   faction_name: string | null;
+  faction_locked: boolean;
   commander_name: string | null;
   campaign: {
     name: string;
@@ -41,6 +44,11 @@ export default function Home() {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
+
+  // Faction picker
+  const [pickingFaction, setPickingFaction] = useState(false);
+  const [settingFaction, setSettingFaction] = useState(false);
+  const [factionError, setFactionError]     = useState<string>("");
 
   // Pending invites
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
@@ -78,7 +86,9 @@ export default function Home() {
         .select(`
           campaign_id,
           role,
+          faction_key,
           faction_name,
+          faction_locked,
           commander_name,
           campaigns (name, phase, round_number, instability)
         `)
@@ -90,8 +100,10 @@ export default function Home() {
       const rows: Membership[] = (data ?? []).map((m: any) => ({
         campaign_id: m.campaign_id,
         role: m.role,
-        faction_name: m.faction_name,
-        commander_name: m.commander_name,
+        faction_key: m.faction_key ?? null,
+        faction_name: m.faction_name ?? null,
+        faction_locked: m.faction_locked ?? false,
+        commander_name: m.commander_name ?? null,
         campaign: m.campaigns ?? null,
       }));
 
@@ -183,6 +195,45 @@ export default function Home() {
       alert(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
     } finally {
       setProcessingInviteId("");
+    }
+  };
+
+  // Reset faction picker when a different campaign is selected
+  const handleSelectCampaign = (id: string) => {
+    setSelectedCampaignId(id);
+    setPickingFaction(false);
+    setFactionError("");
+  };
+
+  const confirmFaction = async (factionKey: string) => {
+    if (!selectedCampaignId) return;
+    setSettingFaction(true);
+    setFactionError("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) { setFactionError("Session expired. Refresh and try again."); return; }
+
+      const { data, error } = await supabase.functions.invoke("set-faction", {
+        body: { campaign_id: selectedCampaignId, faction_key: factionKey },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Failed to set faction");
+
+      // Update local state so UI reflects immediately without a full reload
+      setMemberships((prev) =>
+        prev.map((m) =>
+          m.campaign_id === selectedCampaignId
+            ? { ...m, faction_key: factionKey, faction_name: data.faction_name, faction_locked: true }
+            : m
+        )
+      );
+      setPickingFaction(false);
+    } catch (e: any) {
+      setFactionError(e?.message ?? "Failed to set faction.");
+    } finally {
+      setSettingFaction(false);
     }
   };
 
@@ -342,7 +393,7 @@ export default function Home() {
                   return (
                     <button
                       key={m.campaign_id}
-                      onClick={() => setSelectedCampaignId(m.campaign_id)}
+                      onClick={() => handleSelectCampaign(m.campaign_id)}
                       className={[
                         "w-full text-left rounded border px-4 py-3 transition-colors",
                         active
@@ -350,29 +401,43 @@ export default function Home() {
                           : "border-brass/20 bg-void hover:border-brass/40 hover:bg-brass/5",
                       ].join(" ")}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-parchment truncate">
-                            {c?.name ?? m.campaign_id}
-                          </div>
-                          {c && (
-                            <div className="text-xs text-parchment/50 mt-0.5">
-                              Phase {c.phase} · Round {c.round_number} · Instability {c.instability}/10
-                            </div>
-                          )}
-                          {(m.faction_name || m.commander_name) && (
-                            <div className="text-xs text-parchment/60 mt-0.5">
-                              {m.faction_name && <span>{m.faction_name}</span>}
-                              {m.commander_name && (
-                                <span className="ml-2 text-parchment/40">— {m.commander_name}</span>
+                      {(() => {
+                        const theme = getFactionTheme(m.faction_key);
+                        return (
+                          <div className="flex items-start justify-between gap-3">
+                            {/* Faction crest — only when faction is set */}
+                            {theme && (
+                              <div
+                                className="shrink-0 w-10 h-10 rounded bg-cover bg-center border border-brass/30"
+                                style={{ backgroundImage: `url(${theme.crest})` }}
+                                title={theme.name}
+                              />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-parchment truncate">
+                                {c?.name ?? m.campaign_id}
+                              </div>
+                              {c && (
+                                <div className="text-xs text-parchment/50 mt-0.5">
+                                  Phase {c.phase} · Round {c.round_number} · Instability {c.instability}/10
+                                </div>
                               )}
+                              <div className="text-xs text-parchment/60 mt-0.5">
+                                {m.faction_name
+                                  ? <span className="text-brass">{m.faction_name}</span>
+                                  : <span className="text-parchment/30 italic">No faction selected</span>
+                                }
+                                {m.commander_name && (
+                                  <span className="ml-2 text-parchment/40">— {m.commander_name}</span>
+                                )}
+                              </div>
                             </div>
-                          )}
-                        </div>
-                        <span className={`shrink-0 text-xs px-2 py-0.5 rounded font-mono uppercase tracking-wide ${roleBadge(m.role)}`}>
-                          {m.role}
-                        </span>
-                      </div>
+                            <span className={`shrink-0 text-xs px-2 py-0.5 rounded font-mono uppercase tracking-wide ${roleBadge(m.role)}`}>
+                              {m.role}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </button>
                   );
                 })}
@@ -408,6 +473,90 @@ export default function Home() {
                     </a>
                   )}
                 </div>
+
+              {/* ── Faction picker ── */}
+              {selectedCampaignId && (() => {
+                const sm = memberships.find((m) => m.campaign_id === selectedCampaignId);
+                if (!sm) return null;
+                const theme = getFactionTheme(sm.faction_key);
+
+                return (
+                  <div className="pt-3 border-t border-brass/20">
+                    {sm.faction_key && theme ? (
+                      /* Faction already set — show banner */
+                      <div
+                        className="relative rounded overflow-hidden border border-brass/30"
+                        style={{ backgroundImage: `url(${theme.bg})`, backgroundSize: "cover", backgroundPosition: "center" }}
+                      >
+                        {/* Dark overlay so text is readable */}
+                        <div className="absolute inset-0 bg-void/75" />
+                        <div className="relative flex items-center gap-4 px-4 py-3">
+                          <img src={theme.crest} alt={theme.name} className="w-12 h-12 object-contain drop-shadow-lg" />
+                          <div>
+                            <div className="text-xs text-parchment/50 uppercase tracking-widest mb-0.5">Sworn Allegiance</div>
+                            <div className="text-parchment font-bold text-lg">{theme.name}</div>
+                            {sm.faction_locked && (
+                              <div className="text-xs text-parchment/40 mt-0.5">
+                                Faction locked — contact your lead to change it.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : pickingFaction ? (
+                      /* Faction picker grid */
+                      <div>
+                        <div className="text-sm text-parchment/70 mb-1">
+                          Choose your faction — <span className="text-blood/80">this cannot be changed once confirmed.</span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-3">
+                          {FACTION_THEMES.map((f) => (
+                            <button
+                              key={f.key}
+                              disabled={settingFaction}
+                              onClick={() => confirmFaction(f.key)}
+                              className="relative rounded overflow-hidden border border-brass/20 hover:border-brass/60 transition-colors group h-24 disabled:opacity-40"
+                              style={{ backgroundImage: `url(${f.preview})`, backgroundSize: "cover", backgroundPosition: "center" }}
+                              title={f.name}
+                            >
+                              <div className="absolute inset-0 bg-void/60 group-hover:bg-void/40 transition-colors" />
+                              <div className="absolute inset-0 flex flex-col items-center justify-end pb-2 px-1">
+                                <img src={f.crest} alt="" className="w-8 h-8 object-contain drop-shadow mb-1" />
+                                <span className="text-parchment text-xs font-semibold text-center leading-tight drop-shadow">
+                                  {f.name}
+                                </span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        {factionError && (
+                          <p className="text-blood text-sm mb-2">{factionError}</p>
+                        )}
+                        <button
+                          className="text-xs text-parchment/40 hover:text-parchment/60 underline"
+                          onClick={() => { setPickingFaction(false); setFactionError(""); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      /* No faction — prompt to pick */
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm text-parchment/50 italic">
+                          No faction pledged for this campaign.
+                        </div>
+                        <button
+                          className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm shrink-0"
+                          onClick={() => { setPickingFaction(true); setFactionError(""); }}
+                        >
+                          Pledge Allegiance
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              </div>
               )}
             </div>
           )}
