@@ -10,20 +10,6 @@ type Template = {
   description: string | null;
 };
 
-type Campaign = {
-  id: string;
-  name: string;
-  phase: number;
-  round_number: number;
-  instability: number;
-  created_at: string;
-};
-
-type Membership = {
-  campaign_id: string;
-  role: string;
-};
-
 type Ruleset = {
   id: string;
   name: string;
@@ -42,14 +28,12 @@ export default function CampaignsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [campaignsById, setCampaignsById] = useState<Record<string, Campaign>>({});
   const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
 
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [campaignName, setCampaignName] = useState<string>("");
   const [emails, setEmails] = useState<string>("");
-  const [creating, setCreating] = useState(false);
 
   const [rulesets, setRulesets] = useState<Ruleset[]>([]);
   const [maps, setMaps] = useState<MapRow[]>([]);
@@ -64,30 +48,9 @@ export default function CampaignsPage() {
     narrative: { cp_exchange: { enabled: true } },
   });
 
-  const acceptInvites = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const { error } = await supabase.functions.invoke("accept-invites", { body: {} });
-      if (error) console.warn("accept-invites failed:", error);
-    } catch (e) {
-      console.warn("accept-invites error:", e);
-    }
-  };
-
   const load = async () => {
     setLoading(true);
     try {
-      const { data: userResp } = await supabase.auth.getUser();
-      if (!userResp.user) {
-        setTemplates([]);
-        setMemberships([]);
-        setCampaignsById({});
-        return;
-      }
-
-      await acceptInvites();
-
       const { data: tpls, error: te } = await supabase
         .from("templates")
         .select("id,name,description")
@@ -97,50 +60,27 @@ export default function CampaignsPage() {
       setTemplates(tplRows);
       if (!selectedTemplate && tplRows.length) setSelectedTemplate(tplRows[0].id);
 
-      const { data: mem, error: me } = await supabase
-        .from("campaign_members")
-        .select("campaign_id,role")
+      const { data: rs } = await supabase
+        .from("rulesets")
+        .select("id,key,name,description")
+        .eq("is_active", true)
         .order("created_at", { ascending: false });
-      if (me) throw me;
-      const memRows = (mem ?? []) as Membership[];
-      setMemberships(memRows);
+      setRulesets((rs ?? []) as Ruleset[]);
+      if (!selectedRuleset && rs?.length) setSelectedRuleset(rs[0].id);
 
-      const ids = memRows.map((m) => m.campaign_id);
-      if (!ids.length) {
-        setCampaignsById({});
-        return;
-      }
-
-      const { data: camps, error: ce } = await supabase
-        .from("campaigns")
-        .select("id,name,phase,round_number,instability,created_at")
-        .in("id", ids);
-      if (ce) throw ce;
-      const map: Record<string, Campaign> = {};
-      (camps ?? []).forEach((c: any) => { map[c.id] = c as Campaign; });
-      setCampaignsById(map);
+      const { data: mp } = await supabase
+        .from("maps")
+        .select("id,name,description,version")
+        .eq("is_active", true)
+        .order("created_at", { ascending: false });
+      setMaps((mp ?? []) as MapRow[]);
+      if (!selectedMap && mp?.length) setSelectedMap(mp[0].id);
     } catch (e: any) {
       console.error(e);
       alert(e?.message ?? String(e));
     } finally {
       setLoading(false);
     }
-
-    const { data: rs } = await supabase
-      .from("rulesets")
-      .select("id,key,name,description")
-      .eq("is_active", true)
-      .order("created_at", { ascending: false });
-    setRulesets((rs ?? []) as any);
-    if (!selectedRuleset && rs?.length) setSelectedRuleset(rs[0].id);
-
-    const { data: mp } = await supabase
-      .from("maps")
-      .select("id,name,description,version")
-      .eq("is_active", true)
-      .order("created_at", { ascending: false });
-    setMaps((mp ?? []) as any);
-    if (!selectedMap && mp?.length) setSelectedMap(mp[0].id);
   };
 
   const createCampaign = async () => {
@@ -151,7 +91,7 @@ export default function CampaignsPage() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) {
-        alert("Session not ready yet. Refresh and try again.");
+        alert("Session not ready. Refresh and try again.");
         return;
       }
 
@@ -183,10 +123,9 @@ export default function CampaignsPage() {
         return;
       }
 
+      // Redirect to profile/home so they can select the new campaign
       alert("Campaign created! You are the Lead player.");
-      setCampaignName("");
-      setEmails("");
-      await load();
+      window.location.href = "/";
     } catch (e: any) {
       console.error(e);
       alert(`Create failed: ${e?.message ?? String(e)}`);
@@ -200,21 +139,13 @@ export default function CampaignsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const myCampaignRows = memberships
-    .map((m) => ({
-      campaign_id: m.campaign_id,
-      role: m.role,
-      campaign: campaignsById[m.campaign_id],
-    }))
-    .filter((x) => !!x.campaign);
-
   return (
-    <Frame title="Campaigns" currentPage="campaigns">
+    <Frame title="New Campaign" currentPage="campaigns">
       <div className="space-y-6">
-
         <Card title="Create Campaign">
-          <div className="space-y-3">
+          <div className="space-y-4">
 
+            {/* Template */}
             <div>
               <div className="text-sm text-parchment/70 mb-1">Template</div>
               <select
@@ -239,6 +170,7 @@ export default function CampaignsPage() {
               )}
             </div>
 
+            {/* Campaign name */}
             <div>
               <div className="text-sm text-parchment/70 mb-1">Campaign name</div>
               <input
@@ -250,9 +182,50 @@ export default function CampaignsPage() {
               />
             </div>
 
+            {/* Optional ruleset */}
+            {rulesets.length > 0 && (
+              <div>
+                <div className="text-sm text-parchment/70 mb-1">
+                  Ruleset <span className="text-parchment/40">(optional)</span>
+                </div>
+                <select
+                  className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+                  value={selectedRuleset}
+                  onChange={(e) => setSelectedRuleset(e.target.value)}
+                  disabled={loading || creating}
+                >
+                  <option value="">— None —</option>
+                  {rulesets.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Optional map */}
+            {maps.length > 0 && (
+              <div>
+                <div className="text-sm text-parchment/70 mb-1">
+                  Map <span className="text-parchment/40">(optional)</span>
+                </div>
+                <select
+                  className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+                  value={selectedMap}
+                  onChange={(e) => setSelectedMap(e.target.value)}
+                  disabled={loading || creating}
+                >
+                  <option value="">— None —</option>
+                  {maps.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name} (v{m.version})</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Rules overrides */}
             <div className="rounded-2xl border border-brass/30 bg-iron/70 p-4">
               <div className="text-sm font-semibold uppercase tracking-[0.18em] text-brass/90">
-                Optional Rules
+                Rules Options
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <label className="flex items-center gap-3">
@@ -303,8 +276,11 @@ export default function CampaignsPage() {
               </div>
             </div>
 
+            {/* Invite emails */}
             <div>
-              <div className="text-sm text-parchment/70 mb-1">Invite emails (comma-separated)</div>
+              <div className="text-sm text-parchment/70 mb-1">
+                Invite players <span className="text-parchment/40">(comma-separated emails, optional)</span>
+              </div>
               <input
                 className="w-full px-3 py-2 rounded bg-void border border-brass/30"
                 value={emails}
@@ -313,7 +289,7 @@ export default function CampaignsPage() {
                 disabled={loading || creating}
               />
               <p className="mt-1 text-xs text-parchment/60">
-                Invites are stored in <span className="text-brass">pending_invites</span>. Players auto-join when they sign in.
+                Players auto-join when they sign in.
               </p>
             </div>
 
@@ -322,62 +298,11 @@ export default function CampaignsPage() {
               onClick={createCampaign}
               disabled={creating || loading || !templates.length}
             >
-              {creating ? "Creating…" : "Create (you become Lead)"}
+              {creating ? "Creating…" : "Create Campaign (you become Lead)"}
             </button>
+
           </div>
         </Card>
-
-        <Card title="My Campaigns">
-          {loading ? (
-            <p className="text-parchment/70">Loading…</p>
-          ) : myCampaignRows.length ? (
-            <div className="space-y-3">
-              {myCampaignRows.map((row) => (
-                <div key={row.campaign_id} className="rounded border border-brass/25 bg-void px-4 py-3">
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                    <div>
-                      <div className="text-brass font-semibold">{row.campaign!.name}</div>
-                      <div className="text-xs text-parchment/60">
-                        Role: {row.role} • Phase {row.campaign!.phase} • Round {row.campaign!.round_number} • Instability {row.campaign!.instability}/10
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <a
-                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                        href={`/dashboard?campaign=${row.campaign_id}`}
-                      >
-                        Dashboard
-                      </a>
-                      <a
-                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                        href={`/map?campaign=${row.campaign_id}`}
-                      >
-                        Map
-                      </a>
-                      <a
-                        className="px-3 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                        href={`/conflicts?campaign=${row.campaign_id}`}
-                      >
-                        Conflicts
-                      </a>
-                      {(row.role === "lead" || row.role === "admin") && (
-                        <a
-                          className="px-3 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm"
-                          href={`/lead?campaign=${row.campaign_id}`}
-                        >
-                          Lead Controls
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-parchment/70">No campaigns yet. Create one above.</p>
-          )}
-        </Card>
-
       </div>
     </Frame>
   );
