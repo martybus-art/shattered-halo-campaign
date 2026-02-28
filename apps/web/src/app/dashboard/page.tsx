@@ -39,29 +39,6 @@ export default function Dashboard() {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
-  const acceptInvites = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({}),
-        }
-      );
-      const result = await response.json();
-      console.log("accept-invites:", result);
-    } catch (e) {
-      console.error("accept-invites error:", e);
-    }
-  };
 
   const loadMemberships = async (uid: string) => {
     const { data: mem, error } = await supabase
@@ -139,7 +116,6 @@ export default function Dashboard() {
       const { data: userResp } = await supabase.auth.getUser();
       const uid = userResp.user?.id;
       if (!uid) return;
-      await acceptInvites();
       await loadMemberships(uid);
     })();
   }, []);

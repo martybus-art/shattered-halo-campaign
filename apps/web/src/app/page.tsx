@@ -17,6 +17,12 @@ type Membership = {
   } | null;
 };
 
+type PendingInvite = {
+  id: string;
+  campaign_id: string;
+  campaign_name: string;
+};
+
 export default function Home() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
@@ -35,6 +41,10 @@ export default function Home() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
 
+  // Pending invites
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [processingInviteId, setProcessingInviteId] = useState<string>("");
+
   // Derived — role for the selected campaign
   const selectedMembership = memberships.find((m) => m.campaign_id === selectedCampaignId);
   const selectedRole = selectedMembership?.role ?? "player";
@@ -51,7 +61,6 @@ export default function Home() {
       setUserEmail(data.user.email ?? null);
       setUserId(data.user.id);
 
-      // Load saved display name from auth user metadata
       const name = data.user.user_metadata?.display_name ?? "";
       setDisplayName(name);
       setSavedName(name);
@@ -59,44 +68,64 @@ export default function Home() {
     run();
   }, [supabase]);
 
-  // ── Load campaigns when user is known ────────────────────
+  // ── Load campaigns ────────────────────────────────────────
+  const loadCampaigns = async (uid: string) => {
+    setLoadingCampaigns(true);
+    try {
+      const { data, error } = await supabase
+        .from("campaign_members")
+        .select(`
+          campaign_id,
+          role,
+          faction_name,
+          commander_name,
+          campaigns (name, phase, round_number, instability)
+        `)
+        .eq("user_id", uid)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const rows: Membership[] = (data ?? []).map((m: any) => ({
+        campaign_id: m.campaign_id,
+        role: m.role,
+        faction_name: m.faction_name,
+        commander_name: m.commander_name,
+        campaign: m.campaigns ?? null,
+      }));
+
+      setMemberships(rows);
+      if (rows.length && !selectedCampaignId) setSelectedCampaignId(rows[0].campaign_id);
+    } catch (e: any) {
+      console.error(e);
+    } finally {
+      setLoadingCampaigns(false);
+    }
+  };
+
+  // ── Load pending invites ──────────────────────────────────
+  const loadInvites = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const { data, error } = await supabase.functions.invoke("accept-invites", {
+        body: { mode: "list" },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (error) { console.error("invite list error:", error); return; }
+      setPendingInvites(data?.invites ?? []);
+    } catch (e) {
+      console.error("loadInvites error:", e);
+    }
+  };
+
   useEffect(() => {
     if (!userId) return;
-    const run = async () => {
-      setLoadingCampaigns(true);
-      try {
-        const { data, error } = await supabase
-          .from("campaign_members")
-          .select(`
-            campaign_id,
-            role,
-            faction_name,
-            commander_name,
-            campaigns (name, phase, round_number, instability)
-          `)
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-
-        const rows: Membership[] = (data ?? []).map((m: any) => ({
-          campaign_id: m.campaign_id,
-          role: m.role,
-          faction_name: m.faction_name,
-          commander_name: m.commander_name,
-          campaign: m.campaigns ?? null,
-        }));
-
-        setMemberships(rows);
-        if (rows.length) setSelectedCampaignId(rows[0].campaign_id);
-      } catch (e: any) {
-        console.error(e);
-      } finally {
-        setLoadingCampaigns(false);
-      }
-    };
-    run();
-  }, [userId, supabase]);
+    loadCampaigns(userId);
+    loadInvites();
+  }, [userId]);
 
   // ── Actions ───────────────────────────────────────────────
   const sendMagicLink = async () => {
@@ -128,12 +157,40 @@ export default function Home() {
     }
   };
 
+  const handleInvite = async (inviteId: string, mode: "accept" | "decline") => {
+    setProcessingInviteId(inviteId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) { alert("Session expired. Refresh and try again."); return; }
+
+      const { data, error } = await supabase.functions.invoke("accept-invites", {
+        body: { mode, invite_id: inviteId },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Failed");
+
+      // Remove from local list immediately
+      setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
+
+      // If accepted, reload campaigns so the new one appears
+      if (mode === "accept" && userId) {
+        await loadCampaigns(userId);
+      }
+    } catch (e: any) {
+      alert(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
+    } finally {
+      setProcessingInviteId("");
+    }
+  };
+
   const goToDashboard = () => {
     if (!selectedCampaignId) return;
     window.location.href = `/dashboard?campaign=${selectedCampaignId}`;
   };
 
-  // ── Role badge ────────────────────────────────────────────
+  // ── Style helpers ─────────────────────────────────────────
   const roleBadge = (role: string) => {
     if (role === "lead")  return "bg-brass/20 text-brass border border-brass/40";
     if (role === "admin") return "bg-blood/20 text-blood border border-blood/40";
@@ -179,10 +236,7 @@ export default function Home() {
 
   // ── Signed in ─────────────────────────────────────────────
   return (
-    <Frame
-      title="War Room"
-      currentPage="home"
-    >
+    <Frame title="War Room" currentPage="home">
       <div className="space-y-6">
 
         {/* ── Profile ── */}
@@ -226,23 +280,55 @@ export default function Home() {
           </div>
         </Card>
 
-        {/* ── Campaign selector ── */}
+        {/* ── Pending Invites — only shown when there are invites waiting ── */}
+        {pendingInvites.length > 0 && (
+          <Card title={`Campaign Invites — ${pendingInvites.length} pending`}>
+            <p className="text-parchment/60 text-sm mb-3">
+              You have been invited to the following campaigns. Accept to join or decline to remove the invite.
+            </p>
+            <div className="space-y-2">
+              {pendingInvites.map((invite) => (
+                <div
+                  key={invite.id}
+                  className="flex flex-col sm:flex-row sm:items-center gap-3 rounded border border-brass/20 bg-void px-4 py-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-parchment font-semibold truncate">{invite.campaign_name}</div>
+                    <div className="text-xs text-parchment/40 font-mono">{invite.campaign_id}</div>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      disabled={processingInviteId === invite.id}
+                      className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40 text-sm"
+                      onClick={() => handleInvite(invite.id, "accept")}
+                    >
+                      {processingInviteId === invite.id ? "…" : "Accept"}
+                    </button>
+                    <button
+                      disabled={processingInviteId === invite.id}
+                      className="px-3 py-1.5 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 disabled:opacity-40 text-sm"
+                      onClick={() => handleInvite(invite.id, "decline")}
+                    >
+                      {processingInviteId === invite.id ? "…" : "Decline"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {/* ── Your Campaigns ── */}
         <Card title="Your Campaigns">
           {loadingCampaigns ? (
             <p className="text-parchment/70">Loading campaigns…</p>
           ) : memberships.length === 0 ? (
-            <div className="space-y-2">
-              <p className="text-parchment/70">You are not enrolled in any campaigns yet.</p>
-              <a
-                href="/campaigns"
-                className="inline-block px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-              >
-                Create a campaign
-              </a>
-            </div>
+            <p className="text-parchment/70">
+              You are not enrolled in any campaigns yet. Accept an invite above, or{" "}
+              <a href="/campaigns" className="text-brass underline">create a new campaign</a>.
+            </p>
           ) : (
             <div className="space-y-4">
-              {/* Campaign list */}
               <div className="space-y-2">
                 {memberships.map((m) => {
                   const c = m.campaign;
@@ -315,7 +401,6 @@ export default function Home() {
                       Lead Controls
                     </a>
                   )}
-
                 </div>
               )}
             </div>
