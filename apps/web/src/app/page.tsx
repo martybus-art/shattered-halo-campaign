@@ -181,8 +181,6 @@ export default function Home() {
   return (
     <Frame
       title="War Room"
-      campaignId={selectedCampaignId}
-      role={selectedRole}
       currentPage="home"
     >
       <div className="space-y-6">
