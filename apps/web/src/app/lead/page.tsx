@@ -44,10 +44,13 @@ export default function LeadControls() {
   const [inviteStatus, setInviteStatus]   = useState<string>("");
   const [sendingInvite, setSendingInvite] = useState<boolean>(false);
 
-  // Archive / Delete
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const [deleting, setDeleting]           = useState(false);
-  const [archiving, setArchiving]         = useState(false);
+  // Archive / Delete / Chronicle
+  const [deleteConfirm, setDeleteConfirm]     = useState(false);
+  const [deleting, setDeleting]               = useState(false);
+  const [archiving, setArchiving]             = useState(false);
+  const [generatingChronicle, setGeneratingChronicle] = useState(false);
+  const [chronicle, setChronicle]             = useState<string | null>(null);
+  const [showChronicle, setShowChronicle]     = useState(false);
 
   // Start campaign status
   const [startStatus, setStartStatus] = useState<string>("");
@@ -162,25 +165,71 @@ export default function LeadControls() {
     await load(campaignId);
   };
 
+  // ── Shared data fetch — used by both archive export and chronicle ────────────
+  const fetchAllCampaignData = async () => {
+    const [
+      membersRes, roundsRes, ledgerRes, conflictsRes,
+      playerStateRes, battleResultsRes, missionInfluenceRes,
+      campaignEventsRes, campaignRelicsRes, movesRes, postsRes,
+    ] = await Promise.all([
+      supabase.from("campaign_members").select("*").eq("campaign_id", campaignId),
+      supabase.from("rounds").select("*").eq("campaign_id", campaignId).order("round_number"),
+      supabase.from("ledger").select("*").eq("campaign_id", campaignId).order("created_at"),
+      supabase.from("conflicts").select("*, missions(name, description, mission_type)").eq("campaign_id", campaignId),
+      supabase.from("player_state").select("*").eq("campaign_id", campaignId),
+      supabase.from("battle_results").select("*, conflicts(zone_key, sector_key, round_number)").in(
+        "conflict_id",
+        // subquery workaround: we'll join after
+        ["00000000-0000-0000-0000-000000000000"]
+      ),
+      supabase.from("mission_influence").select("*").in(
+        "conflict_id",
+        ["00000000-0000-0000-0000-000000000000"]
+      ),
+      supabase.from("campaign_events").select("*").eq("campaign_id", campaignId).order("round_number"),
+      supabase.from("campaign_relics").select("*, relics(name, lore, rarity)").eq("campaign_id", campaignId),
+      supabase.from("moves").select("*").eq("campaign_id", campaignId).order("round_number"),
+      supabase.from("posts").select("*").eq("campaign_id", campaignId).order("round_number"),
+    ]);
+
+    // Fetch battle_results and mission_influence properly via conflict IDs
+    const conflictIds = (conflictsRes.data ?? []).map((c: any) => c.id);
+    let battleResults: any[] = [];
+    let missionInfluence: any[] = [];
+    if (conflictIds.length) {
+      const [brRes, miRes] = await Promise.all([
+        supabase.from("battle_results").select("*").in("conflict_id", conflictIds),
+        supabase.from("mission_influence").select("*").in("conflict_id", conflictIds),
+      ]);
+      battleResults  = brRes.data ?? [];
+      missionInfluence = miRes.data ?? [];
+    }
+
+    return {
+      members:          membersRes.data ?? [],
+      rounds:           roundsRes.data ?? [],
+      ledger:           ledgerRes.data ?? [],
+      conflicts:        conflictsRes.data ?? [],
+      player_state:     playerStateRes.data ?? [],
+      battle_results:   battleResults,
+      mission_influence: missionInfluence,
+      campaign_events:  campaignEventsRes.data ?? [],
+      campaign_relics:  campaignRelicsRes.data ?? [],
+      moves:            movesRes.data ?? [],
+      posts:            (postsRes.data ?? []).filter((p: any) => p.visibility === "public"),
+    };
+  };
+
   const archiveCampaign = async () => {
     if (!campaignId || !campaign) return;
     setArchiving(true);
     try {
-      // Fetch all related data for export
-      const [membersRes, roundsRes, ledgerRes, conflictsRes] = await Promise.all([
-        supabase.from("campaign_members").select("*").eq("campaign_id", campaignId),
-        supabase.from("rounds").select("*").eq("campaign_id", campaignId),
-        supabase.from("ledger").select("*").eq("campaign_id", campaignId),
-        supabase.from("conflicts").select("*").eq("campaign_id", campaignId),
-      ]);
-
+      const data = await fetchAllCampaignData();
       const archive = {
         exported_at: new Date().toISOString(),
         campaign,
-        members: membersRes.data ?? [],
-        rounds: roundsRes.data ?? [],
-        ledger: ledgerRes.data ?? [],
-        conflicts: conflictsRes.data ?? [],
+        chronicle: chronicle ?? null,
+        ...data,
       };
 
       const blob = new Blob([JSON.stringify(archive, null, 2)], { type: "application/json" });
@@ -194,6 +243,113 @@ export default function LeadControls() {
       alert("Archive failed: " + (e?.message ?? "Unknown error"));
     } finally {
       setArchiving(false);
+    }
+  };
+
+  const generateChronicle = async () => {
+    if (!campaignId || !campaign) return;
+    setGeneratingChronicle(true);
+    setShowChronicle(true);
+    setChronicle(null);
+
+    try {
+      const data = await fetchAllCampaignData();
+
+      // Build a structured prompt with all the campaign data
+      // Resolve member names from faction/commander names for readability
+      const memberSummary = data.members.map((m: any) =>
+        `${m.commander_name ?? "Unknown Commander"} (${m.faction_name ?? "Unknown Faction"}, ${m.role})`
+      ).join(", ");
+
+      const finalStandings = data.player_state.map((ps: any) => {
+        const member = data.members.find((m: any) => m.user_id === ps.user_id);
+        const name = member?.commander_name ?? member?.faction_name ?? ps.user_id.slice(0, 8);
+        return `${name}: ${ps.ncp} NCP, ${ps.nip} NIP, location: ${ps.public_location ?? "unknown"}`;
+      }).join("
+");
+
+      const conflictSummary = data.conflicts.map((c: any) => {
+        const mission = (c as any).missions;
+        const result  = data.battle_results.find((br: any) => br.conflict_id === c.id);
+        const winner  = result
+          ? data.members.find((m: any) => m.user_id === result.winner_user_id)
+          : null;
+        const playerA = data.members.find((m: any) => m.user_id === c.player_a);
+        const playerB = data.members.find((m: any) => m.user_id === c.player_b);
+        return `Round ${c.round_number} — ${c.zone_key} (${c.sector_key}): ` +
+          `${playerA?.faction_name ?? "?"} vs ${playerB?.faction_name ?? "?"}, ` +
+          `mission: ${mission?.name ?? "unassigned"}, ` +
+          `winner: ${winner ? (winner.faction_name ?? winner.commander_name ?? "unknown") : "unresolved"}`;
+      }).join("
+");
+
+      const eventSummary = data.campaign_events.map((e: any) =>
+        `Round ${e.round_number}: ${e.event_name} (instability after: ${e.instability_after}/10)`
+      ).join("
+");
+
+      const relicSummary = data.campaign_relics.map((cr: any) => {
+        const relic   = (cr as any).relics;
+        const holder  = data.members.find((m: any) => m.user_id === cr.controller_user_id);
+        return `${relic?.name ?? "Unknown Relic"} — held by ${holder?.faction_name ?? "unclaimed"}, status: ${cr.status}`;
+      }).join("
+");
+
+      const publicPosts = data.posts.map((p: any) =>
+        `[Round ${p.round_number}] "${p.title}": ${p.body}`
+      ).join("
+
+");
+
+      const prompt = `You are a Warhammer 40,000 campaign chronicler. Write a vivid, atmospheric narrative summary of the following campaign. Use grimdark 40K tone — epic, ominous, with a sense of cosmic consequence. Reference specific factions, commanders, zones, missions and events. Structure it as a chronicle that reads like an in-universe after-action report or historical record.
+
+CAMPAIGN: ${campaign.name}
+Rounds played: ${data.rounds.length}
+Final instability: ${campaign.instability}/10
+Phase: ${campaign.phase}
+
+${campaign.invite_message ? `ORIGINAL CAMPAIGN PREMISE:
+${campaign.invite_message}
+` : ""}
+
+COMBATANTS:
+${memberSummary}
+
+FINAL STANDINGS:
+${finalStandings || "No final standings recorded."}
+
+BATTLES FOUGHT:
+${conflictSummary || "No conflicts recorded."}
+
+INSTABILITY EVENTS:
+${eventSummary || "No events recorded."}
+
+RELICS:
+${relicSummary || "No relics in play."}
+
+${publicPosts ? `NARRATIVE DISPATCHES (public posts):
+${publicPosts}` : ""}
+
+Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or bullet points — flowing prose only.`;
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1500,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      const result = await response.json();
+      const text   = result?.content?.[0]?.text ?? "";
+      if (text) setChronicle(text);
+      else setChronicle("Chronicle generation failed — no response from AI.");
+    } catch (e: any) {
+      setChronicle("Chronicle generation failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setGeneratingChronicle(false);
     }
   };
 
@@ -331,10 +487,20 @@ export default function LeadControls() {
                 )}
               </div>
 
-              {/* ── Archive / Delete ── */}
+              {/* ── Chronicle / Archive / Delete ── */}
               {allowed && (
-                <div className="pt-3 border-t border-brass/20">
+                <div className="pt-3 border-t border-brass/20 space-y-3">
+
+                  {/* Action buttons row */}
                   <div className="flex flex-wrap gap-2">
+                    <button
+                      disabled={generatingChronicle}
+                      className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs text-parchment/80 disabled:opacity-40"
+                      onClick={generateChronicle}
+                    >
+                      {generatingChronicle ? "Generating Chronicle…" : "✦ Generate Chronicle"}
+                    </button>
+
                     <button
                       disabled={archiving}
                       className="px-3 py-1.5 rounded bg-iron/40 border border-parchment/20 hover:bg-iron/60 text-xs text-parchment/60 disabled:opacity-40"
@@ -371,6 +537,60 @@ export default function LeadControls() {
                       </div>
                     )}
                   </div>
+
+                  {/* Chronicle display panel */}
+                  {showChronicle && (
+                    <div className="rounded border border-brass/30 bg-void/80">
+                      <div className="flex items-center justify-between px-4 py-2 border-b border-brass/20">
+                        <span className="text-xs uppercase tracking-widest text-brass/70 font-semibold">
+                          Campaign Chronicle
+                        </span>
+                        <div className="flex gap-2">
+                          {chronicle && (
+                            <button
+                              className="text-xs text-parchment/40 hover:text-parchment/70 underline"
+                              onClick={() => {
+                                navigator.clipboard.writeText(chronicle);
+                              }}
+                            >
+                              Copy
+                            </button>
+                          )}
+                          <button
+                            className="text-xs text-parchment/40 hover:text-parchment/70"
+                            onClick={() => setShowChronicle(false)}
+                          >
+                            ✕ Close
+                          </button>
+                        </div>
+                      </div>
+                      <div className="px-4 py-4">
+                        {generatingChronicle ? (
+                          <div className="space-y-2">
+                            <div className="h-3 rounded bg-brass/10 animate-pulse w-full" />
+                            <div className="h-3 rounded bg-brass/10 animate-pulse w-5/6" />
+                            <div className="h-3 rounded bg-brass/10 animate-pulse w-4/5" />
+                            <div className="h-3 rounded bg-brass/10 animate-pulse w-full mt-4" />
+                            <div className="h-3 rounded bg-brass/10 animate-pulse w-3/4" />
+                            <p className="text-xs text-parchment/30 mt-3 italic">
+                              The chronicler is consulting the records…
+                            </p>
+                          </div>
+                        ) : chronicle ? (
+                          <p className="text-parchment/80 text-sm leading-relaxed whitespace-pre-wrap">
+                            {chronicle}
+                          </p>
+                        ) : (
+                          <p className="text-parchment/40 text-sm italic">No chronicle generated yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-xs text-parchment/30">
+                    Chronicle uses AI to summarise the campaign narrative. Export Archive downloads all raw campaign data as JSON.
+                    {chronicle && " Chronicle is included in the archive export."}
+                  </p>
                 </div>
               )}
             </div>
