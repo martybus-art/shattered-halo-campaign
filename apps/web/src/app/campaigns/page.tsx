@@ -75,23 +75,21 @@ export default function CampaignsPage() {
     if (!campaignName.trim()) return alert("Enter a campaign name first.");
     setGeneratingMsg(true);
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: `You are a Warhammer 40,000 narrative writer. Write a short, atmospheric invite message (3-4 sentences) for a new campaign called "${campaignName.trim()}". The message should be written in grimdark 40K style — ominous, military, cosmic horror tone. It will be shown to players invited to join this campaign. Include a sense of urgency and honour in the call to arms. Do not use markdown or headers, just plain prose.`
-          }]
-        })
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) { alert("Session expired. Refresh and try again."); return; }
+
+      const prompt = `You are a Warhammer 40,000 narrative writer. Write a short, atmospheric invite message (3-4 sentences) for a new campaign called "${campaignName.trim()}". The message should be written in grimdark 40K style — ominous, military, cosmic horror tone. It will be shown to players invited to join this campaign. Include a sense of urgency and honour in the call to arms. Do not use markdown or headers, just plain prose.`;
+
+      const { data, error } = await supabase.functions.invoke("generate-narrative", {
+        body: { prompt, max_tokens: 1000 },
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
-      const data = await response.json();
-      const text = data?.content?.[0]?.text ?? "";
-      if (text) setInviteMessage(text);
+
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Generation failed");
+      if (data.text) setInviteMessage(data.text);
       else alert("Failed to generate message. Try again.");
-    } catch (e: any) {
+    } catch (e) {
       alert("Generation failed: " + (e?.message ?? "Unknown error"));
     } finally {
       setGeneratingMsg(false);

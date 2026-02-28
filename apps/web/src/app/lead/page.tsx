@@ -327,18 +327,20 @@ ${publicPosts}` : ""}
 
 Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or bullet points — flowing prose only.`;
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1500,
-          messages: [{ role: "user", content: prompt }],
-        }),
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        setChronicle("Session expired — refresh and try again.");
+        return;
+      }
+
+      const { data: genData, error: genErr } = await supabase.functions.invoke("generate-narrative", {
+        body: { prompt, max_tokens: 1500 },
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
 
-      const result = await response.json();
-      const text   = result?.content?.[0]?.text ?? "";
+      if (genErr) throw genErr;
+      if (!genData?.ok) throw new Error(genData?.error ?? "Generation failed");
+      const text = genData?.text ?? "";
       if (text) setChronicle(text);
       else setChronicle("Chronicle generation failed — no response from AI.");
     } catch (e: any) {
