@@ -4,16 +4,16 @@ type FrameProps = {
   title?: string;
   children: React.ReactNode;
   right?: React.ReactNode;
-  /** Pass the active campaign ID to populate nav links */
+  /** Pass the active campaign ID to populate campaign-specific nav links */
   campaignId?: string;
   /** Pass the user's role to show/hide Lead Controls link */
   role?: string;
   /** Current page key — used to highlight the active nav item */
-  currentPage?: "dashboard" | "map" | "conflicts" | "lead" | "campaigns";
+  currentPage?: "home" | "dashboard" | "map" | "conflicts" | "lead" | "campaigns";
 };
 
-const NAV_ITEMS = [
-  { key: "campaigns", label: "Campaigns", href: (_cid: string) => "/campaigns" },
+// Campaign-specific nav items (only shown when campaignId is present)
+const CAMPAIGN_NAV = [
   { key: "dashboard", label: "Dashboard", href: (cid: string) => `/dashboard?campaign=${cid}` },
   { key: "map",       label: "Map",        href: (cid: string) => `/map?campaign=${cid}` },
   { key: "conflicts", label: "Conflicts",  href: (cid: string) => `/conflicts?campaign=${cid}` },
@@ -28,7 +28,7 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
       <header className="sticky top-0 z-10 bg-iron/80 backdrop-blur border-b border-brass/30">
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-baseline gap-3">
-            <a href="/campaigns" className="text-brass font-gothic tracking-wider hover:text-brass/80 transition-colors">
+            <a href="/" className="text-brass font-gothic tracking-wider hover:text-brass/80 transition-colors">
               SHATTERED HALO
             </a>
             {title && (
@@ -40,61 +40,70 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
           )}
         </div>
 
-        {/* ── Nav strip — only renders when we have a campaign context ── */}
-        {campaignId && (
-          <nav className="mx-auto max-w-6xl px-4 pb-2 flex items-center gap-1 flex-wrap">
-            {NAV_ITEMS.map(({ key, label, href }) => {
-              const target = key === "campaigns" ? href("") : href(campaignId);
-              const active = currentPage === key;
-              return (
-                <a
-                  key={key}
-                  href={target}
-                  className={[
-                    "px-3 py-1 rounded text-sm font-mono transition-colors",
-                    active
-                      ? "bg-brass/30 text-brass border border-brass/50"
-                      : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
-                  ].join(" ")}
-                >
-                  {label}
-                </a>
-              );
-            })}
+        {/* ── Nav strip — always rendered ── */}
+        <nav className="mx-auto max-w-6xl px-4 pb-2 flex items-center gap-1 flex-wrap">
 
-            {/* Lead Controls — only for lead / admin */}
-            {isLead && (
+          {/* Profile — always visible */}
+          <a
+            href="/"
+            className={[
+              "px-3 py-1 rounded text-sm font-mono transition-colors",
+              currentPage === "home"
+                ? "bg-brass/30 text-brass border border-brass/50"
+                : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
+            ].join(" ")}
+          >
+            Profile
+          </a>
+
+          {/* Campaign-specific links — only when we have a campaign context */}
+          {campaignId && CAMPAIGN_NAV.map(({ key, label, href }) => {
+            const active = currentPage === key;
+            return (
               <a
-                href={`/lead?campaign=${campaignId}`}
+                key={key}
+                href={href(campaignId)}
                 className={[
                   "px-3 py-1 rounded text-sm font-mono transition-colors",
-                  currentPage === "lead"
-                    ? "bg-blood/40 text-blood border border-blood/60"
-                    : "text-blood/70 hover:text-blood hover:bg-blood/10 border border-transparent",
+                  active
+                    ? "bg-brass/30 text-brass border border-brass/50"
+                    : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
                 ].join(" ")}
               >
-                Lead Controls
+                {label}
               </a>
-            )}
-          </nav>
-        )}
+            );
+          })}
 
-        {/* No-campaign fallback nav — just a link back to campaigns */}
-        {!campaignId && (
-          <nav className="mx-auto max-w-6xl px-4 pb-2 flex items-center gap-1">
+          {/* Lead Controls — only for lead / admin with a campaign */}
+          {campaignId && isLead && (
             <a
-              href="/campaigns"
+              href={`/lead?campaign=${campaignId}`}
               className={[
                 "px-3 py-1 rounded text-sm font-mono transition-colors",
-                currentPage === "campaigns"
-                  ? "bg-brass/30 text-brass border border-brass/50"
-                  : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
+                currentPage === "lead"
+                  ? "bg-blood/40 text-blood border border-blood/60"
+                  : "text-blood/70 hover:text-blood hover:bg-blood/10 border border-transparent",
               ].join(" ")}
             >
-              Campaigns
+              Lead Controls
             </a>
-          </nav>
-        )}
+          )}
+
+          {/* + New Campaign — always visible, right-aligned feel via margin */}
+          <a
+            href="/campaigns"
+            className={[
+              "px-3 py-1 rounded text-sm font-mono transition-colors ml-auto",
+              currentPage === "campaigns"
+                ? "bg-brass/30 text-brass border border-brass/50"
+                : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
+            ].join(" ")}
+          >
+            + New Campaign
+          </a>
+
+        </nav>
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>

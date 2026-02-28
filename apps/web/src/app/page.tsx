@@ -183,6 +183,7 @@ export default function Home() {
       title="War Room"
       campaignId={selectedCampaignId}
       role={selectedRole}
+      currentPage="home"
     >
       <div className="space-y-6">
 
@@ -316,12 +317,7 @@ export default function Home() {
                       Lead Controls
                     </a>
                   )}
-                  <a
-                    href="/campaigns"
-                    className="px-4 py-2 rounded bg-iron/40 border border-parchment/20 hover:bg-iron/60 text-sm text-parchment/70"
-                  >
-                    + New Campaign
-                  </a>
+
                 </div>
               )}
             </div>
