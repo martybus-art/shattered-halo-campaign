@@ -89,9 +89,10 @@ export default function CampaignsPage() {
       if (!data?.ok) throw new Error(data?.error ?? "Generation failed");
       if (data.text) setInviteMessage(data.text);
       else alert("Failed to generate message. Try again.");
-    } catch (e) {
-      alert("Generation failed: " + (e?.message ?? "Unknown error"));
-    } finally {
+      } catch (e) {
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : "Unknown error";
+      alert("Generation failed: " + msg);
+      } finally {
       setGeneratingMsg(false);
     }
   };
