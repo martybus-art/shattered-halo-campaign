@@ -240,7 +240,7 @@ const forceLogout = async () => {
               <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/map?campaign=${campaignId}`}>Map</a>
               <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30" href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
               {(role === "lead" || role === "admin") && (
-                <a className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30" href={`/lead?campaign=${campaignId}`}>Lead Controls</a>
+                <a className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30" href={`/lead?campaign=${campaignId}`}>Lead Player Dashboard</a>
               )}
             </div>
           ) : (
