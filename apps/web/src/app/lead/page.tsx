@@ -265,8 +265,7 @@ export default function LeadControls() {
         const member = data.members.find((m: any) => m.user_id === ps.user_id);
         const name = member?.commander_name ?? member?.faction_name ?? ps.user_id.slice(0, 8);
         return `${name}: ${ps.ncp} NCP, ${ps.nip} NIP, location: ${ps.public_location ?? "unknown"}`;
-      }).join("
-");
+      }).join("\n");
 
       const conflictSummary = data.conflicts.map((c: any) => {
         const mission = (c as any).missions;
@@ -280,26 +279,21 @@ export default function LeadControls() {
           `${playerA?.faction_name ?? "?"} vs ${playerB?.faction_name ?? "?"}, ` +
           `mission: ${mission?.name ?? "unassigned"}, ` +
           `winner: ${winner ? (winner.faction_name ?? winner.commander_name ?? "unknown") : "unresolved"}`;
-      }).join("
-");
+      }).join("\n");
 
       const eventSummary = data.campaign_events.map((e: any) =>
         `Round ${e.round_number}: ${e.event_name} (instability after: ${e.instability_after}/10)`
-      ).join("
-");
+      ).join("\n");
 
       const relicSummary = data.campaign_relics.map((cr: any) => {
         const relic   = (cr as any).relics;
         const holder  = data.members.find((m: any) => m.user_id === cr.controller_user_id);
         return `${relic?.name ?? "Unknown Relic"} — held by ${holder?.faction_name ?? "unclaimed"}, status: ${cr.status}`;
-      }).join("
-");
+      }).join("\n");
 
       const publicPosts = data.posts.map((p: any) =>
         `[Round ${p.round_number}] "${p.title}": ${p.body}`
-      ).join("
-
-");
+      ).join("\n\n");
 
       const prompt = `You are a Warhammer 40,000 campaign chronicler. Write a vivid, atmospheric narrative summary of the following campaign. Use grimdark 40K tone — epic, ominous, with a sense of cosmic consequence. Reference specific factions, commanders, zones, missions and events. Structure it as a chronicle that reads like an in-universe after-action report or historical record.
 
@@ -648,14 +642,6 @@ Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or 
                         : <span className="text-parchment/30">Unlocked</span>}
                     </div>
 
-                    {/* User ID — click to copy */}
-                    <div
-                      className="text-xs text-parchment/30 font-mono truncate max-w-[9rem] cursor-pointer hover:text-parchment/60 shrink-0"
-                      title={`Click to copy: ${m.user_id}`}
-                      onClick={() => navigator.clipboard.writeText(m.user_id)}
-                    >
-                      {m.user_id.slice(0, 8)}…
-                    </div>
 
                   </div>
                 ))}
