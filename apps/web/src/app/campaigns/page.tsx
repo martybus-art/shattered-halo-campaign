@@ -40,6 +40,9 @@ export default function CampaignsPage() {
   const [selectedRuleset, setSelectedRuleset] = useState<string>("");
   const [selectedMap, setSelectedMap] = useState<string>("");
 
+  const [inviteMessage, setInviteMessage]   = useState<string>("");
+  const [generatingMsg, setGeneratingMsg]   = useState(false);
+
   const [rulesOverrides, setRulesOverrides] = useState({
     economy: { enabled: true, catchup: { enabled: true, bonus: 1 } },
     fog: { enabled: true },
@@ -83,6 +86,33 @@ export default function CampaignsPage() {
     }
   };
 
+  const generateInviteMessage = async () => {
+    if (!campaignName.trim()) return alert("Enter a campaign name first.");
+    setGeneratingMsg(true);
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: `You are a Warhammer 40,000 narrative writer. Write a short, atmospheric invite message (3-4 sentences) for a new campaign called "${campaignName.trim()}". The message should be written in grimdark 40K style — ominous, military, cosmic horror tone. It will be shown to players invited to join this campaign. Include a sense of urgency and honour in the call to arms. Do not use markdown or headers, just plain prose.`
+          }]
+        })
+      });
+      const data = await response.json();
+      const text = data?.content?.[0]?.text ?? "";
+      if (text) setInviteMessage(text);
+      else alert("Failed to generate message. Try again.");
+    } catch (e: any) {
+      alert("Generation failed: " + (e?.message ?? "Unknown error"));
+    } finally {
+      setGeneratingMsg(false);
+    }
+  };
+
   const createCampaign = async () => {
     if (!selectedTemplate) return alert("Select a template.");
     if (!campaignName.trim()) return alert("Enter a campaign name.");
@@ -105,6 +135,7 @@ export default function CampaignsPage() {
           ruleset_id: selectedRuleset || null,
           rules_overrides: rulesOverrides,
           map_id: selectedMap || null,
+          invite_message: inviteMessage.trim() || null,
         },
       });
 
@@ -274,6 +305,33 @@ export default function CampaignsPage() {
                   </select>
                 </div>
               </div>
+            </div>
+
+
+            {/* AI Narrative invite message */}
+            <div>
+              <div className="text-sm text-parchment/70 mb-1">
+                Invite message <span className="text-parchment/40">(shown to invited players)</span>
+              </div>
+              <textarea
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm resize-none"
+                rows={4}
+                value={inviteMessage}
+                onChange={(e) => setInviteMessage(e.target.value)}
+                placeholder="A grimdark call to arms for your players..."
+                disabled={loading || creating}
+              />
+              <button
+                type="button"
+                className="mt-1 px-3 py-1.5 rounded bg-iron/40 border border-parchment/20 hover:bg-iron/60 text-xs text-parchment/60 disabled:opacity-40"
+                onClick={generateInviteMessage}
+                disabled={generatingMsg || loading || creating || !campaignName.trim()}
+              >
+                {generatingMsg ? "Generating…" : "✦ Generate with AI"}
+              </button>
+              <p className="mt-1 text-xs text-parchment/40">
+                AI generates a 40K narrative blurb based on your campaign name. You can edit it before creating.
+              </p>
             </div>
 
             {/* Invite emails */}

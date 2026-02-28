@@ -172,30 +172,31 @@ export default function LeadControls() {
     setInviteStatus("");
 
     try {
-      // Insert directly into pending_invites.
-      // NOTE: This requires an RLS INSERT policy on pending_invites allowing
-      // campaign leads to add invites for their own campaigns. If this fails
-      // with a permissions error, add the policy:
-      //   CREATE POLICY "leads can invite" ON pending_invites
-      //   FOR INSERT TO authenticated
-      //   WITH CHECK (
-      //     EXISTS (
-      //       SELECT 1 FROM campaign_members
-      //       WHERE campaign_id = pending_invites.campaign_id
-      //         AND user_id = auth.uid()
-      //         AND role IN ('lead','admin')
-      //     )
-      //   );
-      const rows = emails.map((email) => ({ campaign_id: campaignId, email }));
-      const { error } = await supabase.from("pending_invites").insert(rows);
+      const token = await getToken();
+      if (!token) return;
+
+      const { data, error } = await supabase.functions.invoke("invite-players", {
+        body: { campaign_id: campaignId, player_emails: emails },
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
       if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Failed to send invites");
+
+      // Build a status summary
+      const parts: string[] = [];
+      if (data.sent > 0)
+        parts.push(`${data.sent} invite email${data.sent > 1 ? "s" : ""} sent`);
+      if (data.existing_users > 0)
+        parts.push(`${data.existing_users} existing player${data.existing_users > 1 ? "s" : ""} notified on next login`);
+      if (data.failed > 0)
+        parts.push(`${data.failed} failed`);
 
       const lateNote = isLateInvite
-        ? " Once they sign in and appear in the Active Players list, click Allocate next to their name."
+        ? " Once they join, click Allocate next to their name."
         : " They will auto-join when they sign in.";
 
-      setInviteStatus(`Invite${emails.length > 1 ? "s" : ""} sent to ${emails.join(", ")}.${lateNote}`);
+      setInviteStatus(parts.join(" · ") + "." + lateNote);
       setInviteEmails("");
       await load(campaignId);
     } catch (e: any) {

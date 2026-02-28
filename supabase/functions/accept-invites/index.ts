@@ -37,18 +37,23 @@ serve(async (req) => {
       const campaignIds = invites.map((i: any) => i.campaign_id);
       const { data: campaigns, error: cErr } = await admin
         .from("campaigns")
-        .select("id, name")
+        .select("id, name, invite_message")
         .in("id", campaignIds);
 
       if (cErr) return json(500, { ok: false, error: cErr.message });
 
       const nameById: Record<string, string> = {};
-      (campaigns ?? []).forEach((c: any) => { nameById[c.id] = c.name; });
+      const messageById: Record<string, string | null> = {};
+      (campaigns ?? []).forEach((c: any) => {
+        nameById[c.id] = c.name;
+        messageById[c.id] = c.invite_message ?? null;
+      });
 
       const enriched = invites.map((i: any) => ({
         id: i.id,
         campaign_id: i.campaign_id,
         campaign_name: nameById[i.campaign_id] ?? i.campaign_id,
+        invite_message: messageById[i.campaign_id] ?? null,
       }));
 
       return json(200, { ok: true, invites: enriched });

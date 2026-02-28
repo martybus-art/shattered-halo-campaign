@@ -21,6 +21,7 @@ type PendingInvite = {
   id: string;
   campaign_id: string;
   campaign_name: string;
+  invite_message: string | null;
 };
 
 export default function Home() {
@@ -294,7 +295,12 @@ export default function Home() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="text-parchment font-semibold truncate">{invite.campaign_name}</div>
-                    <div className="text-xs text-parchment/40 font-mono">{invite.campaign_id}</div>
+                    {invite.invite_message && (
+                      <p className="mt-1 text-sm text-parchment/70 leading-relaxed italic">
+                        {invite.invite_message}
+                      </p>
+                    )}
+                    <div className="text-xs text-parchment/30 font-mono mt-1">{invite.campaign_id}</div>
                   </div>
                   <div className="flex gap-2 shrink-0">
                     <button
