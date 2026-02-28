@@ -13,7 +13,7 @@ type FrameProps = {
 };
 
 const NAV_ITEMS = [
-  { key: "campaigns", label: "Campaigns", href: () => "/campaigns" },
+  { key: "campaigns", label: "Campaigns", href: (_cid: string) => "/campaigns" },
   { key: "dashboard", label: "Dashboard", href: (cid: string) => `/dashboard?campaign=${cid}` },
   { key: "map",       label: "Map",        href: (cid: string) => `/map?campaign=${cid}` },
   { key: "conflicts", label: "Conflicts",  href: (cid: string) => `/conflicts?campaign=${cid}` },
