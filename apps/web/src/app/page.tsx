@@ -474,6 +474,7 @@ export default function Home() {
                   )}
                 </div>
               )}
+
               {/* ── Faction picker ── */}
               {selectedCampaignId && (() => {
                 const sm = memberships.find((m) => m.campaign_id === selectedCampaignId);
@@ -556,10 +557,8 @@ export default function Home() {
                   </div>
                 );
               })()}
-              </div>
-              )}
             </div>
-          
+          )}
         </Card>
 
       </div>
