@@ -131,7 +131,7 @@ export default function LeadControls() {
   const allowed = role === "lead" || role === "admin";
 
   return (
-    <Frame title="Lead Controls" right={<a className="underline" href={`/dashboard?campaign=${campaignId}`}>Back</a>}>
+    <Frame title="Lead Player Dashboard" right={<a className="underline" href={`/dashboard?campaign=${campaignId}`}>Back</a>}>
       <div className="space-y-6">
         <Card title="Campaign">
           <div className="flex flex-col md:flex-row gap-3">
@@ -148,7 +148,7 @@ export default function LeadControls() {
               <div><span className="text-brass">Role:</span> {role}</div>
             </div>
           )}
-          {!allowed && <p className="mt-3 text-blood/80">You are not authorised for lead controls in this campaign.</p>}
+          {!allowed && <p className="mt-3 text-blood/80">You are not authorised for leader controls in this campaign.</p>}
         </Card>
 
         <div className="grid md:grid-cols-2 gap-6">
