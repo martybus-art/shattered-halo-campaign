@@ -289,7 +289,9 @@ Deno.serve(async (req) => {
     for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
 
     // Upload to Supabase Storage bucket 'campaign-maps'
-    const storagePath = `campaigns/${campaign_id}/maps/${map_id}/bg.png`;
+    // Path must start with campaign_id UUID — storage RLS function storage_campaign_id()
+    // extracts folder[1] and casts to UUID. No 'campaigns/' prefix or it breaks.
+    const storagePath = `${campaign_id}/maps/${map_id}/bg.png`;
     const { error: uploadErr } = await admin.storage
       .from("campaign-maps")
       .upload(storagePath, bytes, { contentType: "image/png", upsert: true });

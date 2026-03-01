@@ -111,14 +111,7 @@ export default function LeadControls() {
   // Active conflicts count (gate assign missions)
   const [activeConflictCount, setActiveConflictCount] = useState(0);
 
-  // Force conflict (testing only)
-  const [showForceConflict, setShowForceConflict] = useState(false);
-  const [forcePlayerA, setForcePlayerA]           = useState("");
-  const [forcePlayerB, setForcePlayerB]           = useState("");
-  const [forceZone, setForceZone]                 = useState("");
-  const [forceSector, setForceSector]             = useState("");
-  const [forceStatus, setForceStatus]             = useState("");
-  const [forceRunning, setForceRunning]           = useState(false);
+
 
   // Instability — roll / confirm
   const [rollResult, setRollResult]                         = useState<RollResult | null>(null);
@@ -328,38 +321,6 @@ export default function LeadControls() {
       setInstabilityStatus("Error: " + (e?.message ?? "Unknown"));
     } finally {
       setInstabilityConfirming(false);
-    }
-  };
-
-  const forceConflict = async () => {
-    if (!forcePlayerA || !forcePlayerB || !forceZone || !forceSector) return;
-    setForceRunning(true);
-    setForceStatus("");
-    const token = await getToken();
-    if (!token) { setForceStatus("Session expired."); setForceRunning(false); return; }
-    try {
-      const { data: camp } = await supabase
-        .from("campaigns").select("round_number").eq("id", campaignId).single();
-      const { error } = await supabase.from("conflicts").insert({
-        campaign_id:    campaignId,
-        round_number:   camp?.round_number ?? 1,
-        zone_key:       forceZone,
-        sector_key:     forceSector,
-        player_a:       forcePlayerA,
-        player_b:       forcePlayerB,
-        mission_status: "unassigned",
-        status:         "scheduled",
-        twist_tags:     [],
-      });
-      if (error) throw error;
-      setForceStatus("Conflict created.");
-      setShowForceConflict(false);
-      setForcePlayerA(""); setForcePlayerB(""); setForceZone(""); setForceSector("");
-      await load(campaignId);
-    } catch (e: any) {
-      setForceStatus("Error: " + (e?.message ?? "Unknown"));
-    } finally {
-      setForceRunning(false);
     }
   };
 
@@ -862,74 +823,6 @@ export default function LeadControls() {
                     <p className={"mt-2 text-xs " + (instabilityStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/60")}>
                       {instabilityStatus}
                     </p>
-                  )}
-                </div>
-              )}
-
-              {/* ── Force conflict (testing) ── */}
-              {allowed && campaignStarted && (
-                <div className="border-t border-brass/15 pt-3">
-                  <button
-                    className="text-xs text-parchment/35 hover:text-parchment/60 underline"
-                    onClick={() => setShowForceConflict((v) => !v)}
-                  >
-                    {showForceConflict ? "▲ Hide" : "▼ Force conflict (testing)"}
-                  </button>
-
-                  {showForceConflict && (
-                    <div className="mt-3 space-y-2">
-                      <p className="text-xs text-parchment/40 italic">
-                        Manually create a conflict — useful for testing before real moves are in play.
-                      </p>
-                      <div>
-                        <label className="text-xs text-parchment/50 mb-0.5 block">Player A</label>
-                        <select className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
-                          value={forcePlayerA} onChange={(e) => setForcePlayerA(e.target.value)}>
-                          <option value="">— Select —</option>
-                          {members.map((m) => (
-                            <option key={m.user_id} value={m.user_id}>
-                              {m.faction_name ?? m.commander_name ?? m.user_id.slice(0, 8)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs text-parchment/50 mb-0.5 block">Player B</label>
-                        <select className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
-                          value={forcePlayerB} onChange={(e) => setForcePlayerB(e.target.value)}>
-                          <option value="">— Select —</option>
-                          {members.filter((m) => m.user_id !== forcePlayerA).map((m) => (
-                            <option key={m.user_id} value={m.user_id}>
-                              {m.faction_name ?? m.commander_name ?? m.user_id.slice(0, 8)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-xs text-parchment/50 mb-0.5 block">Zone key</label>
-                          <input className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
-                            placeholder="e.g. vault_ruins" value={forceZone} onChange={(e) => setForceZone(e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="text-xs text-parchment/50 mb-0.5 block">Sector key</label>
-                          <input className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
-                            placeholder="e.g. b" value={forceSector} onChange={(e) => setForceSector(e.target.value)} />
-                        </div>
-                      </div>
-                      <button
-                        disabled={!forcePlayerA || !forcePlayerB || !forceZone || !forceSector || forceRunning}
-                        className="w-full px-3 py-1.5 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-xs disabled:opacity-40"
-                        onClick={forceConflict}
-                      >
-                        {forceRunning ? "Creating…" : "Create Conflict"}
-                      </button>
-                      {forceStatus && (
-                        <p className={"text-xs " + (forceStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50")}>
-                          {forceStatus}
-                        </p>
-                      )}
-                    </div>
                   )}
                 </div>
               )}
