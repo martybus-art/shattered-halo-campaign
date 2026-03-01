@@ -18,8 +18,8 @@
  *   Stops polling once status is complete or failed.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,15 +47,6 @@ interface MapImageDisplayProps {
   className?: string;
 }
 
-// ── Supabase client (client-side, uses public anon key) ──────────────────────
-
-function getSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-}
-
 // ── Public URL resolver ───────────────────────────────────────────────────────
 
 /**
@@ -65,7 +56,7 @@ function getSupabase() {
  * NOTE: If you make the campaign-maps bucket public in Supabase,
  * you can switch to getPublicUrl instead (no expiry needed).
  */
-async function getImageUrl(supabase: ReturnType<typeof getSupabase>, storagePath: string): Promise<string | null> {
+async function getImageUrl(supabase: ReturnType<typeof supabaseBrowser>, storagePath: string): Promise<string | null> {
   const { data, error } = await supabase.storage
     .from("campaign-maps")
     .createSignedUrl(storagePath, 60 * 60); // 1-hour signed URL
@@ -109,7 +100,7 @@ export function MapImageDisplay({
   const [retrying, setRetrying] = useState(false);
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const supabase     = getSupabase();
+  const supabase     = useMemo(() => supabaseBrowser(), []);
 
   // ── Fetch map row ───────────────────────────────────────────────────────
 
