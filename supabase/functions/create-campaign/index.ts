@@ -164,10 +164,38 @@ Deno.serve(async (req) => {
           data: { campaign_id: campaign.id, campaign_name: String(campaign_name), invite_message: invite_message ?? "" },
         });
         if (authErr) {
-          const known = authErr.message.toLowerCase().includes("already") ||
-                        authErr.message.toLowerCase().includes("registered") ||
-                        authErr.message.toLowerCase().includes("exists");
-          if (!known) console.warn(`invite email failed for ${email}: ${authErr.message}`);
+          const alreadyExists =
+            authErr.message.toLowerCase().includes("already") ||
+            authErr.message.toLowerCase().includes("registered") ||
+            authErr.message.toLowerCase().includes("exists");
+          if (alreadyExists) {
+            // Existing user — inviteUserByEmail won't email them.
+            // Send an OTP magic-link so they receive a notification.
+            try {
+              const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+              const serviceKey  = Deno.env.get("SB_SERVICE_ROLE_KEY") ?? "";
+              await fetch(`${supabaseUrl}/auth/v1/otp`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "apikey": serviceKey,
+                  "Authorization": `Bearer ${serviceKey}`,
+                },
+                body: JSON.stringify({
+                  email,
+                  create_user: false,
+                  options: {
+                    redirectTo: `${REDIRECT_URL}?campaign_invite=1`,
+                    data: { campaign_id: campaign.id, campaign_name: String(campaign_name), invite_message: invite_message ?? "" },
+                  },
+                }),
+              });
+            } catch (otpErr: any) {
+              console.warn(`OTP fallback failed for ${email}: ${otpErr?.message}`);
+            }
+          } else {
+            console.warn(`invite email failed for ${email}: ${authErr.message}`);
+          }
         }
       } catch (e: any) {
         console.warn(`invite email exception for ${email}: ${e?.message}`);
