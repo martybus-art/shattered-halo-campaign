@@ -58,6 +58,15 @@ export default function LeadControls() {
   const [reinstating, setReinstating]   = useState<string | null>(null); // user_id being reinstated
   const [reinstateStatus, setReinstateStatus] = useState<Record<string, string>>({});
 
+  // Detect / force conflicts
+  const [detectingConflicts, setDetectingConflicts]     = useState(false);
+  const [detectConflictStatus, setDetectConflictStatus] = useState("");
+  const [showForceConflict, setShowForceConflict]       = useState(false);
+  const [forcePlayerA, setForcePlayerA]                 = useState("");
+  const [forcePlayerB, setForcePlayerB]                 = useState("");
+  const [forceZone, setForceZone]                       = useState("");
+  const [forceSector, setForceSector]                   = useState("a1");
+
   // Start campaign status
   const [startStatus, setStartStatus] = useState<string>("");
 
@@ -450,9 +459,9 @@ Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or 
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error("Session expired — refresh.");
 
-      // Reuse start-campaign with late_player=true to allocate a sector
+      // Reuse start-campaign in late mode to allocate a sector
       const { data, error } = await supabase.functions.invoke("start-campaign", {
-        body: { campaign_id: campaignId, late_player: true, target_user_id: userId },
+        body: { campaign_id: campaignId, mode: "late", late_user_id: userId },
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (error) throw error;
@@ -477,6 +486,41 @@ Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or 
       }));
     } finally {
       setReinstating(null);
+    }
+  };
+
+  // ── Detect / force conflicts ─────────────────────────────────────────────
+  const detectConflicts = async (forcePairs?: object[]) => {
+    if (!campaignId) return;
+    setDetectingConflicts(true);
+    setDetectConflictStatus("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("Session expired.");
+
+      const body: Record<string, unknown> = { campaign_id: campaignId };
+      if (forcePairs?.length) body.force_pairs = forcePairs;
+
+      const { data, error } = await supabase.functions.invoke("detect-conflicts", {
+        body,
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Detection failed");
+
+      setDetectConflictStatus(
+        data.conflicts_created > 0
+          ? `${data.conflicts_created} conflict(s) created for Round ${data.round_number}.`
+          : data.note ?? "No new conflicts detected."
+      );
+      if (forcePairs) {
+        setShowForceConflict(false);
+        setForcePlayerA(""); setForcePlayerB(""); setForceZone(""); setForceSector("a1");
+      }
+    } catch (e: any) {
+      setDetectConflictStatus("Error: " + (e?.message ?? "Unknown"));
+    } finally {
+      setDetectingConflicts(false);
     }
   };
 
@@ -835,6 +879,105 @@ Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or 
               </button>
             </Card>
 
+            <Card title="Detect Conflicts">
+              <p className="text-parchment/70 text-sm">
+                Scans this round's moves and generates conflict rows where two or more players landed in the same sector.
+              </p>
+              <button
+                disabled={!allowed || detectingConflicts}
+                className="mt-3 w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40"
+                onClick={() => detectConflicts()}
+              >
+                {detectingConflicts ? "Scanning…" : "Detect Conflicts"}
+              </button>
+
+              {/* Force conflict — testing / manual override */}
+              <div className="mt-3 pt-3 border-t border-brass/15">
+                <button
+                  className="text-xs text-parchment/40 hover:text-parchment/60 underline"
+                  onClick={() => setShowForceConflict((v) => !v)}
+                >
+                  {showForceConflict ? "▲ Hide" : "▼ Force conflict (testing)"}
+                </button>
+
+                {showForceConflict && (
+                  <div className="mt-2 space-y-2">
+                    <div className="text-xs text-parchment/50 italic">
+                      Manually create a conflict between two players — useful for testing before movement system is live.
+                    </div>
+                    <div>
+                      <label className="text-xs text-parchment/50 mb-0.5 block">Player A</label>
+                      <select
+                        className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
+                        value={forcePlayerA}
+                        onChange={(e) => setForcePlayerA(e.target.value)}
+                      >
+                        <option value="">— Select player —</option>
+                        {members.map((m) => (
+                          <option key={m.user_id} value={m.user_id}>
+                            {m.faction_name ?? m.commander_name ?? m.user_id.slice(0, 8)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-parchment/50 mb-0.5 block">Player B</label>
+                      <select
+                        className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
+                        value={forcePlayerB}
+                        onChange={(e) => setForcePlayerB(e.target.value)}
+                      >
+                        <option value="">— Select player —</option>
+                        {members.filter((m) => m.user_id !== forcePlayerA).map((m) => (
+                          <option key={m.user_id} value={m.user_id}>
+                            {m.faction_name ?? m.commander_name ?? m.user_id.slice(0, 8)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-parchment/50 mb-0.5 block">Zone key</label>
+                        <input
+                          className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
+                          placeholder="e.g. vault_ruins"
+                          value={forceZone}
+                          onChange={(e) => setForceZone(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-parchment/50 mb-0.5 block">Sector key</label>
+                        <input
+                          className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
+                          placeholder="e.g. a1"
+                          value={forceSector}
+                          onChange={(e) => setForceSector(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      disabled={!forcePlayerA || !forcePlayerB || !forceZone || !forceSector || detectingConflicts}
+                      className="w-full px-3 py-1.5 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-xs disabled:opacity-40"
+                      onClick={() => detectConflicts([{
+                        player_a: forcePlayerA,
+                        player_b: forcePlayerB,
+                        zone_key: forceZone,
+                        sector_key: forceSector,
+                      }])}
+                    >
+                      {detectingConflicts ? "Creating…" : "Create Conflict"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {detectConflictStatus && (
+                <p className={`mt-2 text-xs ${detectConflictStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
+                  {detectConflictStatus}
+                </p>
+              )}
+            </Card>
+
           </div>
         )}
 
@@ -857,7 +1000,7 @@ Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or 
         {/* ── 6. What's next ── */}
         <Card title="What's next">
           <ul className="list-disc pl-5 space-y-2 text-parchment/75">
-            <li>Add "Process Movement" + "Detect Conflicts" functions to fully remove admin work.</li>
+            <li>Add "Process Movement" function to automate secret location updates from moves.</li>
             <li>Add "Resolve Recon" and "Apply Underdog Choices" functions.</li>
             <li>Add "Publish Bulletin" helper that writes a public post scaffold.</li>
           </ul>

@@ -12,17 +12,16 @@ type MapDef = {
 // Fallback Shattered Halo map: 8 zones x 4 sectors
 function fallbackMap(): MapDef {
   const zones = [
-    { key: "vault_ruins", name: "Vault Ruins" },
-    { key: "ash_wastes", name: "Ash Wastes" },
-    { key: "halo_spire", name: "Halo Spire" },
+    { key: "vault_ruins",         name: "Vault Ruins" },
+    { key: "ash_wastes",          name: "Ash Wastes" },
+    { key: "halo_spire",          name: "Halo Spire" },
     { key: "sunken_manufactorum", name: "Sunken Manufactorum" },
-    { key: "warp_scar_basin", name: "Warp Scar Basin" },
-    { key: "obsidian_fields", name: "Obsidian Fields" },
-    { key: "signal_crater", name: "Signal Crater" },
-    { key: "xenos_forest", name: "Xenos Forest" },
+    { key: "warp_scar_basin",     name: "Warp Scar Basin" },
+    { key: "obsidian_fields",     name: "Obsidian Fields" },
+    { key: "signal_crater",       name: "Signal Crater" },
+    { key: "xenos_forest",        name: "Xenos Forest" },
   ];
-
-  const sectors = ["a", "b", "c", "d"]; // 4 sectors
+  const sectors = ["a", "b", "c", "d"];
   return {
     zones: zones.map((z) => ({
       ...z,
@@ -41,34 +40,31 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 function parseLocation(loc: string) {
-  // "zone_key:sector_key"
   const [zone_key, sector_key] = loc.split(":");
   return { zone_key, sector_key };
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
 
   try {
-    if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
-
     const result = await requireUser(req);
     if (!result?.user) return json(401, { ok: false, error: "Unauthorized" });
-
     const user = result.user;
 
     const admin = adminClient();
 
     const body = (await req.json().catch(() => ({}))) as Partial<Body>;
-    const campaign_id = (body as any)?.campaign_id as string | undefined;
-    const mode = ((body as any)?.mode ?? "initial") as "initial" | "late";
+    const campaign_id  = (body as any)?.campaign_id  as string | undefined;
+    const mode         = ((body as any)?.mode ?? "initial") as "initial" | "late";
     const late_user_id = (body as any)?.late_user_id as string | undefined;
 
     if (!campaign_id) return json(400, { ok: false, error: "Missing campaign_id" });
     if (mode === "late" && !late_user_id)
       return json(400, { ok: false, error: "Missing late_user_id" });
 
-        // Validate result is lead
+    // Validate caller is lead
     const { data: leadRow, error: leadErr } = await admin
       .from("campaign_members")
       .select("role")
@@ -79,24 +75,36 @@ serve(async (req) => {
     if (leadErr) return json(500, { ok: false, error: leadErr.message });
     if (!leadRow || leadRow.role !== "lead") return json(403, { ok: false, error: "Lead only" });
 
-    // Load map_json if present (campaigns.map_json), else fallback
+    // ── Load map definition ───────────────────────────────────────────────────
+    // campaigns.map_id is a FK to the maps table which holds map_json.
+    // campaigns does NOT have a map_json column directly.
     let map: MapDef = fallbackMap();
+
     const { data: camp, error: campErr } = await admin
       .from("campaigns")
-      .select("id, map_json")
+      .select("id, map_id")
       .eq("id", campaign_id)
       .maybeSingle();
 
     if (campErr) return json(500, { ok: false, error: campErr.message });
-    if (camp?.map_json) {
-      // best-effort parse, fallback if shape differs
-      try {
-        const mj = camp.map_json as any;
-        if (mj?.zones?.length) map = mj as MapDef;
-      } catch {
-        // ignore and use fallback
+
+    if (camp?.map_id) {
+      const { data: mapRow, error: mapErr } = await admin
+        .from("maps")
+        .select("map_json")
+        .eq("id", camp.map_id)
+        .maybeSingle();
+
+      if (!mapErr && mapRow?.map_json) {
+        try {
+          const mj = mapRow.map_json as any;
+          if (mj?.zones?.length) map = mj as MapDef;
+        } catch {
+          // ignore, fallbackMap() already set
+        }
       }
     }
+    // No map_id or fetch failed → fallbackMap() is used silently
 
     // Members in campaign
     const { data: members, error: memErr } = await admin
@@ -117,8 +125,9 @@ serve(async (req) => {
     if (secErr) return json(500, { ok: false, error: secErr.message });
 
     const assignedByUser = new Map<string, string>();
-    const usedZones = new Set<string>();
-    const usedSectors = new Set<string>(); // full "zone:sector"
+    const usedZones   = new Set<string>();
+    const usedSectors = new Set<string>();
+
     for (const s of secrets ?? []) {
       const loc = (s.secret_location ?? s.starting_location) as string | null;
       if (s.user_id && loc) {
@@ -129,41 +138,30 @@ serve(async (req) => {
       }
     }
 
-    // Build all available sector locations from map
+    // All sector location keys from the active map
     const allLocations: string[] = [];
     for (const z of map.zones) {
       for (const sec of z.sectors) allLocations.push(sec.key);
     }
 
-    // Helper: pick a free sector in a zone
     function pickFreeSectorInZone(zoneKey: string): string | null {
       const zone = map.zones.find((z) => z.key === zoneKey);
       if (!zone) return null;
       const free = zone.sectors.map((s) => s.key).filter((k) => !usedSectors.has(k));
-      if (!free.length) return null;
-      return shuffle(free)[0]!;
+      return free.length ? shuffle(free)[0]! : null;
     }
 
-    // Helper: pick an unused zone with at least 1 free sector
     function pickUnusedZone(): string | null {
       const candidates = map.zones
         .map((z) => z.key)
         .filter((zk) => !usedZones.has(zk))
         .filter((zk) => pickFreeSectorInZone(zk) !== null);
-
-      if (!candidates.length) return null;
-      return shuffle(candidates)[0]!;
+      return candidates.length ? shuffle(candidates)[0]! : null;
     }
 
     async function ensurePublicPlayerState(user_id: string) {
-      // Ensure player_state exists (upsert with default public placeholders)
       const { error } = await admin.from("player_state").upsert(
-        {
-          campaign_id,
-          user_id,
-          public_location: "Unknown",
-          current_zone_key: "unknown",
-        },
+        { campaign_id, user_id, public_location: "Unknown", current_zone_key: "unknown" },
         { onConflict: "campaign_id,user_id" }
       );
       if (error) throw new Error(error.message);
@@ -171,61 +169,51 @@ serve(async (req) => {
 
     async function writeSecret(user_id: string, loc: string) {
       const { error } = await admin.from("player_state_secret").upsert(
-        {
-          campaign_id,
-          user_id,
-          starting_location: loc,
-          secret_location: loc,
-        },
+        { campaign_id, user_id, starting_location: loc, secret_location: loc },
         { onConflict: "campaign_id,user_id" }
       );
       if (error) throw new Error(error.message);
     }
 
-    // MODE: late joiner
+    // ── MODE: late joiner ─────────────────────────────────────────────────────
     if (mode === "late") {
       const uid = late_user_id!;
+
       if (!memberIds.includes(uid)) {
         return json(400, { ok: false, error: "late_user_id is not a member of this campaign" });
       }
       if (assignedByUser.has(uid)) {
-        return json(200, { ok: true, allocated: 0 }); // already allocated
+        return json(200, { ok: true, allocated: 0, note: "Player already allocated" });
       }
 
-      // Attempt: reassign one sector from dominant owner (requires a `sectors` table)
-      // Expected columns: campaign_id, zone_key, sector_key, owner_user_id
       let allocatedLoc: string | null = null;
 
-      const { data: dom, error: domErr } = await admin.rpc("dominant_sector_owner", {
-        p_campaign_id: campaign_id,
-      }).maybeSingle();
+      // Attempt: take a sector from the player who owns the most
+      const { data: dom, error: domErr } = await admin
+        .rpc("dominant_sector_owner", { p_campaign_id: campaign_id })
+        .maybeSingle();
 
-      // If you don't have this RPC, domErr will happen -> fallback logic below.
       if (!domErr && dom?.owner_user_id) {
-        const ownerId = dom.owner_user_id as string;
-
         const { data: owned, error: ownedErr } = await admin
           .from("sectors")
           .select("zone_key, sector_key")
           .eq("campaign_id", campaign_id)
-          .eq("owner_user_id", ownerId);
+          .eq("owner_user_id", dom.owner_user_id);
 
         if (!ownedErr && owned?.length) {
           const pick = shuffle(owned)[0]!;
-          const loc = `${pick.zone_key}:${pick.sector_key}`;
-          // Transfer ownership
+          const loc  = `${pick.zone_key}:${pick.sector_key}`;
           const { error: updErr } = await admin
             .from("sectors")
             .update({ owner_user_id: uid })
             .eq("campaign_id", campaign_id)
             .eq("zone_key", pick.zone_key)
             .eq("sector_key", pick.sector_key);
-
           if (!updErr) allocatedLoc = loc;
         }
       }
 
-      // Fallback: allocate a free sector anywhere with zone uniqueness ignored if needed
+      // Fallback: any unallocated sector
       if (!allocatedLoc) {
         const freeAny = allLocations.filter((k) => !usedSectors.has(k));
         if (!freeAny.length) return json(409, { ok: false, error: "No free sectors remain" });
@@ -234,20 +222,19 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, allocatedLoc);
-      usedSectors.add(allocatedLoc);
-      usedZones.add(parseLocation(allocatedLoc).zone_key);
 
       return json(200, { ok: true, allocated: 1 });
     }
 
-    // MODE: initial allocation
+    // ── MODE: initial allocation ──────────────────────────────────────────────
     const toAllocate = memberIds.filter((uid) => !assignedByUser.has(uid));
     let allocated = 0;
 
     for (const uid of toAllocate) {
       const zoneKey = pickUnusedZone();
+
       if (!zoneKey) {
-        // If we ran out of unused zones, fall back to any free sector (still no overlap)
+        // Ran out of unique zones — fall back to any free sector
         const freeAny = allLocations.filter((k) => !usedSectors.has(k));
         if (!freeAny.length) break;
         const loc = shuffle(freeAny)[0]!;
@@ -270,6 +257,7 @@ serve(async (req) => {
     }
 
     return json(200, { ok: true, allocated });
+
   } catch (e) {
     return json(500, { ok: false, error: (e as Error).message ?? "Internal error" });
   }
