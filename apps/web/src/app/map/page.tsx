@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
+import { MapImageDisplay } from "@/components/MapImageDisplay";
 
 type Sector = {
   zone_key: string;
@@ -10,6 +11,12 @@ type Sector = {
   owner_user_id: string | null;
   revealed_public: boolean;
   fortified: boolean;
+};
+
+type Campaign = {
+  id: string;
+  name: string;
+  map_id: string | null;
 };
 
 const ZONES: { key: string; name: string }[] = [
@@ -32,10 +39,12 @@ function getQueryCampaign(): string | null {
 }
 
 export default function MapPage() {
-  const supabase = useMemo(() => supabaseBrowser(), []);
+  const supabase   = useMemo(() => supabaseBrowser(), []);
+
   const [campaignId, setCampaignId] = useState("");
-  const [role, setRole] = useState("player");
-  const [rows, setRows] = useState<Sector[]>([]);
+  const [campaign,   setCampaign]   = useState<Campaign | null>(null);
+  const [role,       setRole]       = useState("player");
+  const [rows,       setRows]       = useState<Sector[]>([]);
 
   useEffect(() => {
     const q = getQueryCampaign();
@@ -43,9 +52,10 @@ export default function MapPage() {
   }, []);
 
   const load = async () => {
-    // Fetch role for nav
     const { data: userResp } = await supabase.auth.getUser();
     const uid = userResp.user?.id;
+
+    // Fetch role
     if (uid) {
       const { data: mem } = await supabase
         .from("campaign_members")
@@ -56,6 +66,15 @@ export default function MapPage() {
       setRole(mem?.role ?? "player");
     }
 
+    // Fetch campaign (name + map_id)
+    const { data: campaignRow } = await supabase
+      .from("campaigns")
+      .select("id, name, map_id")
+      .eq("id", campaignId)
+      .maybeSingle();
+    setCampaign(campaignRow ?? null);
+
+    // Fetch sectors
     const { data, error } = await supabase
       .from("sectors")
       .select("zone_key,sector_key,owner_user_id,revealed_public,fortified")
@@ -70,6 +89,8 @@ export default function MapPage() {
 
   const sectorAt = (zone: string, key: string) =>
     rows.find((r) => r.zone_key === zone && r.sector_key === key);
+
+  const isLead = role === "lead";
 
   return (
     <Frame
@@ -96,6 +117,17 @@ export default function MapPage() {
           </div>
         </Card>
 
+        {/* AI-generated map image — shown when a map_id is available */}
+        {campaign?.map_id && (
+          <MapImageDisplay
+            mapId={campaign.map_id}
+            campaignId={campaignId}
+            isLead={isLead}
+            className="w-full"
+          />
+        )}
+
+        {/* Zone / sector grid */}
         <div className="grid md:grid-cols-2 gap-6">
           {ZONES.map((z) => (
             <Card key={z.key} title={z.name}>
