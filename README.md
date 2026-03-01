@@ -3,7 +3,7 @@
 A fog-of-war, multi-player narrative campaign tracker for tabletop wargames (Warhammer 40,000).
 Built to run a full campaign without a GM — the system is the arbiter.
 
-**Live:** [shattered-halo-campaign.vercel.app](https://shattered-halo-campaign.vercel.app)
+**Live:** [40kcampaigngame.fun](https://40kcampaigngame.fun)
 
 ---
 
@@ -17,6 +17,10 @@ Built to run a full campaign without a GM — the system is the arbiter.
 - **Halo Instability clock** — d10 event table, phase-gated triggers
 - **Faction system** — 10 playable factions with art, crests, and lead-assignable locks
 - **Recap prompt generator** — public Lead bulletin + per-player private whisper (AI-ready prompts)
+- **Invite system** — email invites with AI-generated grimdark narrative blurb, accept/decline flow
+- **Faction allegiance** — permanent one-time faction lock with themed visual banner
+- **Campaign Chronicle** — AI-generated narrative summary of the entire campaign at end of game
+- **Campaign archive** — full JSON export of all campaign data including the chronicle
 - **No GM required** — optional Admin role for disputes only
 
 ---
@@ -38,7 +42,7 @@ Built to run a full campaign without a GM — the system is the arbiter.
 apps/web/                        # Next.js frontend
   src/
     app/
-      campaigns/page.tsx         # Create & list campaigns
+      campaigns/page.tsx         # Create campaign (size picker, auto-map, AI invite message)
       dashboard/page.tsx         # Player command throne
       lead/page.tsx              # Lead/admin controls & round flow
       conflicts/page.tsx         # Active conflicts
@@ -58,13 +62,16 @@ supabase/
     003_pending_invites.sql      # Invite system
     004_relics_instability.sql   # Evolution Pack — relics & events
   functions/                     # Deno edge functions
-    accept-invites/
+    accept-invites/              # list/accept/decline pending invites
     advance-round/
     apply-instability/
     assign-missions/
-    create-campaign/
+    create-campaign/              # auto-generates map from campaign_size
     create-map/
+    delete-campaign/              # safe cascade delete (lead/admin only)
     ensure-player-state/
+    generate-narrative/           # Claude API proxy (avoids browser CORS)
+    invite-players/               # sends invite emails via Supabase Auth SMTP
     lead-set-faction/
     set-faction/
     start-campaign/
@@ -148,6 +155,12 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<your-anon-key>
 SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key>
 ```
 
+Edge Function secrets (set via Supabase Dashboard → Edge Functions → Secrets or CLI):
+
+```bash
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+```
+
 > ⚠️ `SUPABASE_SERVICE_ROLE_KEY` is server-only. Never expose it to the client or commit it to version control.
 
 Add the same three variables in your Vercel project settings under **Environment Variables**.
@@ -171,7 +184,15 @@ npm run dev
 
 ## AI Integration
 
-This app generates AI-ready prompts from live campaign data. The prompts can be fed into any LLM.
+This app uses AI in two ways: generating prompts from live campaign data (feed into any LLM), and making direct Claude API calls via the `generate-narrative` edge function.
+
+### generate-narrative Edge Function
+
+The `generate-narrative` Supabase edge function proxies calls to the Claude API server-side, avoiding CORS restrictions that block direct browser-to-Anthropic calls. It requires an `ANTHROPIC_API_KEY` secret set in Supabase Edge Function secrets.
+
+Used for:
+- **Invite message generation** (campaigns page) — grimdark 40K call-to-arms blurb from campaign name
+- **Campaign Chronicle** (lead page) — end-of-campaign narrative summary using all campaign data
 
 ### Built-in Prompt Generator (Dashboard)
 
@@ -225,9 +246,11 @@ Add your connected tools here as you set them up:
 ## Campaign Creation (No-GM Flow)
 
 1. Go to `/campaigns` and sign in
-2. Select a template, name your campaign, optionally invite players by email
-3. You become the **Lead** automatically
-4. Invited players auto-join when they sign in (handled by `accept-invites` edge function)
+2. Select a template, name your campaign, choose a campaign size (Small/Medium/Large)
+3. Optionally generate a grimdark AI invite message, or write your own
+4. Optionally invite players by email — they receive an invite email and accept/decline on their profile page
+5. You become the **Lead** automatically
+6. A map is auto-generated from the campaign size and stored in the `maps` table
 5. Lead controls are at `/lead?campaign=<id>`
 
 ---
@@ -247,10 +270,20 @@ Key rules:
 
 ## Planned / In Progress
 
-- `start-campaign` edge function (currently empty)
+### Completed
+- ✅ `start-campaign` edge function (fixed map_id join)
+- ✅ Campaign size picker with auto-generated maps
+- ✅ Email invite system with accept/decline flow
+- ✅ Faction allegiance picker with permanent lock
+- ✅ AI invite message generation
+- ✅ Campaign Chronicle (AI narrative summary)
+- ✅ Campaign archive export (full JSON)
+- ✅ Campaign delete with confirmation
+- ✅ RLS policies for `rulesets` and `maps` tables
+
+### In Progress / Backlog
 - Shared `src/types/index.ts` (types currently duplicated per page)
-- RLS policies for `rulesets` and `maps` tables
-- Resolve `player_state_secret` table purpose
+- Resolve `player_state_secret` table purpose (no migration file)
 - Multiple maps per campaign (moonlets / sub-theatres)
 - Image uploads for battle reports
 - Discord webhook for bulletins

@@ -21,10 +21,10 @@ const ALL_ZONES = [
   { key: "ghost_harbor",        name: "Ghost Harbor" },
 ];
 
-const SIZE_CONFIG: Record<string, { zone_count: number; max_players: number }> = {
-  small:  { zone_count: 4,  max_players: 4  },
-  medium: { zone_count: 8,  max_players: 8  },
-  large:  { zone_count: 12, max_players: 12 },
+const SIZE_CONFIG: Record<string, { zone_count: number; max_players: number; zone_cols: number; zone_rows: number }> = {
+  small:  { zone_count: 4,  max_players: 4,  zone_cols: 2, zone_rows: 2 },
+  medium: { zone_count: 8,  max_players: 8,  zone_cols: 4, zone_rows: 2 },
+  large:  { zone_count: 12, max_players: 12, zone_cols: 4, zone_rows: 3 },
 };
 
 // Sector labels — letters so keys are human-readable (vault_ruins:a, vault_ruins:b, …)
@@ -39,8 +39,12 @@ function generateMapJson(size: "small"|"medium"|"large", sectors_per_zone = 4) {
     size,
     zone_count: config.zone_count,
     sectors_per_zone,
-    grid_cols: 2,
-    grid_rows: Math.ceil(sectors_per_zone / 2),
+    // Zone grid layout — how zones are arranged on the campaign map
+    zone_cols: config.zone_cols,
+    zone_rows: config.zone_rows,
+    // Sector grid layout within each zone
+    sector_cols: 2,
+    sector_rows: Math.ceil(sectors_per_zone / 2),
     max_players: config.max_players,
     zones: zones.map((z) => ({
       key: z.key,

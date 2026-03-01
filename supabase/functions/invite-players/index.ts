@@ -87,18 +87,43 @@ serve(async (req) => {
         });
 
         if (authErr) {
-          // "User already registered" is not a hard failure — they'll see the
-          // invite on their next login via the pending_invites row we inserted.
           const alreadyExists =
             authErr.message.toLowerCase().includes("already") ||
             authErr.message.toLowerCase().includes("registered") ||
             authErr.message.toLowerCase().includes("exists");
 
-          results.push({
-            email,
-            sent: false,
-            reason: alreadyExists ? "existing_user" : authErr.message,
-          });
+          if (alreadyExists) {
+            // For existing users, inviteUserByEmail doesn't send an email.
+            // Send them a magic link OTP via the Supabase Auth REST API instead,
+            // so they get a notification email and a click-to-login link.
+            try {
+              const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+              const serviceKey  = Deno.env.get("SB_SERVICE_ROLE_KEY") ?? "";
+              const otpRes = await fetch(`${supabaseUrl}/auth/v1/otp`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "apikey": serviceKey,
+                  "Authorization": `Bearer ${serviceKey}`,
+                },
+                body: JSON.stringify({
+                  email,
+                  create_user: false,
+                  options: {
+                    redirectTo: `${REDIRECT_URL}?campaign_invite=1`,
+                    data: { campaign_id, campaign_name: campaignName, invite_message: inviteMessage ?? "" },
+                  },
+                }),
+              });
+              const otpOk = otpRes.ok || otpRes.status === 200;
+              results.push({ email, sent: otpOk, reason: otpOk ? undefined : "existing_user_otp_failed" });
+            } catch (otpErr: any) {
+              // OTP send failed — invite row still inserted, player will see it on next login
+              results.push({ email, sent: false, reason: "existing_user_otp_failed" });
+            }
+          } else {
+            results.push({ email, sent: false, reason: authErr.message });
+          }
         } else {
           results.push({ email, sent: true });
         }

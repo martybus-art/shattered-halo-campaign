@@ -4,7 +4,7 @@
 **Live site:** https://40kcampaigngame.fun  
 **Supabase project:** `yzqzlajmehzilxfruskq` (ap-northeast-1 / Tokyo)  
 **Postgres version:** 17.6.1  
-**Last updated:** 2026-02-28 (session 4)  
+**Last updated:** 2026-03-01 (session 5)  
 **Code baseline commit:** `6ea665763bccb37f1f29666f9928c191e4ac6191`
 
 > ⚠️ **IMPORTANT:** The live database is ahead of the migration files in several places.
@@ -77,7 +77,9 @@ supabase/
     lead-set-faction/index.ts
     set-faction/index.ts
     invite-players/index.ts       <- new: sends invite emails via Supabase Auth SMTP
-    start-campaign/index.ts       <- fully implemented (initial + late allocation modes)
+    start-campaign/index.ts       <- fixed: fetches map_json via map_id FK join to maps table
+    delete-campaign/index.ts       <- new: safe campaign deletion (lead/admin, cascades child rows)
+    generate-narrative/index.ts    <- new: proxies Claude API server-side (avoids browser CORS)
   seed/
     missions_shattered_halo.json
     seed_evolution_pack.sql
@@ -608,8 +610,8 @@ SUPABASE_SERVICE_ROLE_KEY=...              <- server-only, never expose to clien
 |---|---|---|---|
 | 1 | Low | Open | `let PlayerState = ps` in dashboard/page.tsx uses PascalCase for a variable. Should be `let playerState = ps` |
 | 2 | Medium | ✅ Fixed 2026-02-28 | `rulesets` and `maps` tables had RLS disabled. Fixed with `005_rls_rulesets_maps.sql` |
-| 3 | Medium | Open | `player_state_secret` table exists in live DB with no migration and no code references. Clarify purpose |
-| 4 | Low | Open | `start-campaign/index.ts` is an empty file |
+| 3 | Medium | Open | `player_state_secret` table exists in live DB with no migration. Used by `start-campaign` to store secret starting locations per player |
+| 4 | Low | ✅ Fixed 2026-03-01 | `start-campaign/index.ts` fully implemented. Fixed: map loaded via `map_id` FK join to `maps` table, not nonexistent `campaigns.map_json` column |
 | 5 | Low | Open | No shared src/types/index.ts — Campaign, Membership etc. redefined per page with slight differences |
 | 6 | Low | ✅ Fixed 2026-02-28 | Catch-up migration 007_catchup_schema.sql written to document all schema drift |
 | 7 | Low | ✅ Fixed 2026-02-28 | `storage_campaign_id` and `block_faction_change_unless_lead` functions had mutable search_path. Fixed with `ALTER FUNCTION ... SET search_path = public` |
@@ -657,6 +659,7 @@ Dashboard → Edge Functions → Secrets):
 SUPABASE_URL
 SB_PUBLISHABLE_KEY      <- anon/publishable key
 SB_SERVICE_ROLE_KEY     <- service role key (admin operations)
+ANTHROPIC_API_KEY       <- required by generate-narrative function (set via: supabase secrets set ANTHROPIC_API_KEY=sk-ant-...)
 ```
 
 ## Change Log
@@ -681,4 +684,14 @@ SB_SERVICE_ROLE_KEY     <- service role key (admin operations)
 | 016 | 2026-02-28 | apps/web/src/app/campaigns/page.tsx | Added AI narrative generation (calls Claude API) with "Generate with AI" button. Generates grimdark 40K invite blurb from campaign name. Editable before campaign creation |
 | 017 | 2026-02-28 | apps/web/src/app/dashboard/page.tsx, campaigns/page.tsx | Removed auto-accept-invites calls. Invite handling moved to profile page only |
 | 018 | 2026-02-28 | REFERENCE.md | Added Deployment Checklist section. Key note: all edge functions must have "Verify JWT with legacy secret" DISABLED — project uses ES256 tokens, requireUser() handles auth via getClaims() |
+| 019 | 2026-03-01 | apps/web/src/app/campaigns/page.tsx | Replaced manual map selector with campaign size picker (Small/Medium/Large). Map auto-generated server-side. small=4 zones/4 players, medium=8 zones/8 players, large=12 zones/12 players. 2x2 sector grid per zone |
+| 020 | 2026-03-01 | supabase/functions/create-campaign/index.ts | Generates map_json server-side from campaign_size. Inserts into maps table and links via map_id. 12 zones defined in order; size slices first N. sectors_per_zone and grid dims stored in map_json for future flexibility |
+| 021 | 2026-03-01 | apps/web/src/app/lead/page.tsx | Removed Campaign ID input, Allocate button, allocateLatePlayer function, and user ID click-to-copy from player rows |
+| 022 | 2026-03-01 | apps/web/src/app/lead/page.tsx | Added Export Archive: downloads JSON with members, rounds, ledger, conflicts, player_state, battle_results, mission_influence, campaign_events, campaign_relics, moves, public posts |
+| 023 | 2026-03-01 | apps/web/src/app/lead/page.tsx | Added Delete Campaign with two-click confirmation. Calls delete-campaign edge function |
+| 024 | 2026-03-01 | supabase/functions/delete-campaign/index.ts | New function: verifies lead/admin, deletes child rows in dependency order, deletes campaign, deletes auto-generated map |
+| 025 | 2026-03-01 | apps/web/src/app/lead/page.tsx | Added Generate Chronicle: fetches all campaign data, sends structured prompt (including original invite_message as premise) to Claude via generate-narrative. Returns 4-6 paragraph grimdark narrative. Chronicle included in archive export |
+| 026 | 2026-03-01 | supabase/functions/generate-narrative/index.ts | New function: proxies Claude API to avoid browser CORS. Requires ANTHROPIC_API_KEY secret. Accepts {prompt, max_tokens}, returns {ok, text}. Used by invite message generation and chronicle |
+| 027 | 2026-03-01 | supabase/functions/start-campaign/index.ts | Fixed campaigns.map_json column error: now selects map_id from campaigns then fetches map_json from maps table. Falls back to hardcoded 8-zone map if no map_id |
+| 028 | 2026-03-01 | apps/web/src/app/page.tsx | Fixed JSX parse error: unclosed {selectedCampaignId && ( before faction picker block caused Turbopack build failure |
 
