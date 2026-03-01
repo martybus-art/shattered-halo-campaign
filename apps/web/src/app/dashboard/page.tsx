@@ -26,31 +26,25 @@ type Campaign = {
 };
 
 type Membership = { campaign_id: string; role: string; campaign_name: string };
-
 type MapZone = { key: string; name: string; sectors: { key: string }[] };
-
-type MapJson = {
-  zone_cols?: number;
-  zones?: MapZone[];
-};
+type MapJson = { zone_cols?: number; zones?: MapZone[] };
+type ConflictRow = { id: string; zone_key: string; sector_key: string; player_a: string; player_b: string; status: string };
+type BulletinPost = { id: string; round_number: number; title: string; body: string; created_at: string };
 
 // ── Adjacency helper ──────────────────────────────────────────────────────────
-// Returns zone keys that are directly adjacent (horizontal/vertical) to the given zone
-// in the zone grid, plus the zone itself (to allow same-zone sector moves).
 function getAdjacentZoneKeys(zones: MapZone[], currentZoneKey: string, zoneCols: number): string[] {
   const idx = zones.findIndex((z) => z.key === currentZoneKey);
   if (idx === -1) return [];
   const row = Math.floor(idx / zoneCols);
   const col = idx % zoneCols;
   const adjacent: string[] = [currentZoneKey];
-  if (row > 0)                                     adjacent.push(zones[idx - zoneCols]?.key);
-  if (idx + zoneCols < zones.length)               adjacent.push(zones[idx + zoneCols]?.key);
-  if (col > 0)                                     adjacent.push(zones[idx - 1]?.key);
+  if (row > 0)                                       adjacent.push(zones[idx - zoneCols]?.key);
+  if (idx + zoneCols < zones.length)                 adjacent.push(zones[idx + zoneCols]?.key);
+  if (col > 0)                                       adjacent.push(zones[idx - 1]?.key);
   if (col < zoneCols - 1 && idx + 1 < zones.length) adjacent.push(zones[idx + 1]?.key);
   return adjacent.filter(Boolean) as string[];
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function getQueryParam(name: string): string | null {
   if (typeof window === "undefined") return null;
   return new URL(window.location.href).searchParams.get(name);
@@ -60,7 +54,9 @@ function titleCase(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
 }
 
-const NIP_PER_NCP = 3;
+const NIP_PER_NCP        = 3;
+const RECON_NIP_COST     = 1;
+const DEEP_STRIKE_NIP    = 3;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
@@ -92,6 +88,18 @@ export default function Dashboard() {
   const [tradeQty, setTradeQty]       = useState(1);
   const [tradePending, setTradePending] = useState(false);
   const [tradeStatus, setTradeStatus]  = useState<string>("");
+
+  // Spend phase — recon purchase
+  const [hasReconToken, setHasReconToken] = useState(false);
+  const [reconPending, setReconPending]   = useState(false);
+  const [reconStatus, setReconStatus]     = useState<string>("");
+
+  // Conflicts involving this player
+  const [myConflicts, setMyConflicts] = useState<ConflictRow[]>([]);
+  const [conflictBanner, setConflictBanner] = useState(false);
+
+  // Bulletin board
+  const [bulletinPosts, setBulletinPosts] = useState<BulletinPost[]>([]);
 
   // ── Load memberships ────────────────────────────────────────────────────────
   const loadMemberships = async (uid: string) => {
@@ -142,7 +150,12 @@ export default function Dashboard() {
     } else {
       const { data: inserted } = await supabase
         .from("player_state")
-        .insert({ campaign_id: cid, user_id: uid, nip: 0, ncp: 0, current_zone_key: "unknown", current_sector_key: "unknown", public_location: "Unknown" })
+        .insert({
+          campaign_id: cid, user_id: uid,
+          nip: 0, ncp: 0,
+          current_zone_key: "unknown", current_sector_key: "unknown",
+          public_location: "Unknown",
+        })
         .select("*").single();
       if (inserted) setState(inserted as PlayerState);
     }
@@ -178,6 +191,16 @@ export default function Dashboard() {
       .maybeSingle();
     setAlreadyMoved(!!mv);
 
+    // Recon token this round?
+    const { data: recon } = await supabase
+      .from("recon_ops")
+      .select("id")
+      .eq("campaign_id", cid)
+      .eq("user_id", uid)
+      .eq("round_number", (c as any).round_number)
+      .maybeSingle();
+    setHasReconToken(!!recon);
+
     // Map
     if ((c as any).map_id) {
       const { data: mapRow } = await supabase
@@ -187,6 +210,28 @@ export default function Dashboard() {
         .maybeSingle();
       if (mapRow?.map_json) setMapJson(mapRow.map_json as MapJson);
     }
+
+    // My conflicts this round
+    const { data: conflicts } = await supabase
+      .from("conflicts")
+      .select("id, zone_key, sector_key, player_a, player_b, status")
+      .eq("campaign_id", cid)
+      .eq("round_number", (c as any).round_number)
+      .or(`player_a.eq.${uid},player_b.eq.${uid}`)
+      .neq("status", "resolved");
+    const myC = (conflicts ?? []) as ConflictRow[];
+    setMyConflicts(myC);
+    if (myC.length > 0) setConflictBanner(true);
+
+    // Bulletin — recent public posts (results narratives)
+    const { data: posts } = await supabase
+      .from("posts")
+      .select("id, round_number, title, body, created_at")
+      .eq("campaign_id", cid)
+      .eq("visibility", "public")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    setBulletinPosts((posts ?? []) as BulletinPost[]);
   };
 
   useEffect(() => {
@@ -206,11 +251,13 @@ export default function Dashboard() {
     setSelectedSector("");
     setMoveStatus("");
     setTradeStatus("");
+    setReconStatus("");
+    setConflictBanner(false);
   }, [campaignId]);
 
   // ── Derived movement values ─────────────────────────────────────────────────
   const zones     = mapJson?.zones ?? [];
-  const zoneCols  = mapJson?.zone_cols ?? 2;
+  const zoneCols  = mapJson?.zone_cols ?? 4;
   const adjKeys   = secretZone ? getAdjacentZoneKeys(zones, secretZone, zoneCols) : [];
 
   const sameZone        = zones.find((z) => z.key === secretZone);
@@ -218,15 +265,16 @@ export default function Dashboard() {
   const deepStrikeZones = zones.filter((z) => !adjKeys.includes(z.key));
 
   const isDeepStrike  = !!selectedZone && !adjKeys.includes(selectedZone);
-  const nipForMove    = isDeepStrike ? 3 : 0;
+  const nipForMove    = isDeepStrike ? DEEP_STRIKE_NIP : 0;
   const canAffordMove = (state?.nip ?? 0) >= nipForMove;
 
-  // ── Actions ─────────────────────────────────────────────────────────────────
+  // ── Token helper ─────────────────────────────────────────────────────────────
   const getToken = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token ?? null;
   };
 
+  // ── Submit move ───────────────────────────────────────────────────────────────
   const submitMove = async () => {
     if (!selectedZone || !selectedSector || !campaignId) return;
     setMovePending(true);
@@ -252,6 +300,7 @@ export default function Dashboard() {
     }
   };
 
+  // ── Trade NIP for NCP ─────────────────────────────────────────────────────────
   const tradeNipForNcp = async () => {
     if (!campaignId || tradeQty < 1) return;
     setTradePending(true);
@@ -265,7 +314,10 @@ export default function Dashboard() {
       });
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error ?? "Trade failed");
-      setTradeStatus("Traded " + data.nip_spent + " NIP for " + data.ncp_gained + " NCP. New totals: " + data.nip_new + " NIP / " + data.ncp_new + " NCP.");
+      setTradeStatus(
+        "Traded " + data.nip_spent + " NIP for " + data.ncp_gained + " NCP. " +
+        "Totals: " + data.nip_new + " NIP / " + data.ncp_new + " NCP."
+      );
       const { data: u } = await supabase.auth.getUser();
       if (u.user) await loadCampaign(u.user.id, campaignId);
     } catch (e: any) {
@@ -275,70 +327,45 @@ export default function Dashboard() {
     }
   };
 
-  // ── Recap prompts ───────────────────────────────────────────────────────────
-  const makePublicRecapPrompt = async () => {
-    if (!campaign) return;
-    const { data: posts } = await supabase.from("posts").select("round_number,title,body,tags,created_at")
-      .eq("campaign_id", campaign.id).eq("visibility", "public").order("round_number", { ascending: false }).limit(40);
-    const prompt = [
-      "Campaign: " + campaign.name,
-      "Phase: " + campaign.phase,
-      "Current Round: " + campaign.round_number,
-      "Halo Instability: " + campaign.instability + "/10",
-      "",
-      "PUBLIC CONTEXT (no secrets):",
-      JSON.stringify(posts ?? [], null, 2),
-      "",
-      "Task:",
-      "1) Write a 300-600 word grimdark 'Halo War Bulletin' summarizing recent public events.",
-      "2) Include paranoia, disputed sightings, and ominous references to the Ashen King.",
-      "3) Suggest 3 bounties for next round tied to public tensions.",
-      "Tone: 40K grimdark, cosmic horror, military dispatch.",
-    ].join("\n");
-    await navigator.clipboard.writeText(prompt);
-    alert("Public recap prompt copied to clipboard.");
+  // ── Purchase recon token ───────────────────────────────────────────────────────
+  const purchaseRecon = async () => {
+    if (!campaignId || !campaign) return;
+    setReconPending(true);
+    setReconStatus("");
+    try {
+      const token = await getToken();
+      if (!token) { setReconStatus("Session expired."); return; }
+      const { data, error } = await supabase.functions.invoke("spend-nip", {
+        body: { campaign_id: campaignId, mode: "recon", quantity: 1 },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Purchase failed");
+      setReconStatus("Recon token purchased. You may view opponent movements in the recon phase.");
+      setHasReconToken(true);
+      const { data: u } = await supabase.auth.getUser();
+      if (u.user) await loadCampaign(u.user.id, campaignId);
+    } catch (e: any) {
+      setReconStatus("Error: " + (e?.message ?? "Unknown"));
+    } finally {
+      setReconPending(false);
+    }
   };
 
-  const makePrivateWhisperPrompt = async () => {
-    if (!campaign || !state) return;
-    const { data: posts } = await supabase.from("posts").select("round_number,title,body,tags,created_at")
-      .eq("campaign_id", campaign.id).eq("visibility", "private").order("round_number", { ascending: false }).limit(40);
-    const prompt = [
-      "Campaign: " + campaign.name,
-      "Phase: " + campaign.phase,
-      "Current Round: " + campaign.round_number,
-      "Halo Instability: " + campaign.instability + "/10",
-      "",
-      "MY PRIVATE CONTEXT (include secrets):",
-      "My location (secret): " + (secretZone ?? "unknown") + " — " + (secretSector ?? "unknown"),
-      "My status: " + state.status,
-      "My NIP/NCP: " + state.nip + "/" + state.ncp,
-      "My recent private notes:",
-      JSON.stringify(posts ?? [], null, 2),
-      "",
-      "Task:",
-      "Write a 2-4 paragraph private 'whisper' tailored to my faction/commander.",
-      "Include: 1 opportunity, 1 threat, 1 rumor, and 1 suggested objective for next battle.",
-      "Tone: ominous, conspiratorial, cinematic.",
-    ].join("\n");
-    await navigator.clipboard.writeText(prompt);
-    alert("Private whisper prompt copied to clipboard.");
-  };
-
-  // ── Zone section sub-component (avoids repetition) ──────────────────────────
+  // ── Zone section sub-component ────────────────────────────────────────────────
   const ZoneSection = ({
-    label, zones: zList, colorClass,
-  }: { label: string; zones: MapZone[]; colorClass: string }) => {
+    label, zones: zList, colorClass, labelNote,
+  }: { label: string; zones: MapZone[]; colorClass: string; labelNote?: string }) => {
     if (!zList.length) return null;
     return (
       <div>
-        <div className="text-xs text-parchment/40 uppercase tracking-widest mb-1.5">{label}</div>
+        <div className="text-xs text-parchment/40 uppercase tracking-widest mb-1.5">
+          {label}{labelNote && <span className="text-parchment/25 normal-case ml-1">{labelNote}</span>}
+        </div>
         <div className="space-y-1.5">
           {zList.map((z) => (
-            <div key={z.key} className={"rounded border p-2 " + colorClass.replace("btn", "bg")}>
-              <div className="text-xs font-semibold text-parchment/80 mb-1">
-                {z.name ?? titleCase(z.key)}
-              </div>
+            <div key={z.key} className={"rounded border p-2 " + colorClass}>
+              <div className="text-xs font-semibold text-parchment/80 mb-1">{z.name ?? titleCase(z.key)}</div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
                 {z.sectors.map((sec) => {
                   const sKey = sec.key.includes(":") ? sec.key.split(":")[1] : sec.key;
@@ -350,7 +377,9 @@ export default function Dashboard() {
                       onClick={() => { setSelectedZone(z.key); setSelectedSector(sKey!); }}
                       className={[
                         "rounded border px-2 py-1.5 text-xs transition-colors",
-                        active ? colorClass + " active" : colorClass,
+                        active
+                          ? "border-brass/70 bg-brass/20 text-parchment"
+                          : "border-brass/20 bg-void hover:border-brass/40 text-parchment/60",
                       ].join(" ")}
                     >
                       {sKey?.toUpperCase()}
@@ -395,6 +424,36 @@ export default function Dashboard() {
         {campaign && state && (
           <div className="space-y-6">
 
+            {/* ── Conflict banner ─────────────────────────────────────────── */}
+            {conflictBanner && myConflicts.length > 0 && (
+              <div className="relative rounded border border-blood/60 bg-blood/10 px-5 py-4">
+                <button
+                  onClick={() => setConflictBanner(false)}
+                  className="absolute top-3 right-4 text-parchment/30 hover:text-parchment/70 text-lg leading-none"
+                  aria-label="Dismiss"
+                >
+                  ×
+                </button>
+                <div className="flex items-start gap-3">
+                  <span className="text-blood text-xl mt-0.5">⚔</span>
+                  <div>
+                    <div className="text-blood font-semibold text-sm mb-1">
+                      Enemy contact — {myConflicts.length === 1 ? "engagement" : myConflicts.length + " engagements"} detected
+                    </div>
+                    {myConflicts.map((c) => (
+                      <div key={c.id} className="text-parchment/70 text-xs mb-0.5">
+                        {titleCase(c.zone_key)} — Sector {c.sector_key.toUpperCase()}
+                        <span className="text-parchment/40 ml-2">({c.status})</span>
+                      </div>
+                    ))}
+                    <a href="/conflicts" className="mt-2 inline-block text-xs text-blood/80 underline hover:text-blood">
+                      Open Engagements →
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Status + Resources row */}
             <div className="grid md:grid-cols-2 gap-6">
 
@@ -408,7 +467,7 @@ export default function Dashboard() {
                   <div><span className="text-brass">Instability:</span> {campaign.instability}/10</div>
                   <div>
                     <span className="text-brass">Stage:</span>{" "}
-                    <span className="font-mono text-sm">{roundStage ?? "—"}</span>
+                    <span className="font-mono text-sm capitalize">{roundStage ?? "—"}</span>
                   </div>
                   <div><span className="text-brass">Role:</span> {role}</div>
                   <div className="pt-2 border-t border-brass/20">
@@ -442,14 +501,30 @@ export default function Dashboard() {
                       <div className="text-xs text-parchment/30 mt-0.5">Campaign Points</div>
                     </div>
                   </div>
+                  <p className="text-xs text-parchment/40">
+                    Spend NIP during the <span className="text-brass">Spend</span> phase each round.
+                    Earn NIP by winning battles and completing objectives.
+                  </p>
+                </div>
+              </Card>
+            </div>
 
-                  <div className="border-t border-brass/20 pt-3">
-                    <div className="text-sm text-parchment/70 mb-2">
-                      Trade NIP for NCP{" "}
-                      <span className="text-parchment/40">({NIP_PER_NCP} NIP = 1 NCP)</span>
+            {/* ── SPEND phase card ────────────────────────────────────────── */}
+            {roundStage === "spend" && (
+              <Card title="Spend Phase — Commit Resources">
+                <p className="text-parchment/60 text-sm mb-4">
+                  Allocate NIP before orders are issued. Purchases carry forward into this round.
+                </p>
+                <div className="space-y-5">
+
+                  {/* NIP → NCP */}
+                  <div className="rounded border border-brass/20 bg-void/40 p-4">
+                    <div className="text-sm font-semibold text-parchment/90 mb-1">Trade NIP for NCP</div>
+                    <div className="text-xs text-parchment/50 mb-3">
+                      {NIP_PER_NCP} NIP = 1 NCP (Campaign Points). NCP contribute to final victory.
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <label className="text-xs text-parchment/50">Qty:</label>
+                      <label className="text-xs text-parchment/50">Qty (NCP):</label>
                       <input
                         type="number" min={1}
                         max={Math.max(1, Math.floor((state.nip ?? 0) / NIP_PER_NCP))}
@@ -472,17 +547,109 @@ export default function Dashboard() {
                         {tradeStatus}
                       </p>
                     )}
-                    {(state.nip ?? 0) < NIP_PER_NCP && (
-                      <p className="mt-1 text-xs text-parchment/30 italic">
-                        Earn more NIP in battle to trade.
+                  </div>
+
+                  {/* Purchase recon */}
+                  <div className="rounded border border-brass/20 bg-void/40 p-4">
+                    <div className="text-sm font-semibold text-parchment/90 mb-1">
+                      Purchase Recon Token
+                      <span className="ml-2 text-xs text-parchment/40 font-normal">({RECON_NIP_COST} NIP)</span>
+                    </div>
+                    <div className="text-xs text-parchment/50 mb-3">
+                      Grants access to the Recon phase — lets you scout opponent movements before
+                      conflicts lock in, and optionally revise your move order.
+                    </div>
+                    {hasReconToken ? (
+                      <div className="text-xs text-brass/80">✓ Recon token purchased for this round.</div>
+                    ) : (
+                      <>
+                        <button
+                          disabled={reconPending || (state.nip ?? 0) < RECON_NIP_COST}
+                          className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs disabled:opacity-40"
+                          onClick={purchaseRecon}
+                        >
+                          {reconPending ? "Purchasing…" : `Purchase (${RECON_NIP_COST} NIP)`}
+                        </button>
+                        {(state.nip ?? 0) < RECON_NIP_COST && (
+                          <p className="mt-1 text-xs text-parchment/30 italic">
+                            Not enough NIP. You need {RECON_NIP_COST}, you have {state.nip}.
+                          </p>
+                        )}
+                      </>
+                    )}
+                    {reconStatus && (
+                      <p className={"mt-2 text-xs " + (reconStatus.startsWith("Error") ? "text-blood/80" : "text-parchment/60")}>
+                        {reconStatus}
                       </p>
                     )}
                   </div>
+
+                  {/* Pre-commit deep strike */}
+                  <div className="rounded border border-blood/15 bg-void/40 p-4">
+                    <div className="text-sm font-semibold text-parchment/90 mb-1">
+                      Pre-commit Deep Strike
+                      <span className="ml-2 text-xs text-parchment/40 font-normal">({DEEP_STRIKE_NIP} NIP)</span>
+                    </div>
+                    <div className="text-xs text-parchment/50">
+                      Reserve 3 NIP to enable deep striking to any non-adjacent zone during the Movement phase.
+                      Alternatively, you can spend NIP inline when submitting your move.
+                    </div>
+                  </div>
+
+                  {/* Underdog catch-up */}
+                  {state.status === "underdog" && (
+                    <div className="rounded border border-brass/40 bg-brass/5 p-4">
+                      <div className="text-sm font-semibold text-brass mb-1">Catch-up Bonus (Underdog)</div>
+                      <div className="text-xs text-parchment/60 mb-3">
+                        You have fewer sectors than average. Choose one bonus for this round:
+                      </div>
+                      <select
+                        className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                        value={underdogChoice}
+                        onChange={(e) => setUnderdogChoice(e.target.value)}
+                      >
+                        <option>+2 NIP</option>
+                        <option>+1 NCP next battle</option>
+                        <option>Free Recon</option>
+                        <option>Safe Passage (1 move cannot be intercepted)</option>
+                      </select>
+                      <button className="mt-2 px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs">
+                        Claim Bonus
+                      </button>
+                    </div>
+                  )}
                 </div>
               </Card>
-            </div>
+            )}
 
-            {/* Movement Orders */}
+            {/* ── RECON phase card ────────────────────────────────────────── */}
+            {roundStage === "recon" && (
+              <Card title="Recon Phase">
+                {!hasReconToken ? (
+                  <div className="space-y-2">
+                    <p className="text-parchment/50 text-sm">
+                      You did not purchase a recon token during the Spend phase.
+                      Recon intel is unavailable to you this round.
+                    </p>
+                    <p className="text-parchment/30 text-xs">
+                      Purchase a recon token next round during the Spend phase to unlock this capability.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-parchment/80 text-sm">
+                      Your scouts have returned. Enemy movements have been detected.
+                    </p>
+                    <p className="text-xs text-parchment/50">
+                      Recon intelligence display coming soon. You will be able to see zone-level
+                      opponent positions before conflicts are finalised.
+                    </p>
+                  </div>
+                )}
+              </Card>
+            )}
+
+            {/* ── Movement Orders ─────────────────────────────────────────── */}
             <Card title={"Movement Orders — Round " + campaign.round_number}>
               {!secretZone ? (
                 <p className="text-parchment/40 italic text-sm">
@@ -491,9 +658,7 @@ export default function Dashboard() {
               ) : roundStage !== "movement" ? (
                 <p className="text-parchment/50 italic text-sm">
                   Movement is closed.{" "}
-                  {roundStage
-                    ? "Current stage: " + roundStage + "."
-                    : "No active round yet."}
+                  {roundStage ? "Current stage: " + roundStage + "." : "No active round yet."}
                 </p>
               ) : alreadyMoved ? (
                 <div className="text-parchment/70 text-sm">
@@ -510,12 +675,12 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  {/* Hold (same zone sectors) */}
+                  {/* Hold */}
                   {sameZone && (
                     <div>
                       <div className="text-xs text-parchment/40 uppercase tracking-widest mb-1.5">
-                        Hold position{" "}
-                        <span className="text-parchment/25 normal-case">(stay in {titleCase(secretZone)})</span>
+                        Hold position
+                        <span className="text-parchment/25 normal-case ml-1">(stay in {titleCase(secretZone)})</span>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                         {sameZone.sectors.map((sec) => {
@@ -535,7 +700,7 @@ export default function Dashboard() {
                               ].join(" ")}
                             >
                               Sector {sKey?.toUpperCase()}
-                              {isCurrent && <span className="ml-1 text-brass/50 text-xs"> ●</span>}
+                              {isCurrent && <span className="ml-1 text-brass/50 text-xs">●</span>}
                             </button>
                           );
                         })}
@@ -543,88 +708,33 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* Adjacent zones — free */}
+                  {/* Adjacent */}
                   {adjacentZones.length > 0 && (
-                    <div>
-                      <div className="text-xs text-parchment/40 uppercase tracking-widest mb-1.5">
-                        Adjacent zones{" "}
-                        <span className="text-parchment/25 normal-case">(free)</span>
-                      </div>
-                      <div className="space-y-1.5">
-                        {adjacentZones.map((z) => (
-                          <div key={z.key} className="rounded border border-brass/20 bg-void/40 p-2">
-                            <div className="text-xs font-semibold text-parchment/80 mb-1">
-                              {z.name ?? titleCase(z.key)}
-                            </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
-                              {z.sectors.map((sec) => {
-                                const sKey = sec.key.includes(":") ? sec.key.split(":")[1] : sec.key;
-                                const active = selectedZone === z.key && selectedSector === sKey;
-                                return (
-                                  <button
-                                    key={sec.key}
-                                    disabled={movePending}
-                                    onClick={() => { setSelectedZone(z.key); setSelectedSector(sKey!); }}
-                                    className={[
-                                      "rounded border px-2 py-1.5 text-xs transition-colors",
-                                      active
-                                        ? "border-brass/70 bg-brass/20 text-parchment"
-                                        : "border-brass/20 bg-void hover:border-brass/40 text-parchment/60",
-                                    ].join(" ")}
-                                  >
-                                    {sKey?.toUpperCase()}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <ZoneSection
+                      label="Adjacent zones"
+                      labelNote="(free)"
+                      zones={adjacentZones}
+                      colorClass="border-brass/20 bg-void/40"
+                    />
                   )}
 
-                  {/* Deep strike zones — 3 NIP */}
+                  {/* Deep strike */}
                   {deepStrikeZones.length > 0 && (
                     <div>
                       <div className="text-xs text-parchment/40 uppercase tracking-widest mb-1.5">
-                        Deep strike{" "}
-                        <span className="text-blood/50 normal-case">(3 NIP — orbital insertion)</span>
+                        Deep strike
+                        <span className="text-blood/50 normal-case ml-1">({DEEP_STRIKE_NIP} NIP — orbital insertion)</span>
                       </div>
-                      {(state.nip ?? 0) < 3 ? (
+                      {(state.nip ?? 0) < DEEP_STRIKE_NIP ? (
                         <p className="text-xs text-parchment/30 italic">
-                          You need 3 NIP to deep strike. Current NIP: {state.nip}.
+                          You need {DEEP_STRIKE_NIP} NIP to deep strike. Current NIP: {state.nip}.
                         </p>
                       ) : (
-                        <div className="space-y-1.5">
-                          {deepStrikeZones.map((z) => (
-                            <div key={z.key} className="rounded border border-blood/20 bg-void/40 p-2">
-                              <div className="text-xs font-semibold text-parchment/70 mb-1">
-                                {z.name ?? titleCase(z.key)}
-                              </div>
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
-                                {z.sectors.map((sec) => {
-                                  const sKey = sec.key.includes(":") ? sec.key.split(":")[1] : sec.key;
-                                  const active = selectedZone === z.key && selectedSector === sKey;
-                                  return (
-                                    <button
-                                      key={sec.key}
-                                      disabled={movePending}
-                                      onClick={() => { setSelectedZone(z.key); setSelectedSector(sKey!); }}
-                                      className={[
-                                        "rounded border px-2 py-1.5 text-xs transition-colors",
-                                        active
-                                          ? "border-blood/60 bg-blood/20 text-parchment"
-                                          : "border-blood/15 bg-void hover:border-blood/35 text-parchment/50",
-                                      ].join(" ")}
-                                    >
-                                      {sKey?.toUpperCase()}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                        <ZoneSection
+                          label=""
+                          zones={deepStrikeZones}
+                          colorClass="border-blood/20 bg-void/40"
+                        />
                       )}
                     </div>
                   )}
@@ -652,7 +762,7 @@ export default function Dashboard() {
                       </div>
                       {isDeepStrike && !canAffordMove && (
                         <p className="mt-1 text-xs text-blood/70">
-                          Need 3 NIP for deep strike — you have {state.nip}.
+                          Need {DEEP_STRIKE_NIP} NIP — you have {state.nip}.
                         </p>
                       )}
                     </div>
@@ -667,46 +777,28 @@ export default function Dashboard() {
               )}
             </Card>
 
-            {/* Underdog */}
-            {state.status === "underdog" && (
-              <Card title="Catch-up Choice (Underdog)">
-                <p className="text-parchment/80 text-sm">
-                  You are flagged as <span className="text-brass">Underdog</span>. Choose your benefit:
-                </p>
-                <select
-                  className="mt-3 w-full px-3 py-2 rounded bg-void border border-brass/30"
-                  value={underdogChoice}
-                  onChange={(e) => setUnderdogChoice(e.target.value)}
-                >
-                  <option>+2 NIP</option>
-                  <option>+1 NCP next battle</option>
-                  <option>Free Recon</option>
-                  <option>Safe Passage (1 move cannot be intercepted)</option>
-                </select>
-              </Card>
-            )}
-
-            {/* Recaps */}
-            <Card title="Recaps & Whispers">
-              <div className="space-y-3">
-                {(role === "lead" || role === "admin") && (
-                  <button
-                    className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                    onClick={makePublicRecapPrompt}
-                  >
-                    Copy PUBLIC recap prompt (Lead)
-                  </button>
-                )}
-                <button
-                  className="w-full px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm"
-                  onClick={makePrivateWhisperPrompt}
-                >
-                  Copy PRIVATE whisper prompt (You)
-                </button>
-                <p className="text-xs text-parchment/30">
-                  Paste these prompts into your AI assistant for narrative generation.
-                </p>
-              </div>
+            {/* ── Halo War Bulletin (passive log) ─────────────────────────── */}
+            <Card title="Halo War Bulletin">
+              {bulletinPosts.length === 0 ? (
+                <div className="text-parchment/30 text-sm italic">
+                  No dispatches yet. Chronicles of battles will appear here after each round's Results phase.
+                </div>
+              ) : (
+                <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
+                  {bulletinPosts.map((post) => (
+                    <div
+                      key={post.id}
+                      className="rounded border border-brass/15 bg-void/40 px-4 py-3"
+                    >
+                      <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                        <div className="text-sm font-semibold text-parchment/90">{post.title}</div>
+                        <div className="text-xs text-parchment/30 shrink-0">Round {post.round_number}</div>
+                      </div>
+                      <p className="text-xs text-parchment/60 leading-relaxed line-clamp-4">{post.body}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Card>
 
           </div>
