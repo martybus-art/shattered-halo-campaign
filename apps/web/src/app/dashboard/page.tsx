@@ -56,7 +56,26 @@ function titleCase(s: string) {
 
 const NIP_PER_NCP        = 3;
 const RECON_NIP_COST     = 1;
+const MISSION_PREF_COST  = 1;
 const DEEP_STRIKE_NIP    = 3;
+
+// Mission types drawn from the missions table — player can influence which category they face
+const MISSION_TYPES = [
+  { key: "skirmish",        label: "Skirmish",        desc: "Fast patrol clash, mobility rewarded" },
+  { key: "control",         label: "Control",         desc: "Hold objectives at round end" },
+  { key: "assault",         label: "Assault",         desc: "Destroy enemy heavies, hold high ground" },
+  { key: "ambush",          label: "Ambush",          desc: "Attacker deploys first; defender gains reaction" },
+  { key: "siege",           label: "Siege",           desc: "Breach fortified positions" },
+  { key: "relic",           label: "Relic",           desc: "Escalating VP for holding relic node" },
+  { key: "retrieval",       label: "Retrieval",       desc: "Recover the artefact before the enemy" },
+  { key: "assassination",   label: "Assassination",   desc: "Kill the enemy commander" },
+  { key: "sabotage",        label: "Sabotage",        desc: "Destroy key enemy infrastructure" },
+  { key: "exfiltration",    label: "Exfiltration",   desc: "Units exiting board score VP" },
+  { key: "raid",            label: "Raid",            desc: "Strike fast, withdraw before reinforcements" },
+  { key: "ritual",          label: "Ritual",          desc: "Complete the rite before desecration" },
+  { key: "hazard",          label: "Hazard",          desc: "Unstable rift causes random mortal wounds" },
+  { key: "dynamic_control", label: "Dynamic Control", desc: "Objectives shift position each round" },
+];
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
@@ -93,6 +112,12 @@ export default function Dashboard() {
   const [hasReconToken, setHasReconToken] = useState(false);
   const [reconPending, setReconPending]   = useState(false);
   const [reconStatus, setReconStatus]     = useState<string>("");
+
+  // Spend phase — mission preference
+  const [missionPref, setMissionPref]                       = useState<string>("");
+  const [selectedMissionType, setSelectedMissionType]       = useState<string>("");
+  const [missionPrefPending, setMissionPrefPending]         = useState(false);
+  const [missionPrefStatus, setMissionPrefStatus]           = useState<string>("");
 
   // Conflicts involving this player
   const [myConflicts, setMyConflicts] = useState<ConflictRow[]>([]);
@@ -201,6 +226,19 @@ export default function Dashboard() {
       .maybeSingle();
     setHasReconToken(!!recon);
 
+    // Mission preference purchased this round?
+    const { data: mPref } = await supabase
+      .from("round_spends")
+      .select("payload")
+      .eq("campaign_id", cid)
+      .eq("user_id", uid)
+      .eq("round_number", (c as any).round_number)
+      .eq("spend_type", "mission_pref")
+      .maybeSingle();
+    const prefType = (mPref?.payload as any)?.mission_type ?? "";
+    setMissionPref(prefType);
+    setSelectedMissionType(prefType);
+
     // Map
     if ((c as any).map_id) {
       const { data: mapRow } = await supabase
@@ -252,6 +290,9 @@ export default function Dashboard() {
     setMoveStatus("");
     setTradeStatus("");
     setReconStatus("");
+    setMissionPref("");
+    setSelectedMissionType("");
+    setMissionPrefStatus("");
     setConflictBanner(false);
   }, [campaignId]);
 
@@ -349,6 +390,35 @@ export default function Dashboard() {
       setReconStatus("Error: " + (e?.message ?? "Unknown"));
     } finally {
       setReconPending(false);
+    }
+  };
+
+  // ── Purchase mission preference ───────────────────────────────────────────────
+  const purchaseMissionPref = async (mType: string) => {
+    if (!campaignId || !campaign || !mType) return;
+    setMissionPrefPending(true);
+    setMissionPrefStatus("");
+    try {
+      const token = await getToken();
+      if (!token) { setMissionPrefStatus("Session expired."); return; }
+      const { data, error } = await supabase.functions.invoke("spend-nip", {
+        body: { campaign_id: campaignId, mode: "mission_pref", mission_type: mType },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Purchase failed");
+      setMissionPref(mType);
+      setMissionPrefStatus(
+        data.changed
+          ? `Preference updated to: ${mType}. No additional NIP spent.`
+          : `Mission preference locked in: ${mType}. ${MISSION_PREF_COST} NIP spent.`
+      );
+      const { data: u } = await supabase.auth.getUser();
+      if (u.user) await loadCampaign(u.user.id, campaignId);
+    } catch (e: any) {
+      setMissionPrefStatus("Error: " + (e?.message ?? "Unknown"));
+    } finally {
+      setMissionPrefPending(false);
     }
   };
 
@@ -594,6 +664,77 @@ export default function Dashboard() {
                       Reserve 3 NIP to enable deep striking to any non-adjacent zone during the Movement phase.
                       Alternatively, you can spend NIP inline when submitting your move.
                     </div>
+                  </div>
+
+                  {/* Mission type preference */}
+                  <div className="rounded border border-brass/20 bg-void/40 p-4">
+                    <div className="text-sm font-semibold text-parchment/90 mb-1">
+                      Mission Preference
+                      <span className="ml-2 text-xs text-parchment/40 font-normal">({MISSION_PREF_COST} NIP)</span>
+                    </div>
+                    <div className="text-xs text-parchment/50 mb-3">
+                      Influence what type of battle your next conflict becomes.
+                      The lead will see your preference when assigning missions.
+                      You can change your choice during this Spend phase at no extra cost.
+                    </div>
+                    {missionPref ? (
+                      <div className="space-y-2">
+                        <div className="text-xs text-brass/80">
+                          ✓ Preference submitted:{" "}
+                          <span className="capitalize font-semibold">{missionPref.replace(/_/g, " ")}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <select
+                            className="flex-1 px-2 py-1.5 rounded bg-void border border-brass/30 text-xs capitalize"
+                            value={selectedMissionType}
+                            onChange={(e) => setSelectedMissionType(e.target.value)}
+                            disabled={missionPrefPending}
+                          >
+                            {MISSION_TYPES.map((mt) => (
+                              <option key={mt.key} value={mt.key}>{mt.label} — {mt.desc}</option>
+                            ))}
+                          </select>
+                          <button
+                            disabled={missionPrefPending || selectedMissionType === missionPref}
+                            className="shrink-0 px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs disabled:opacity-40"
+                            onClick={() => purchaseMissionPref(selectedMissionType)}
+                          >
+                            {missionPrefPending ? "Updating…" : "Change"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <select
+                          className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-xs"
+                          value={selectedMissionType}
+                          onChange={(e) => setSelectedMissionType(e.target.value)}
+                          disabled={missionPrefPending}
+                        >
+                          <option value="">— Choose mission type —</option>
+                          {MISSION_TYPES.map((mt) => (
+                            <option key={mt.key} value={mt.key}>{mt.label} — {mt.desc}</option>
+                          ))}
+                        </select>
+                        <button
+                          disabled={missionPrefPending || !selectedMissionType || (state?.nip ?? 0) < MISSION_PREF_COST}
+                          className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs disabled:opacity-40"
+                          onClick={() => purchaseMissionPref(selectedMissionType)}
+                        >
+                          {missionPrefPending ? "Purchasing…" : `Submit Preference (${MISSION_PREF_COST} NIP)`}
+                        </button>
+                        {(state?.nip ?? 0) < MISSION_PREF_COST && (
+                          <p className="text-xs text-parchment/30 italic">
+                            Need {MISSION_PREF_COST} NIP. You have {state?.nip ?? 0}.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {missionPrefStatus && (
+                      <p className={"mt-2 text-xs " + (missionPrefStatus.startsWith("Error") ? "text-blood/80" : "text-parchment/60")}>
+                        {missionPrefStatus}
+                      </p>
+                    )}
                   </div>
 
                   {/* Underdog catch-up */}
