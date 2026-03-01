@@ -427,3 +427,6 @@ verify_jwt = false
 
 [functions.spend-nip]
 verify_jwt = false
+
+[functions.resolve-conflict]
+verify_jwt = false

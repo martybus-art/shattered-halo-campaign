@@ -53,6 +53,11 @@ export default function LeadControls() {
   const [chronicle, setChronicle]             = useState<string | null>(null);
   const [showChronicle, setShowChronicle]     = useState(false);
 
+  // Player states (for eliminated players panel)
+  const [playerStates, setPlayerStates] = useState<{ user_id: string; status: string }[]>([]);
+  const [reinstating, setReinstating]   = useState<string | null>(null); // user_id being reinstated
+  const [reinstateStatus, setReinstateStatus] = useState<Record<string, string>>({});
+
   // Start campaign status
   const [startStatus, setStartStatus] = useState<string>("");
 
@@ -102,12 +107,19 @@ export default function LeadControls() {
       .maybeSingle();
     setRound(r ?? null);
 
-    const { data: allMembers } = await supabase
-      .from("campaign_members")
-      .select("user_id,role,faction_name,faction_key,commander_name,faction_locked")
-      .eq("campaign_id", cid)
-      .order("role");
-    setMembers((allMembers ?? []) as Member[]);
+    const [membersRes, psRes] = await Promise.all([
+      supabase
+        .from("campaign_members")
+        .select("user_id,role,faction_name,faction_key,commander_name,faction_locked")
+        .eq("campaign_id", cid)
+        .order("role"),
+      supabase
+        .from("player_state")
+        .select("user_id,status")
+        .eq("campaign_id", cid),
+    ]);
+    setMembers((membersRes.data ?? []) as Member[]);
+    setPlayerStates((psRes.data ?? []) as { user_id: string; status: string }[]);
   };
 
   useEffect(() => {
@@ -429,6 +441,45 @@ Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or 
   };
 
   // ── Render ────────────────────────────────────────────────
+  // ── Reinstate eliminated player ──────────────────────────────────────────
+  const reinstatePlayer = async (userId: string) => {
+    if (!campaignId) return;
+    setReinstating(userId);
+    setReinstateStatus((prev) => ({ ...prev, [userId]: "" }));
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("Session expired — refresh.");
+
+      // Reuse start-campaign with late_player=true to allocate a sector
+      const { data, error } = await supabase.functions.invoke("start-campaign", {
+        body: { campaign_id: campaignId, late_player: true, target_user_id: userId },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Reinstatement failed");
+
+      // Mark player active again
+      await supabase
+        .from("player_state")
+        .update({ status: "normal" })
+        .eq("campaign_id", campaignId)
+        .eq("user_id", userId);
+
+      setReinstateStatus((prev) => ({
+        ...prev,
+        [userId]: "Reinstated — new sector allocated.",
+      }));
+      await load(campaignId);
+    } catch (e: any) {
+      setReinstateStatus((prev) => ({
+        ...prev,
+        [userId]: "Error: " + (e?.message ?? "Unknown"),
+      }));
+    } finally {
+      setReinstating(null);
+    }
+  };
+
   return (
     <Frame
       title="Lead Controls"
@@ -705,6 +756,54 @@ Write the chronicle now. Aim for 4-6 paragraphs. Do not use markdown headers or 
             )}
           </Card>
         )}
+
+        {/* ── 2b. Eliminated Players ── */}
+        {campaign && (() => {
+          const eliminated = playerStates.filter((ps) => ps.status === "inactive");
+          if (!eliminated.length) return null;
+          return (
+            <Card title={`Eliminated Players — ${eliminated.length}`}>
+              <p className="text-sm text-parchment/60 mb-3">
+                These players have no sectors remaining. Reinstate to allocate a new sector and return them to play.
+              </p>
+              <div className="space-y-2">
+                {eliminated.map((ps) => {
+                  const m = members.find((x) => x.user_id === ps.user_id);
+                  const label = m?.faction_name ?? m?.commander_name ?? ps.user_id.slice(0, 8) + "…";
+                  const isReinstate = reinstating === ps.user_id;
+                  return (
+                    <div
+                      key={ps.user_id}
+                      className="flex items-center gap-3 rounded border border-blood/20 bg-blood/5 px-4 py-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-parchment/80 font-semibold truncate">{label}</div>
+                        {m?.faction_key && (
+                          <div className="text-xs text-parchment/40 font-mono">{m.faction_key}</div>
+                        )}
+                        {reinstateStatus[ps.user_id] && (
+                          <div className={`text-xs mt-0.5 ${reinstateStatus[ps.user_id].startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
+                            {reinstateStatus[ps.user_id]}
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-xs text-blood/60 font-mono uppercase shrink-0">Eliminated</span>
+                      {allowed && (
+                        <button
+                          disabled={isReinstate}
+                          className="shrink-0 px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs disabled:opacity-40"
+                          onClick={() => reinstatePlayer(ps.user_id)}
+                        >
+                          {isReinstate ? "Reinstating…" : "Reinstate"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })()}
 
         {/* ── 3 & 4. Frequently used actions ── */}
         {campaign && (
