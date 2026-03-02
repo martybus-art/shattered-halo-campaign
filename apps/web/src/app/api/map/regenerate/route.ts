@@ -15,10 +15,13 @@ import { createClient } from "@supabase/supabase-js";
 // Force dynamic rendering — prevents Next.js static optimisation and ensures
 // this route gets its own distinct serverless function bundle (fixes Vercel
 // deduplication symlink error during deployment).
-export const dynamic = "force-dynamic";
-
 // Also ensure runtime metadata differs and bundle hash can't be deduped.
 export const runtime = "nodejs";
+export const preferredRegion = "sfo1";
+export const revalidate = 0;
+export const dynamic = "force-dynamic";
+
+
 const __route_id = "api-map-regenerate";
 
 function adminClient() {
