@@ -1,7 +1,8 @@
 // apps/web/src/app/dashboard/page.tsx
 // Player command throne — campaign status, mission preference (NIP-gated),
 // movement submission, underdog choice, and AI recap prompt builder.
-// Subscribes to round stage changes in real-time so the UI stays current.
+// Subscribes to round stage changes in real-time so the UI stays current. 
+// comment testing
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
