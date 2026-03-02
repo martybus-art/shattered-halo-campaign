@@ -1,6 +1,7 @@
 // apps/web/src/app/dashboard/page.tsx
 // Player command throne — campaign status, mission preference (NIP-gated),
-// underdog choice, recap/whisper prompt builders, and quick navigation.
+// movement submission, underdog choice, and AI recap prompt builder.
+// Subscribes to round stage changes in real-time so the UI stays current.
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -26,6 +27,7 @@ type Campaign = {
   phase: number;
   round_number: number;
   instability: number;
+  map_id: string | null;
 };
 
 type Membership = {
@@ -39,6 +41,8 @@ type Round = {
   round_number: number;
 };
 
+type MapZone = { key: string; name: string };
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getQueryParam(name: string): string | null {
@@ -47,18 +51,18 @@ function getQueryParam(name: string): string | null {
 }
 
 const STARTING_NIP = 1;
+const SECTORS      = ["A", "B", "C", "D"];
 
-// Mission preference options — players spend 1 NIP to influence mission selection
 const MISSION_PREF_OPTIONS = [
-  { value: "",               label: "— No preference —"       },
-  { value: "assassination",  label: "Assassination"            },
-  { value: "sabotage",       label: "Sabotage"                 },
-  { value: "border_clash",   label: "Border Clash"             },
-  { value: "supply_raid",    label: "Supply Raid"              },
-  { value: "recon_in_force", label: "Recon in Force"           },
-  { value: "zone_mortalis",  label: "Zone Mortalis"            },
-  { value: "siege",          label: "Siege"                    },
-  { value: "ambush",         label: "Ambush"                   },
+  { value: "",               label: "— No preference —"  },
+  { value: "assassination",  label: "Assassination"       },
+  { value: "sabotage",       label: "Sabotage"            },
+  { value: "border_clash",   label: "Border Clash"        },
+  { value: "supply_raid",    label: "Supply Raid"         },
+  { value: "recon_in_force", label: "Recon in Force"      },
+  { value: "zone_mortalis",  label: "Zone Mortalis"       },
+  { value: "siege",          label: "Siege"               },
+  { value: "ambush",         label: "Ambush"              },
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -72,6 +76,7 @@ export default function Dashboard() {
   const [role, setRole]                 = useState<string>("player");
   const [memberships, setMemberships]   = useState<Membership[]>([]);
   const [currentRound, setCurrentRound] = useState<Round | null>(null);
+  const [mapZones, setMapZones]         = useState<MapZone[]>([]);
   const [loadingCampaign, setLoadingCampaign] = useState(false);
   const [pageError, setPageError]       = useState<string | null>(null);
 
@@ -83,6 +88,14 @@ export default function Dashboard() {
   const [missionPrefSaved, setMissionPrefSaved]   = useState<string>("");
   const [missionPrefStatus, setMissionPrefStatus] = useState<string>("");
   const [submittingPref, setSubmittingPref]       = useState(false);
+
+  // Movement
+  const [moveToZone, setMoveToZone]         = useState<string>("");
+  const [moveToSector, setMoveToSector]     = useState<string>("A");
+  const [isDeepStrike, setIsDeepStrike]     = useState(false);
+  const [moveStatus, setMoveStatus]         = useState<string>("");
+  const [submittingMove, setSubmittingMove] = useState(false);
+  const [moveSubmitted, setMoveSubmitted]   = useState(false);
 
   // ── Accept pending invites ────────────────────────────────────────────────
 
@@ -101,7 +114,6 @@ export default function Dashboard() {
       .from("campaign_members")
       .select("campaign_id, role, campaigns(name)")
       .eq("user_id", uid);
-
     if (error) { setPageError(error.message); return; }
 
     const rows = (mem ?? []).map(m => ({
@@ -125,7 +137,7 @@ export default function Dashboard() {
       // Campaign row
       const { data: c, error: ce } = await supabase
         .from("campaigns")
-        .select("id,name,phase,round_number,instability")
+        .select("id,name,phase,round_number,instability,map_id")
         .eq("id", cid)
         .single();
       if (ce) throw new Error(ce.message);
@@ -150,7 +162,18 @@ export default function Dashboard() {
         .maybeSingle();
       setCurrentRound(roundRow as Round | null);
 
-      // Player state — create default row if missing
+      // Map zones (for movement selection)
+      if ((c as any).map_id) {
+        const { data: mapRow } = await supabase
+          .from("maps")
+          .select("map_json")
+          .eq("id", (c as any).map_id)
+          .maybeSingle();
+        const zones = (mapRow?.map_json as any)?.zones ?? [];
+        setMapZones(zones as MapZone[]);
+      }
+
+      // Player state — upsert default if missing
       const { data: existing, error: pe } = await supabase
         .from("player_state")
         .select("*")
@@ -180,21 +203,38 @@ export default function Dashboard() {
         if (insErr) throw new Error(insErr.message);
         ps = inserted as PlayerState;
       }
-
-      // setState was missing from the live version — this was the bug
-      // causing the entire player card block to never render
       setState(ps);
 
-      // Load any saved mission preference for this round
+      // Check if player already moved this round
+      if (roundRow?.stage === "movement") {
+        const { data: existingMove } = await supabase
+          .from("moves")
+          .select("id,to_zone_key,to_sector_key")
+          .eq("campaign_id", cid)
+          .eq("user_id", uid)
+          .eq("round_number", c.round_number)
+          .maybeSingle();
+        if (existingMove) {
+          setMoveSubmitted(true);
+          setMoveToZone((existingMove as any).to_zone_key ?? "");
+          setMoveToSector((existingMove as any).to_sector_key ?? "A");
+        } else {
+          setMoveSubmitted(false);
+        }
+      }
+
+      // Load any saved mission preference for this round.
+      // round_spends uses spend_type + payload JSONB — no standalone mission_pref column.
       if (roundRow) {
         const { data: prefRow } = await supabase
           .from("round_spends")
-          .select("mission_pref")
+          .select("spend_type, payload")
           .eq("campaign_id", cid)
           .eq("user_id", uid)
           .eq("round_number", roundRow.round_number)
+          .eq("spend_type", "mission_pref")
           .maybeSingle();
-        const saved = (prefRow as any)?.mission_pref ?? "";
+        const saved = (prefRow as any)?.payload?.mission_pref ?? "";
         setMissionPrefSaved(saved);
         setMissionPref(saved);
       }
@@ -228,32 +268,79 @@ export default function Dashboard() {
     })();
   }, [campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Real-time stage subscription ─────────────────────────────────────────
+  // Refreshes the dashboard automatically when the Lead advances the stage.
+
+  useEffect(() => {
+    if (!campaignId) return;
+
+    const channel = supabase
+      .channel(`rounds:dashboard:${campaignId}`)
+      .on(
+        "postgres_changes",
+        {
+          event:  "*",
+          schema: "public",
+          table:  "rounds",
+          filter: `campaign_id=eq.${campaignId}`,
+        },
+        async () => {
+          const { data: userResp } = await supabase.auth.getUser();
+          const uid = userResp.user?.id;
+          if (uid) await loadCampaign(uid, campaignId);
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [campaignId, supabase, loadCampaign]);
+
+  // ── Submit movement ───────────────────────────────────────────────────────
+
+  const submitMove = async () => {
+    if (!campaignId || submittingMove || !moveToZone) return;
+    setSubmittingMove(true);
+    setMoveStatus("");
+    try {
+      const { data, error } = await supabase.functions.invoke("submit-move", {
+        body: {
+          campaign_id:   campaignId,
+          to_zone_key:   moveToZone,
+          to_sector_key: moveToSector,
+          is_deep_strike: isDeepStrike,
+        },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
+
+      setMoveSubmitted(true);
+      setMoveStatus("Move submitted.");
+      const { data: userResp } = await supabase.auth.getUser();
+      if (userResp.user) await loadCampaign(userResp.user.id, campaignId);
+    } catch (e: any) {
+      setMoveStatus(`Error: ${e?.message ?? String(e)}`);
+    } finally {
+      setSubmittingMove(false);
+    }
+  };
+
   // ── Mission preference submit ─────────────────────────────────────────────
 
   const submitMissionPref = async () => {
     if (!campaignId || !currentRound || submittingPref) return;
     if ((state?.nip ?? 0) < 1) return;
-
     setSubmittingPref(true);
     setMissionPrefStatus("");
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error("Session expired — refresh.");
-
       const { data, error } = await supabase.functions.invoke("spend-nip", {
         body: { campaign_id: campaignId, mode: "mission_pref", mission_pref: missionPref },
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
-
       setMissionPrefSaved(missionPref);
       setMissionPrefStatus("Preference saved.");
-
-      // Refresh to show updated NIP balance
       const { data: userResp } = await supabase.auth.getUser();
       if (userResp.user) await loadCampaign(userResp.user.id, campaignId);
-
     } catch (e: any) {
       setMissionPrefStatus(`Error: ${e?.message ?? String(e)}`);
     } finally {
@@ -261,7 +348,7 @@ export default function Dashboard() {
     }
   };
 
-  // ── Recap prompt builders ─────────────────────────────────────────────────
+  // ── Recap prompt builder ──────────────────────────────────────────────────
 
   const makePublicRecapPrompt = async () => {
     if (!campaign) return;
@@ -290,93 +377,52 @@ export default function Dashboard() {
     ].join("\n");
 
     await navigator.clipboard.writeText(prompt);
-    alert("Public recap prompt copied to clipboard.");
-  };
-
-  const makePrivateWhisperPrompt = async () => {
-    if (!campaign || !state) return;
-    const { data: myPosts } = await supabase
-      .from("posts")
-      .select("round_number,title,body,tags,created_at")
-      .eq("campaign_id", campaign.id)
-      .eq("visibility", "private")
-      .order("round_number", { ascending: false })
-      .limit(40);
-
-    const prompt = [
-      `Campaign: ${campaign.name}`,
-      `Phase: ${campaign.phase}`,
-      `Current Round: ${campaign.round_number}`,
-      `Halo Instability: ${campaign.instability}/10`,
-      "",
-      "MY PRIVATE CONTEXT (include secrets):",
-      `My location (secret): ${state.current_zone_key}-${state.current_sector_key}`,
-      `My status: ${state.status}`,
-      `My NIP/NCP: ${state.nip}/${state.ncp}`,
-      "My recent private notes:",
-      JSON.stringify(myPosts ?? [], null, 2),
-      "",
-      "Task:",
-      "Write a 2–4 paragraph private 'whisper' tailored to my faction/commander.",
-      "Include: 1 opportunity, 1 threat, 1 rumor, and 1 suggested objective for next battle.",
-      "Tone: ominous, conspiratorial, cinematic.",
-    ].join("\n");
-
-    await navigator.clipboard.writeText(prompt);
-    alert("Private whisper prompt copied to clipboard.");
+    alert("War Bulletin prompt copied to clipboard.");
   };
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const hasNip       = (state?.nip ?? 0) >= 1;
-  const isSpendStage = currentRound?.stage === "spend";
+  const hasNip        = (state?.nip ?? 0) >= 1;
+  const isSpendStage  = currentRound?.stage === "spend";
+  const isMoveStage   = currentRound?.stage === "movement";
   const canSubmitPref = hasNip && isSpendStage && !submittingPref;
-  const prefChanged  = missionPref !== missionPrefSaved;
+  const prefChanged   = missionPref !== missionPrefSaved;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <Frame title="Command Throne" right={<a className="underline" href="/campaigns">Campaigns</a>}>
+    <Frame
+      title="Command Throne"
+      campaignId={campaignId}
+      role={role}
+      currentPage="dashboard"
+    >
       <div className="space-y-6">
 
         {/* ── Campaign selector ── */}
         <Card title="My Campaigns">
           {memberships.length ? (
-            <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
-              <select
-                className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
-                value={campaignId}
-                onChange={(e) => setCampaignId(e.target.value)}
-              >
-                {memberships.map(m => (
-                  <option key={m.campaign_id} value={m.campaign_id}>
-                    {m.campaign_name} ({m.role})
-                  </option>
-                ))}
-              </select>
-              <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-                href={`/map?campaign=${campaignId}`}>Map</a>
-              <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
-                href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
-              {(role === "lead" || role === "admin") && (
-                <a className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30"
-                  href={`/lead?campaign=${campaignId}`}>Lead Controls</a>
-              )}
-            </div>
+            <select
+              className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+              value={campaignId}
+              onChange={(e) => setCampaignId(e.target.value)}
+            >
+              {memberships.map(m => (
+                <option key={m.campaign_id} value={m.campaign_id}>
+                  {m.campaign_name} ({m.role})
+                </option>
+              ))}
+            </select>
           ) : (
             <p className="text-parchment/70">
               No campaigns found. Create one in{" "}
               <a className="underline text-brass" href="/campaigns">Campaigns</a>.
             </p>
           )}
-          <p className="mt-2 text-xs text-parchment/50">
-            Share deep links like{" "}
-            <span className="text-brass">/dashboard?campaign=&lt;id&gt;</span>.
-          </p>
         </Card>
 
         {loadingCampaign && (
-          <p className="text-parchment/50 animate-pulse text-sm px-1">Loading campaign data…</p>
+          <p className="text-parchment/50 animate-pulse text-sm px-1">Loading…</p>
         )}
         {pageError && (
           <Card title="Error">
@@ -384,7 +430,7 @@ export default function Dashboard() {
           </Card>
         )}
 
-        {/* ── Player cards — only render once state is loaded ── */}
+        {/* ── Player cards ── */}
         {campaign && state && !loadingCampaign && (
           <div className="grid md:grid-cols-2 gap-6">
 
@@ -431,20 +477,15 @@ export default function Dashboard() {
               </div>
             </Card>
 
-            {/* ── Mission Preference ── */}
+            {/* ── Mission Preference (spend stage, NIP-gated) ── */}
             <Card title="Mission Preference">
               <div className="space-y-3">
                 <p className="text-xs text-parchment/60 leading-relaxed">
-                  Spend 1 NIP to influence which mission is assigned this round.
-                  Your preference is weighed against all players&apos; choices.
+                  Spend 1 NIP during the Spend phase to influence which mission
+                  is assigned this round.
                 </p>
 
-                {/* Dropdown — visually greyed out when locked */}
-                <div className={
-                  !hasNip || !isSpendStage
-                    ? "opacity-40 pointer-events-none select-none"
-                    : ""
-                }>
+                <div className={!hasNip || !isSpendStage ? "opacity-40 pointer-events-none select-none" : ""}>
                   <select
                     className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
                     value={missionPref}
@@ -457,7 +498,6 @@ export default function Dashboard() {
                   </select>
                 </div>
 
-                {/* Lock reason */}
                 {!hasNip && (
                   <p className="text-xs text-blood/70 italic">
                     ☠ No NIP — mission preference locked this round.
@@ -470,36 +510,122 @@ export default function Dashboard() {
                   </p>
                 )}
 
-                {/* Submit */}
                 <button
                   onClick={submitMissionPref}
                   disabled={!canSubmitPref || !prefChanged || !missionPref}
                   className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold transition-colors disabled:opacity-40"
                 >
-                  {submittingPref
-                    ? "Submitting…"
-                    : missionPrefSaved
-                      ? "Update preference (costs 1 NIP)"
-                      : "Submit preference (costs 1 NIP)"
-                  }
+                  {submittingPref ? "Submitting…" : missionPrefSaved ? "Update preference (1 NIP)" : "Submit preference (1 NIP)"}
                 </button>
 
                 {missionPrefSaved && (
                   <p className="text-xs text-brass/70">
-                    ✓ Current preference:{" "}
-                    {MISSION_PREF_OPTIONS.find(o => o.value === missionPrefSaved)?.label ?? missionPrefSaved}
+                    ✓ {MISSION_PREF_OPTIONS.find(o => o.value === missionPrefSaved)?.label ?? missionPrefSaved}
                   </p>
                 )}
-
                 {missionPrefStatus && (
-                  <p className={`text-xs ${
-                    missionPrefStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"
-                  }`}>
+                  <p className={`text-xs ${missionPrefStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
                     {missionPrefStatus}
                   </p>
                 )}
               </div>
             </Card>
+
+            {/* ── Movement (movement stage only) ── */}
+            {isMoveStage && (
+              <Card title="Submit Movement">
+                <div className="space-y-3">
+                  {moveSubmitted ? (
+                    <div className="space-y-2">
+                      <p className="text-sm text-brass">
+                        ✓ Move submitted — {moveToZone} / Sector {moveToSector}
+                      </p>
+                      <p className="text-xs text-parchment/45 italic">
+                        Conflicts will be detected when the Lead advances to the Conflicts stage.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-parchment/60 leading-relaxed">
+                        Choose your destination zone and sector. You may only move to an adjacent zone
+                        unless you pay {3} NIP for a Deep Strike to any zone.
+                      </p>
+
+                      <div>
+                        <label className="block text-xs text-parchment/60 mb-1">Destination zone</label>
+                        <select
+                          className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                          value={moveToZone}
+                          onChange={(e) => setMoveToZone(e.target.value)}
+                          disabled={submittingMove}
+                        >
+                          <option value="">— Select zone —</option>
+                          {mapZones.length > 0
+                            ? mapZones.map((z) => (
+                                <option key={z.key} value={z.key}>{z.name}</option>
+                              ))
+                            : [
+                                "vault_ruins","ash_wastes","halo_spire","sunken_manufactorum",
+                                "warp_scar_basin","obsidian_fields","signal_crater","xenos_forest",
+                              ].map(k => (
+                                <option key={k} value={k}>
+                                  {k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                                </option>
+                              ))
+                          }
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-parchment/60 mb-1">Sector</label>
+                        <div className="grid grid-cols-4 gap-2">
+                          {SECTORS.map((s) => (
+                            <button
+                              key={s}
+                              onClick={() => setMoveToSector(s)}
+                              disabled={submittingMove}
+                              className={`py-2 rounded border text-sm font-mono transition-colors disabled:opacity-40
+                                ${moveToSector === s
+                                  ? "border-brass bg-brass/20 text-brass"
+                                  : "border-brass/25 bg-void hover:border-brass/40 text-parchment/55"
+                                }`}
+                            >
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isDeepStrike}
+                          onChange={(e) => setIsDeepStrike(e.target.checked)}
+                          disabled={submittingMove}
+                        />
+                        <span className="text-sm">
+                          Deep Strike <span className="text-parchment/40 text-xs">(costs 3 NIP, reach any zone)</span>
+                        </span>
+                      </label>
+
+                      <button
+                        onClick={submitMove}
+                        disabled={submittingMove || !moveToZone}
+                        className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold transition-colors disabled:opacity-40"
+                      >
+                        {submittingMove ? "Submitting…" : "Submit Move"}
+                      </button>
+
+                      {moveStatus && (
+                        <p className={`text-xs ${moveStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
+                          {moveStatus}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              </Card>
+            )}
 
             {/* ── Catch-up / Underdog ── */}
             <Card title="Catch-up Choice (Underdog)">
@@ -521,37 +647,20 @@ export default function Dashboard() {
               </p>
             </Card>
 
-            {/* ── Recaps & Whispers ── */}
-            <Card title="Recaps & Whispers">
-              <div className="space-y-3">
-                {(role === "lead" || role === "admin") && (
-                  <button
-                    className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                    onClick={makePublicRecapPrompt}
-                  >
-                    Copy PUBLIC recap prompt (Lead)
-                  </button>
-                )}
+            {/* ── War Bulletin prompt (lead only) ── */}
+            {(role === "lead" || role === "admin") && (
+              <Card title="War Bulletin">
+                <p className="text-xs text-parchment/60 mb-3">
+                  Generate an AI War Bulletin prompt summarising public campaign events for this round.
+                </p>
                 <button
-                  className="w-full px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm"
-                  onClick={makePrivateWhisperPrompt}
+                  className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
+                  onClick={makePublicRecapPrompt}
                 >
-                  Copy PRIVATE whisper prompt (You)
+                  ✦ Copy War Bulletin prompt
                 </button>
-              </div>
-            </Card>
-
-            {/* ── Quick Links ── */}
-            <Card title="Quick Links">
-              <div className="flex flex-wrap gap-3">
-                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                  href={`/map?campaign=${campaignId}`}>Map</a>
-                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                  href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
-                <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                  href={`/ledger?campaign=${campaignId}`}>Ledger</a>
-              </div>
-            </Card>
+              </Card>
+            )}
 
           </div>
         )}
