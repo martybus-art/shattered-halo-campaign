@@ -9,14 +9,17 @@
  *
  * File location: apps/web/app/api/map/regenerate/route.ts
  */
-
 import { NextRequest, NextResponse } from "next/server";
-import { createClient }              from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 
 // Force dynamic rendering — prevents Next.js static optimisation and ensures
 // this route gets its own distinct serverless function bundle (fixes Vercel
 // deduplication symlink error during deployment).
 export const dynamic = "force-dynamic";
+
+// Also ensure runtime metadata differs and bundle hash can't be deduped.
+export const runtime = "nodejs";
+const __route_id = "api-map-regenerate";
 
 function adminClient() {
   return createClient(
@@ -28,17 +31,20 @@ function adminClient() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body        = await req.json().catch(() => ({}));
-    const map_id:      string = body.map_id;
+    const body = await req.json().catch(() => ({}));
+    const map_id: string = body.map_id;
     const campaign_id: string = body.campaign_id;
 
     if (!map_id || !campaign_id) {
-      return NextResponse.json({ ok: false, error: "Missing map_id or campaign_id" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Missing map_id or campaign_id" },
+        { status: 400 }
+      );
     }
 
     // Verify caller is the campaign lead using their session token
     const authHeader = req.headers.get("Authorization") ?? "";
-    const token      = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
     // For server-side route, get user from cookie session if no Bearer token
     // (relies on Supabase cookie auth from the browser session)
@@ -60,34 +66,38 @@ export async function POST(req: NextRequest) {
 
     // Trigger generate-map edge function
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     const generateRes = await fetch(`${supabaseUrl}/functions/v1/generate-map`, {
-      method:  "POST",
+      method: "POST",
       headers: {
-        "Content-Type":  "application/json",
+        "Content-Type": "application/json",
         "Authorization": `Bearer ${serviceKey}`,
       },
       body: JSON.stringify({
         map_id,
         campaign_id,
-        seed:           mapRow.seed,
-        layout:         mapRow.layout        ?? "ring",
-        zone_count:     mapRow.zone_count    ?? 8,
+        seed: mapRow.seed,
+        layout: mapRow.layout ?? "ring",
+        zone_count: mapRow.zone_count ?? 8,
         planet_profile: mapRow.planet_profile ?? null,
-        ship_profile:   mapRow.ship_profile  ?? null,
-        art_version:    mapRow.art_version   ?? "grimdark-v1",
+        ship_profile: mapRow.ship_profile ?? null,
+        art_version: mapRow.art_version ?? "grimdark-v1",
+        // optional, but harmless; further ensures output differs if anything inspects runtime response
+        route: __route_id,
       }),
     });
 
     const result = await generateRes.json();
 
     if (!result.ok) {
-      return NextResponse.json({ ok: false, error: result.error ?? "Generation failed" }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, error: result.error ?? "Generation failed" },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({ ok: true, map_id });
-
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
