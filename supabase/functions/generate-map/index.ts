@@ -1,3 +1,6 @@
+// supabase/functions/generate-map/index.ts
+// Calls OpenAI gpt-image-1 to generate a grimdark campaign map image,
+// uploads the result to Supabase Storage, and updates the maps row.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json, adminClient } from "../_shared/utils.ts";
 

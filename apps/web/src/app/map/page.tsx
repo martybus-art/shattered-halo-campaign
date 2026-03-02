@@ -1,3 +1,6 @@
+// apps/web/src/app/map/page.tsx
+// Tactical Hololith — campaign map viewer with zone overlay, fog of war,
+// and per-zone sector grid. Campaign ID read from ?campaign= URL param.
 "use client";
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
