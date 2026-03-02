@@ -13,6 +13,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient }              from "@supabase/supabase-js";
 
+// Force dynamic rendering — prevents Next.js static optimisation and ensures
+// this route gets its own distinct serverless function bundle (fixes Vercel
+// deduplication symlink error during deployment).
+export const dynamic = "force-dynamic";
+
 function adminClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
