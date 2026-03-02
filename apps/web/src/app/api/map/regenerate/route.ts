@@ -15,14 +15,7 @@ import { createClient } from "@supabase/supabase-js";
 // Force dynamic rendering — prevents Next.js static optimisation and ensures
 // this route gets its own distinct serverless function bundle (fixes Vercel
 // deduplication symlink error during deployment).
-// Also ensure runtime metadata differs and bundle hash can't be deduped.
-export const runtime = "nodejs";
-export const preferredRegion = "sfo1";
-export const revalidate = 0;
 export const dynamic = "force-dynamic";
-
-
-const __route_id = "api-map-regenerate";
 
 function adminClient() {
   return createClient(
@@ -41,7 +34,7 @@ export async function POST(req: NextRequest) {
     if (!map_id || !campaign_id) {
       return NextResponse.json(
         { ok: false, error: "Missing map_id or campaign_id" },
-        { status: 400 }
+        { status: 400, headers: { "x-route-id": "api-map-regenerate" } }
       );
     }
 
@@ -61,7 +54,10 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
 
     if (mapErr || !mapRow) {
-      return NextResponse.json({ ok: false, error: "Map not found" }, { status: 404 });
+      return NextResponse.json(
+        { ok: false, error: "Map not found" },
+        { status: 404, headers: { "x-route-id": "api-map-regenerate" } }
+      );
     }
 
     // Reset status to pending before triggering
@@ -86,8 +82,6 @@ export async function POST(req: NextRequest) {
         planet_profile: mapRow.planet_profile ?? null,
         ship_profile: mapRow.ship_profile ?? null,
         art_version: mapRow.art_version ?? "grimdark-v1",
-        // optional, but harmless; further ensures output differs if anything inspects runtime response
-        route: __route_id,
       }),
     });
 
@@ -96,13 +90,19 @@ export async function POST(req: NextRequest) {
     if (!result.ok) {
       return NextResponse.json(
         { ok: false, error: result.error ?? "Generation failed" },
-        { status: 500 }
+        { status: 500, headers: { "x-route-id": "api-map-regenerate" } }
       );
     }
 
-    return NextResponse.json({ ok: true, map_id });
+    return NextResponse.json(
+      { ok: true, map_id },
+      { headers: { "x-route-id": "api-map-regenerate" } }
+    );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: msg },
+      { status: 500, headers: { "x-route-id": "api-map-regenerate" } }
+    );
   }
 }
