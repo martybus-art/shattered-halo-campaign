@@ -374,24 +374,16 @@ export default function CampaignsPage() {
     ].join("\n");
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model:      "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages:   [{ role: "user", content: prompt }],
-        }),
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("Session expired — please refresh.");
+
+      const { data, error } = await supabase.functions.invoke("generate-narrative", {
+        body: { prompt },
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
-
-      const data = await response.json();
-      const text = (data.content as { type: string; text: string }[])
-        ?.filter(b => b.type === "text")
-        .map(b => b.text)
-        .join("") ?? "";
-
-      if (!text) throw new Error("No narrative returned");
-      setCampaignNarrative(text.trim());
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "No narrative returned");
+      setCampaignNarrative(data.text ?? "");
     } catch (e: any) {
       addToast("error", "Narrative generation failed", e?.message ?? String(e));
     } finally {
