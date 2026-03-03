@@ -1,6 +1,15 @@
 // supabase/functions/create-campaign/index.ts
-// Creates a campaign row, lead membership, pending invites, a maps row,
-// and fires generate-map asynchronously to produce the AI map image.
+// Creates a campaign, adds the creator as lead, stores pending invites,
+// creates a map record, and fires generate-map as a background task.
+//
+// changelog:
+//   2026-03-03 — added campaign_narrative field (stored on campaigns row);
+//                added layout/zone_count/biome/mixed_biomes params;
+//                added map record creation (maps table insert);
+//                added background call to generate-map edge function so the
+//                map image starts generating immediately after campaign creation;
+//                returns map_id in response so frontend can poll MapImageDisplay.
+
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json, requireUser, adminClient } from "../_shared/utils.ts";
 
@@ -16,21 +25,24 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
 
-  const template_id:     string          = body?.template_id;
-  const campaign_name:   string          = body?.campaign_name;
-  const player_emails:   string[]        = Array.isArray(body?.player_emails) ? body.player_emails : [];
-  const ruleset_id:      string | null   = body?.ruleset_id ?? null;
-  const rules_overrides: Record<string, unknown> = body?.rules_overrides ?? {};
+  // ── Extract params ────────────────────────────────────────────────────────
 
-  // ── Map generation parameters ────────────────────────────────────────────
-  // layout + zone_count come from the campaigns page layout selector.
-  // legacy_map_id: if a caller passes a pre-existing map row UUID we skip
-  // creation and just link it. In normal campaign creation this is null.
-  const layout:        string       = body?.layout      ?? "ring";
-  const zone_count:    number       = body?.zone_count  ?? 8;
-  const legacy_map_id: string | null = body?.map_id     ?? null;
+  const template_id         = body?.template_id;
+  const campaign_name       = body?.campaign_name;
+  const campaign_narrative  = body?.campaign_narrative ?? "";
+  const player_emails       = Array.isArray(body?.player_emails) ? body.player_emails : [];
 
-  // ── Validation ────────────────────────────────────────────────────────────
+  const ruleset_id          = body?.ruleset_id ?? null;
+  const rules_overrides     = body?.rules_overrides ?? {};
+  const map_id_override     = body?.map_id ?? null;   // allow pre-existing map (legacy)
+
+  // Map generation params
+  const layout              = body?.layout        ?? "ring";
+  const zone_count          = Number(body?.zone_count ?? 8);
+  const biome               = body?.biome         ?? "ash_wastes";
+  const mixed_biomes        = Boolean(body?.mixed_biomes ?? false);
+
+  // ── Validate ──────────────────────────────────────────────────────────────
 
   if (!template_id || !campaign_name) {
     return json(400, { ok: false, error: "Missing template_id or campaign_name" });
@@ -39,10 +51,10 @@ Deno.serve(async (req) => {
     return json(400, { ok: false, error: "rules_overrides must be an object" });
   }
 
-  // Validate template
+  // Validate template exists
   const { data: tpl, error: tplErr } = await admin
     .from("templates").select("id").eq("id", template_id).maybeSingle();
-  if (tplErr) return json(500, { ok: false, error: "Template lookup failed",  details: tplErr.message });
+  if (tplErr) return json(500, { ok: false, error: "Template lookup failed", details: tplErr.message });
   if (!tpl)   return json(400, { ok: false, error: "Template not found" });
 
   // Validate ruleset if provided
@@ -53,19 +65,20 @@ Deno.serve(async (req) => {
     if (!rs)   return json(400, { ok: false, error: "Ruleset not found" });
   }
 
-  // ── Create campaign row (map_id set to null — patched below) ─────────────
+  // ── Create campaign ───────────────────────────────────────────────────────
 
   const { data: campaign, error: cErr } = await admin
     .from("campaigns")
     .insert({
       template_id,
-      name:          String(campaign_name),
-      phase:         1,
-      round_number:  1,
-      instability:   0,
+      name:               String(campaign_name),
+      campaign_narrative: String(campaign_narrative),
+      phase:              1,
+      round_number:       0,   // 0 = not yet started; start-campaign sets this to 1
+      instability:        0,
       ruleset_id,
       rules_overrides,
-      map_id:        null,   // patched after maps row is created
+      map_id:             map_id_override,
     })
     .select()
     .single();
@@ -74,7 +87,7 @@ Deno.serve(async (req) => {
     return json(500, { ok: false, error: "Campaign insert failed", details: cErr?.message });
   }
 
-  // ── Lead membership ───────────────────────────────────────────────────────
+  // ── Add creator as lead ───────────────────────────────────────────────────
 
   const { error: memErr } = await admin.from("campaign_members").insert({
     campaign_id: campaign.id,
@@ -85,7 +98,7 @@ Deno.serve(async (req) => {
     return json(500, { ok: false, error: "Lead membership insert failed", details: memErr.message });
   }
 
-  // ── Pending invites ───────────────────────────────────────────────────────
+  // ── Store pending invites ─────────────────────────────────────────────────
 
   const invites = player_emails
     .map((e: any) => String(e).trim().toLowerCase())
@@ -99,87 +112,87 @@ Deno.serve(async (req) => {
     }
   }
 
-  // ── Create maps row + trigger generation ─────────────────────────────────
-  //
-  // Normal flow:  create a maps row in "pending" state, patch campaign.map_id,
-  //               then invoke generate-map via EdgeRuntime.waitUntil so the HTTP
-  //               response returns immediately without waiting for OpenAI.
-  //
-  // Legacy flow:  caller passed an existing map_id — just link it and skip.
+  // ── Create map record ─────────────────────────────────────────────────────
+  // Creates the map row immediately so generate-map has a target to update.
 
-  let resolved_map_id: string | null = legacy_map_id;
+  let newMapId: string | null = map_id_override;
 
-  if (!legacy_map_id) {
-    const seed = crypto.randomUUID();
-
+  if (!map_id_override) {
     const { data: mapRow, error: mapErr } = await admin
       .from("maps")
       .insert({
-        name:              String(campaign_name),
-        layout,
-        zone_count,
-        seed,
-        generation_status: "pending",
-        art_version:       "grimdark-v2",
+        campaign_id:          campaign.id,
+        name:                 `${String(campaign_name)} Map`,
+        description:          campaign_narrative ? String(campaign_narrative).slice(0, 200) : null,
+        map_json:             {},
+        visibility:           "private",
+        recommended_players:  zone_count,
+        max_players:          zone_count,
+        created_by:           user.id,
+        status:               "pending",
       })
       .select("id")
       .single();
 
     if (mapErr || !mapRow) {
-      // Non-fatal: campaign is usable without a map, log and continue
-      console.error("create-campaign: maps row insert failed —", mapErr?.message);
+      // Non-fatal — campaign was created, map generation just won't start
+      console.error("[create-campaign] Map insert failed:", mapErr?.message);
     } else {
-      resolved_map_id = mapRow.id;
-      console.log("create-campaign: maps row created —", resolved_map_id);
+      newMapId = mapRow.id;
 
-      // Patch campaign with its map_id
-      const { error: patchErr } = await admin
+      // Link the map back to the campaign
+      await admin
         .from("campaigns")
-        .update({ map_id: resolved_map_id })
+        .update({ map_id: newMapId })
         .eq("id", campaign.id);
-
-      if (patchErr) {
-        console.error("create-campaign: campaign map_id patch failed —", patchErr.message);
-      }
-
-      // Fire generate-map asynchronously — response returns to the user
-      // immediately while generation runs in the background.
-      // MapImageDisplay polls every 5 s and will show the image once complete.
-      EdgeRuntime.waitUntil(
-        admin.functions
-          .invoke("generate-map", {
-            body: {
-              map_id:      resolved_map_id,
-              campaign_id: campaign.id,
-              seed,
-              layout,
-              zone_count,
-              art_version: "grimdark-v2",
-            },
-          })
-          .then(({ error: genErr }) => {
-            if (genErr) {
-              console.error(
-                "create-campaign: generate-map invocation failed —",
-                genErr.message ?? String(genErr),
-              );
-            } else {
-              console.log("create-campaign: generate-map invoked OK — map", resolved_map_id);
-            }
-          })
-      );
     }
-  } else {
-    // Legacy: pre-existing map_id passed in, just link it
-    await admin
-      .from("campaigns")
-      .update({ map_id: legacy_map_id })
-      .eq("id", campaign.id);
   }
+
+  // ── Fire generate-map in background ──────────────────────────────────────
+  // Uses EdgeRuntime.waitUntil so the response is returned immediately while
+  // generation continues. Falls back to a detached fetch if not available.
+
+  if (newMapId) {
+    const supabaseUrl     = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceRoleKey  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SERVICE_ROLE_KEY") ?? "";
+
+    const generatePayload = JSON.stringify({
+      map_id:             newMapId,
+      campaign_id:        campaign.id,
+      layout,
+      zone_count,
+      biome,
+      mixed_biomes,
+      campaign_name:      String(campaign_name),
+      campaign_narrative: String(campaign_narrative),
+      art_version:        "grimdark-v2",
+    });
+
+    const generateFetch = fetch(`${supabaseUrl}/functions/v1/generate-map`, {
+      method:  "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${serviceRoleKey}`,
+        "apikey":        serviceRoleKey,
+      },
+      body: generatePayload,
+    }).catch((e) => {
+      console.error("[create-campaign] Background generate-map call failed:", e?.message);
+    });
+
+    // Use EdgeRuntime.waitUntil if available (Supabase edge runtime v1.36+)
+    try {
+      (globalThis as any).EdgeRuntime?.waitUntil?.(generateFetch);
+    } catch {
+      // waitUntil not available — fetch is already in flight, ignore
+    }
+  }
+
+  // ── Return ────────────────────────────────────────────────────────────────
 
   return json(200, {
     ok:          true,
     campaign_id: campaign.id,
-    map_id:      resolved_map_id,
+    map_id:      newMapId,
   });
 });

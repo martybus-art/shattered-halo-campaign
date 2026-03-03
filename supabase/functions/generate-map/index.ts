@@ -1,309 +1,299 @@
 // supabase/functions/generate-map/index.ts
-// Calls OpenAI gpt-image-1 to generate a grimdark campaign map image,
-// uploads the result to Supabase Storage, and updates the maps row.
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { corsHeaders, json, adminClient } from "../_shared/utils.ts";
+// Generates a campaign map image via OpenAI gpt-image-1 and stores it in
+// Supabase Storage. Called by create-campaign (background) and directly for
+// regeneration requests.
+//
+// changelog:
+//   2026-03-03 — Completely rewrote image prompts to produce top-down tactical
+//                map imagery instead of 3D rendered scenes. Each layout now has
+//                a dedicated prompt that emphasises 2D overhead game-map aesthetic,
+//                zone delineation, and Warhammer 40K grimdark visual style.
+//                Added campaign_name and campaign_narrative params — these are
+//                injected into the OpenAI prompt for thematic image generation.
+//                Biome-specific prompt modifiers added for all 12 biomes.
 
-// ── Zone name pools ─────────────────────────────────────────────────────────
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
-/** Fixed zone names for planet-based layouts (ring/continent/radial). */
-const PLANET_ZONE_NAMES = [
-  "Vault Ruins",
-  "Ash Wastes",
-  "Halo Spire",
-  "Sunken Manufactorum",
-  "Warp Scar Basin",
-  "Obsidian Fields",
-  "Signal Crater",
-  "Xenos Forest",
-  "Blighted Reach",
-  "Iron Sanctum",
-  "Null Fields",
-  "Ghost Harbor",
-];
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-/** Zone names for ship_line layout — compartments, not terrain. */
-const SHIP_ZONE_NAMES = [
-  "Command Sanctum",
-  "Macro-Battery Deck",
-  "Gellar Chapel",
-  "Reactor Reliquary",
-  "Hangar Crypts",
-  "Munitorum Vaults",
-  "Vox Spire",
-  "Apothecarion",
-  "Shrine of Oaths",
-  "Plasma Conduits",
-  "Enginseer Bay",
-  "Breach Corridor",
-];
+type Layout = "ring" | "continent" | "radial" | "ship_line";
 
-/** Short visual descriptions per biome key — used in prompts only (no text in image). */
-const BIOME_DESCS: Record<string, string> = {
-  gothic_ruins:           "gothic cathedral ruins, broken arches, shattered stained glass, gargoyles",
-  ash_wastes:             "ash wastes, toxic dust storms, desolate grey plains, skeletal trees",
-  xenos_forest:           "alien xenos forest, bioluminescent plants, chitinous growths, spore clouds",
-  industrial_manufactorum:"industrial manufactorum, forge chimneys, rivers of molten metal, catwalks",
-  warp_scar:              "warp scar, reality tears, impossible geometry, purple-black rifts",
-  obsidian_fields:        "obsidian fields, black glass plains, volcanic debris, heat shimmer",
-  signal_crater:          "signal crater, crashed voidship wreckage, massive antenna arrays",
-  ghost_harbor:           "ghost harbor, flooded ruined docks, sunken ships, thick fog",
-  blighted_reach:         "blighted reach, corrupted earth, diseased growths, decay and rust",
-  null_fields:            "null fields, dead grey static zones, anti-psychic dead zones",
-  iron_sanctum:           "iron sanctum, fortress walls, ancient bunkers, adamantium gates",
-  halo_spire:             "halo spire, towering megastructure columns, ring architecture, void vistas",
+// ── Biome visual descriptors ──────────────────────────────────────────────────
+// These are injected into the layout prompt to flavour terrain appearance.
+
+const BIOME_DESCRIPTORS: Record<string, string> = {
+  gothic_ruins:            "crumbling Gothic cathedral spires, shattered arches, collapsed nave vaults, pale dust and ash, Imperial eagles half-buried in rubble",
+  ash_wastes:              "grey volcanic ash plains, toxic dust dunes, half-buried machinery, acid rain craters, choking particulate haze",
+  xenos_forest:            "bioluminescent alien vegetation, towering xenos tree-forms with glowing amber sap, phosphorescent spore clouds, fleshy twisted root networks",
+  industrial_manufactorum: "vast forge-works, cooling towers belching black smoke, rail-lines, cogitator banks, iron walkways over molten metal vats",
+  warp_scar:               "purple-black warp energy tears splitting the ground, daemonic faces in the rock, reality-bending geometry, floating debris and inverted terrain",
+  obsidian_fields:         "fields of razor-sharp black volcanic glass, mirror-like flat obsidian plains reflecting a sickly sky, scattered with cracked geode formations",
+  signal_crater:           "enormous meteorite impact craters, twisted metal antenna arrays, anomalous energy readings visible as glowing ground fissures",
+  ghost_harbor:            "flooded hab-blocks, rusting iron hulls of sunken ships, dark silty water reflecting a pale moon, spectral fog banks",
+  blighted_reach:          "diseased earth, Nurgle corruption spreading like rot across the terrain, bloated trees, pools of sickly green ichor, plague flies",
+  null_fields:             "dead grey earth where the warp cannot touch, flat featureless plains broken only by iron obelisks, oppressive silence, no shadows",
+  iron_sanctum:            "ancient iron fortress walls, buttressed ramparts, siege artillery emplacements, scarred blast walls, votive skulls on pikes",
+  halo_spire:              "the soaring needle-like structures of the megastructure's core, vertiginous views down through glass floors to the void below, ancient cogitator pylons",
 };
 
-// ── Deterministic shuffle ────────────────────────────────────────────────────
-
-function seededShuffle<T>(arr: T[], seed: string): T[] {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
-  }
-  const result = [...arr];
-  for (let i = result.length - 1; i > 0; i--) {
-    hash = ((hash << 5) - hash + i) | 0;
-    const j = Math.abs(hash) % (i + 1);
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
-}
-
-// ── Ship name generation ─────────────────────────────────────────────────────
-
-const SHIP_PREFIXES = ["Vengeful", "Penitent", "Iron", "Eclipsed", "Oathbound", "Saint's"];
-const SHIP_CORES    = ["Halo", "Reliquary", "Martyr", "Glaive", "Cathedral", "Cinder"];
-const SHIP_SUFFIXES = ["of Kharos", "of the Ninth", "of Silent Ash", "of the Void", "of Twilight"];
-
-function generateShipName(seed: string): string {
-  const shuffledPre = seededShuffle(SHIP_PREFIXES, seed + "pre");
-  const shuffledCor = seededShuffle(SHIP_CORES,    seed + "cor");
-  const shuffledSuf = seededShuffle(SHIP_SUFFIXES,  seed + "suf");
-  return `${shuffledPre[0]} ${shuffledCor[0]} ${shuffledSuf[0]}`;
-}
-
-// ── Prompt builder ───────────────────────────────────────────────────────────
-
-interface PlanetProfile {
-  mode: "uniform" | "mixed";
-  uniformBiome?: string;
-  biomes?: string[];
-}
-
-interface ShipProfile {
-  class: "Frigate" | "Cruiser" | "Battleship";
-  name: string;
-}
+// ── Layout prompts ────────────────────────────────────────────────────────────
+// All prompts are written to produce top-down 2D tactical map imagery.
 
 function buildPrompt(params: {
-  layout: string;
-  zoneCount: number;
-  zoneNames: string[];
-  planetProfile?: PlanetProfile;
-  shipProfile?: ShipProfile;
+  layout:             Layout;
+  zone_count:         number;
+  biome:              string;
+  mixed_biomes:       boolean;
+  campaign_name:      string;
+  campaign_narrative: string;
 }): string {
-  const { layout, zoneCount, zoneNames, planetProfile, shipProfile } = params;
+  const { layout, zone_count, biome, mixed_biomes, campaign_name, campaign_narrative } = params;
 
-  const LAYOUT_DESCS: Record<string, string> = {
-    ring:      `ring megastructure — ${zoneCount} distinct wedge or arc segments arranged in a halo circle`,
-    continent: `fractured continent — ${zoneCount} irregular plate-like regions separated by cracks, chasms, and lava flows`,
-    radial:    `radial spoke map — ${zoneCount} zones radiating outward from a central objective point like spokes on a wheel`,
-    ship_line: `ancient warship viewed top-down — ${zoneCount} compartments arranged linearly along the vessel hull from bow to stern`,
-  };
-  const layoutDesc = LAYOUT_DESCS[layout] ?? `campaign map with ${zoneCount} distinct regions`;
+  const biomeMod = mixed_biomes
+    ? "Each zone features a distinct terrain type — mix of ash wastes, gothic ruins, xenos forest, warp scars, and obsidian fields, each zone visually unique."
+    : (BIOME_DESCRIPTORS[biome] ?? "blasted industrial wasteland, corroded metal and scorched earth");
 
-  let climateBlock = "";
-  if (layout !== "ship_line") {
-    if (planetProfile?.mode === "uniform" && planetProfile.uniformBiome) {
-      const desc = BIOME_DESCS[planetProfile.uniformBiome] ?? planetProfile.uniformBiome;
-      climateBlock = `Planet climate (uniform): all regions share a consistent theme of ${desc}.`;
-    } else {
-      const biomes = planetProfile?.biomes ?? ["gothic_ruins", "ash_wastes", "industrial_manufactorum", "warp_scar"];
-      const descs  = biomes.map(b => BIOME_DESCS[b] ?? b).join("; ");
-      climateBlock = `Planet climate (mixed biomes): distribute these visual themes across the ${zoneCount} regions — ${descs}.`;
+  const narrativeContext = campaign_narrative.trim()
+    ? `The campaign setting: "${campaign_narrative.trim()}". `
+    : "";
+
+  const campaignNameContext = campaign_name.trim()
+    ? `This warzone is known as "${campaign_name}". `
+    : "";
+
+  const sharedStyle = [
+    "Warhammer 40,000 official art style.",
+    "Top-down overhead bird's-eye view, flat 2D tactical map perspective.",
+    "Hand-painted illustrated campaign map aesthetic — rich ink wash textures, painted borders between zones.",
+    "Dark and grimdark colour palette: black, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
+    "Clearly delineated zone territories separated by visible borders — roads, walls, rivers, energy barriers, or terrain breaks.",
+    "Imperial iconography: aquila symbols, purity seals, skull motifs visible on structures.",
+    "Battle damage visible — craters, scorch marks, ruined buildings.",
+    "No text overlays. No UI elements. No photo-realistic renders. No 3D perspective.",
+    "Pure overhead 2D illustrated map — painterly, detailed, grimdark.",
+  ].join(" ");
+
+  switch (layout) {
+    case "ring": {
+      return [
+        `Top-down 2D campaign map of a curved section of a Warhammer 40K Halo megastructure ring.`,
+        `${narrativeContext}${campaignNameContext}`,
+        `${zone_count} clearly separated battle zones arranged along the curve of the ring arc, each zone visible as a distinct territory from directly above.`,
+        `Terrain: ${biomeMod}`,
+        `The ring arc curves across the image horizontally. The inner edge faces the central void — visible as a black abyss.`,
+        `The outer edge shows the megastructure's superstructure frame — iron girders, plasma conduits, atmospheric vents.`,
+        `Chaos corruption bleeds through several zones — purple warp-energy ground cracks, eye-of-terror sigils burned into the terrain.`,
+        `Imperial fortifications visible as bastions and trench lines along zone edges.`,
+        `Atmospheric haze, plasma glow from the ring's power conduits visible as amber light along the inner edge.`,
+        sharedStyle,
+      ].join(" ");
+    }
+
+    case "continent": {
+      return [
+        `Top-down 2D campaign map of a shattered continent on a Warhammer 40K world, viewed directly from above.`,
+        `${narrativeContext}${campaignNameContext}`,
+        `${zone_count} clearly delineated territorial zones, each zone a distinct landmass plate separated from its neighbours by chasms, lava channels, collapsed terrain, or fortification lines.`,
+        `Terrain: ${biomeMod}`,
+        `The continent has a ragged coastline or void-cliff edge on its perimeter. Rivers of lava or toxic sludge form natural zone dividers.`,
+        `Imperial settlements visible in contested zones — hexagonal hab-blocks, forge-stacks, cathedral spires.`,
+        `Zone borders are marked by terrain features — not drawn lines. Natural breaks in terrain delineate each territory.`,
+        `Chaos taint visible as spreading purple-black corruption patches across several zones.`,
+        sharedStyle,
+      ].join(" ");
+    }
+
+    case "radial": {
+      return [
+        `Top-down 2D campaign map in a radial spoke pattern, viewed directly from above — a Warhammer 40K warzone.`,
+        `${narrativeContext}${campaignNameContext}`,
+        `${zone_count} zones arranged radially — a central hub objective zone surrounded by spoke corridors extending outward to outer ring zones.`,
+        `Terrain: ${biomeMod}`,
+        `The central objective zone is the most heavily fortified and contested — a ruined Mechanicus shrine, orbital defence laser emplacement, or ancient xenos monolith at the exact centre.`,
+        `Each spoke corridor is a distinct battle zone flanked by ruins and terrain obstacles.`,
+        `The outer zones are more wild and less fortified but equally dangerous.`,
+        `Chaos corruption radiates outward from the centre — tainted ground, warped architecture.`,
+        sharedStyle,
+      ].join(" ");
+    }
+
+    case "ship_line": {
+      return [
+        `Top-down 2D tactical map of the interior of a colossal Warhammer 40K Gothic warship, viewed from directly above — like a building floor plan.`,
+        `${narrativeContext}${campaignNameContext}`,
+        `The warship hull is arranged bow (left) to stern (right) across the full width of the image.`,
+        `${zone_count} clearly distinct interior combat zones along the hull — each zone is a major ship compartment: bridge citadel, plasma reactor chambers, enginarium, torpedo bays, barracks, medicae, sanctum, and void-lock bays.`,
+        `Each compartment is separated by thick armoured bulkheads and blast doors, clearly visible as thick dark walls.`,
+        `Interior aesthetic: dark corroded iron deckplates, cathedral vaulted ceilings seen from above, glowing amber cogitator console banks, servo-skull stations, hanging incense braziers, purity scroll dispensers, weapon lockers.`,
+        `The ship exterior hull outline is visible as a massive iron silhouette against the void of space — stars and nebula glow visible around the hull outline.`,
+        `Battle damage within compartments: blast scorches, breached hull sections showing stars through holes, blood smears, toppled statues.`,
+        `Each combat zone has multiple entry/exit points — corridors, access hatches, blast doors.`,
+        `Imperial Aquila marked on the bridge section. Engine plasma glow (deep blue-white) visible at stern end.`,
+        sharedStyle,
+      ].join(" ");
+    }
+
+    default: {
+      return [
+        `Top-down 2D tactical Warhammer 40K campaign map with ${zone_count} distinct battle zones.`,
+        `${narrativeContext}`,
+        `Terrain: ${biomeMod}`,
+        sharedStyle,
+      ].join(" ");
     }
   }
-
-  let shipBlock = "";
-  if (layout === "ship_line" && shipProfile) {
-    shipBlock = `Warship setting: depict the ${shipProfile.class}-class vessel "${shipProfile.name}" as the map silhouette — gothic buttresses, armored plating, void-blackened metal, interior corridor lighting, NO readable markings.`;
-  }
-
-  const zoneFlavor = zoneNames.join(", ");
-
-  return [
-    `Create a grimdark gothic sci-fi campaign map background.`,
-    `ABSOLUTE RULE: NO text, NO letters, NO numbers, NO words, NO labels, NO UI, NO compass rose, NO readable symbols anywhere in the image.`,
-    ``,
-    `Art style: Warhammer 40K-inspired top-down map plate, cathedral-gothic industrial ruins, weathered stone and metal, soot, ash, embers, corroded brass fittings, sickly green lumens, painterly illustration.`,
-    ``,
-    // ── READABILITY DIRECTIVES — replaces old "dark atmospheric tones" ──────
-    `Lighting & readability (CRITICAL): lifted midtones, balanced contrast, clearly visible surface detail across every region.`,
-    `Do NOT crush the blacks into solid darkness.`,
-    `Do NOT use heavy atmospheric fog, smoke, or haze that obscures zone boundaries or makes regions unreadable.`,
-    `Do NOT use heavy vignetting that darkens the edges into illegibility.`,
-    `Zone boundaries MUST be readable at a distance — use physical dividers: trenches, cracks, lava rivers, ruined walls, bulkheads, or structural fissures. Never use darkness or fog as the divider.`,
-    `The overall image should feel dark-toned and grimdark in palette, but NOT muddy — every surface texture must be legible.`,
-    ``,
-    `Composition: ${layoutDesc}. The ${zoneCount} regions must be clearly separated by visible physical boundaries. Boundaries must remain readable even in the darkest zones.`,
-    ``,
-    climateBlock,
-    shipBlock,
-    ``,
-    `Zone visual flavor cues (for texture and lighting variety only — NO text in image): ${zoneFlavor}.`,
-    ``,
-    `Final reminder: absolutely no letters, words, numbers, compass markings, or any readable content. Midtones must be lifted — dark but readable, never muddy.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
-// ── Cache key builder ────────────────────────────────────────────────────────
+// ── Handler ───────────────────────────────────────────────────────────────────
 
-function buildCacheKey(params: {
-  artVersion: string;
-  seed: string;
-  layout: string;
-  zoneCount: number;
-  planetProfile?: PlanetProfile;
-  shipProfile?: ShipProfile;
-}): string {
-  const { artVersion, seed, layout, zoneCount, planetProfile, shipProfile } = params;
-  const parts = [artVersion, seed, layout, String(zoneCount)];
-  if (planetProfile) parts.push(JSON.stringify(planetProfile));
-  if (shipProfile)   parts.push(JSON.stringify(shipProfile));
-  return parts.join("|");
-}
-
-// ── Main handler ─────────────────────────────────────────────────────────────
-
-Deno.serve(async (req) => {
+serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (req.method !== "POST")   return json(405, { ok: false, error: "Method not allowed" });
-
-  const openAiKey = Deno.env.get("OPENAI_API_KEY");
-  if (!openAiKey) return json(500, { ok: false, error: "OPENAI_API_KEY not configured" });
-
-  const body = await req.json().catch(() => ({}));
-
-  const map_id:         string                    = body.map_id;
-  const campaign_id:    string                    = body.campaign_id;
-  const seed:           string                    = body.seed ?? map_id;
-  const layout:         string                    = body.layout ?? "ring";
-  const zone_count:     number                    = body.zone_count ?? 8;
-  // Bumped to grimdark-v2 so old dark cached maps are NOT reused for new generations
-  const art_version:    string                    = body.art_version ?? "grimdark-v2";
-  const planet_profile: PlanetProfile | undefined = body.planet_profile;
-  let   ship_profile:   ShipProfile   | undefined = body.ship_profile;
-
-  if (!map_id)      return json(400, { ok: false, error: "Missing map_id" });
-  if (!campaign_id) return json(400, { ok: false, error: "Missing campaign_id" });
-
-  const admin = adminClient();
-
-  if (layout === "ship_line" && ship_profile && !ship_profile.name) {
-    ship_profile = { ...ship_profile, name: generateShipName(seed) };
-  }
-
-  const cacheKey = buildCacheKey({
-    artVersion: art_version,
-    seed,
-    layout,
-    zoneCount:     zone_count,
-    planetProfile: planet_profile,
-    shipProfile:   ship_profile,
-  });
-
-  const { data: cachedMap } = await admin
-    .from("maps")
-    .select("id, bg_image_path, image_path")
-    .eq("cache_key", cacheKey)
-    .eq("generation_status", "complete")
-    .neq("id", map_id)
-    .maybeSingle();
-
-  if (cachedMap?.bg_image_path) {
-    await admin.from("maps").update({
-      bg_image_path:     cachedMap.bg_image_path,
-      image_path:        cachedMap.image_path ?? cachedMap.bg_image_path,
-      generation_status: "complete",
-      cache_key:         cacheKey,
-      art_version,
-    }).eq("id", map_id);
-
-    return json(200, { ok: true, map_id, cached: true, image_path: cachedMap.bg_image_path });
-  }
-
-  await admin.from("maps").update({
-    generation_status: "generating",
-    cache_key:         cacheKey,
-    art_version,
-    layout,
-    zone_count,
-    planet_profile: planet_profile ?? null,
-    ship_profile:   ship_profile   ?? null,
-    seed,
-  }).eq("id", map_id);
+  if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
 
   try {
-    const namePool  = layout === "ship_line" ? SHIP_ZONE_NAMES : PLANET_ZONE_NAMES;
-    const zoneNames = seededShuffle(namePool, seed).slice(0, zone_count);
-    const prompt    = buildPrompt({ layout, zoneCount: zone_count, zoneNames, planetProfile: planet_profile, shipProfile: ship_profile });
+    // Auth — allow both authenticated calls and service-role background calls
+    let userId: string | null = null;
+    const authHeader = req.headers.get("Authorization");
 
-    console.log("generate-map: calling OpenAI gpt-image-1");
-    console.log("generate-map: layout =", layout, "zones =", zone_count, "art_version =", art_version);
+    if (authHeader) {
+      const result = await requireUser(req);
+      if (result?.user) userId = result.user.id;
+    }
 
-    const aiRes = await fetch("https://api.openai.com/v1/images/generations", {
+    const admin = adminClient();
+
+    const body = await req.json().catch(() => ({}));
+    const {
+      map_id,
+      campaign_id,
+      layout             = "ring",
+      zone_count         = 8,
+      biome              = "ash_wastes",
+      mixed_biomes       = false,
+      campaign_name      = "",
+      campaign_narrative = "",
+    } = body as {
+      map_id?:             string;
+      campaign_id?:        string;
+      layout?:             Layout;
+      zone_count?:         number;
+      biome?:              string;
+      mixed_biomes?:       boolean;
+      campaign_name?:      string;
+      campaign_narrative?: string;
+    };
+
+    if (!map_id)      return json(400, { ok: false, error: "map_id required" });
+    if (!campaign_id) return json(400, { ok: false, error: "campaign_id required" });
+
+    // If authenticated user, verify they are lead/admin of this campaign
+    if (userId) {
+      const { data: mem } = await admin
+        .from("campaign_members")
+        .select("role")
+        .eq("campaign_id", campaign_id)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (!mem || !["lead", "admin"].includes(mem.role)) {
+        return json(403, { ok: false, error: "Only the campaign Lead can regenerate the map." });
+      }
+    }
+
+    // Mark map as generating
+    await admin.from("maps").update({ status: "generating" }).eq("id", map_id);
+
+    // Build the OpenAI prompt
+    const prompt = buildPrompt({
+      layout:             layout as Layout,
+      zone_count,
+      biome,
+      mixed_biomes,
+      campaign_name,
+      campaign_narrative,
+    });
+
+    console.log(`[generate-map] campaign=${campaign_id} map=${map_id} layout=${layout} zones=${zone_count}`);
+    console.log(`[generate-map] prompt length=${prompt.length}`);
+
+    // Call OpenAI gpt-image-1
+    const openaiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!openaiKey) {
+      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      return json(500, { ok: false, error: "OpenAI API key not configured" });
+    }
+
+    const imageResp = await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST",
       headers: {
         "Content-Type":  "application/json",
-        "Authorization": `Bearer ${openAiKey}`,
+        "Authorization": `Bearer ${openaiKey}`,
       },
       body: JSON.stringify({
-        model:         "gpt-image-1",
+        model:   "gpt-image-1",
         prompt,
-        n:             1,
-        size:          "1536x1024",
-        quality:       "high",
-        output_format: "png",
+        n:       1,
+        size:    "1536x1024",
+        quality: "high",
       }),
     });
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      throw new Error(`OpenAI API error ${aiRes.status}: ${errText.slice(0, 400)}`);
+    if (!imageResp.ok) {
+      const errText = await imageResp.text().catch(() => "unknown");
+      console.error("[generate-map] OpenAI error:", errText);
+      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      return json(500, { ok: false, error: `OpenAI error: ${imageResp.status}` });
     }
 
-    const aiData = await aiRes.json();
-    const b64 = aiData?.data?.[0]?.b64_json as string | undefined;
-    if (!b64) throw new Error("OpenAI returned no image data");
+    const imageData = await imageResp.json();
+    const b64 = imageData?.data?.[0]?.b64_json as string | undefined;
 
-    const binaryStr = atob(b64);
-    const bytes     = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    if (!b64) {
+      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      return json(500, { ok: false, error: "No image data returned from OpenAI" });
+    }
 
+    // Decode base64 to Uint8Array
+    const raw    = atob(b64);
+    const bytes  = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+    // Upload to Supabase Storage
+    // Path: campaign-maps/{campaign_id}/maps/{map_id}/bg.png
     const storagePath = `${campaign_id}/maps/${map_id}/bg.png`;
+
     const { error: uploadErr } = await admin.storage
       .from("campaign-maps")
-      .upload(storagePath, bytes, { contentType: "image/png", upsert: true });
+      .upload(storagePath, bytes, {
+        contentType: "image/png",
+        upsert:      true,
+      });
 
-    if (uploadErr) throw new Error(`Storage upload failed: ${uploadErr.message}`);
+    if (uploadErr) {
+      console.error("[generate-map] Storage upload error:", uploadErr.message);
+      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      return json(500, { ok: false, error: `Storage upload failed: ${uploadErr.message}` });
+    }
 
-    console.log("generate-map: uploaded to", storagePath);
+    // Update map record with path and status
+    const { error: updateErr } = await admin
+      .from("maps")
+      .update({
+        image_path: storagePath,
+        status:     "complete",
+      })
+      .eq("id", map_id);
 
-    await admin.from("maps").update({
-      bg_image_path:     storagePath,
-      image_path:        storagePath,
-      generation_status: "complete",
-    }).eq("id", map_id);
+    if (updateErr) {
+      console.error("[generate-map] Map update error:", updateErr.message);
+      return json(500, { ok: false, error: `Map update failed: ${updateErr.message}` });
+    }
 
-    return json(200, { ok: true, map_id, cached: false, image_path: storagePath });
+    console.log(`[generate-map] Complete. path=${storagePath}`);
+    return json(200, { ok: true, map_id, image_path: storagePath });
 
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("generate-map: FAILED —", message);
-    await admin.from("maps").update({ generation_status: "failed" }).eq("id", map_id);
-    return json(500, { ok: false, error: message });
+  } catch (e: any) {
+    console.error("[generate-map] Unexpected error:", e?.message ?? String(e));
+    return json(500, { ok: false, error: e?.message ?? "Server error" });
   }
 });
