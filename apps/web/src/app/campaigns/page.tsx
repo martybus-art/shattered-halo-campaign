@@ -1,4 +1,4 @@
-“use client”;
+"use client";
 // apps/web/src/app/campaigns/page.tsx
 // Create Campaign wizard – map layout, S/M/L zone size, biome toggle, AI narrative,
 // rules config, map preview with approve/regenerate/cancel, then redirect to lead.
