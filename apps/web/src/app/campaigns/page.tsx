@@ -1,17 +1,17 @@
+“use client”;
 // apps/web/src/app/campaigns/page.tsx
-// Create Campaign wizard — map layout, S/M/L zone size, biome toggle, AI narrative,
+// Create Campaign wizard – map layout, S/M/L zone size, biome toggle, AI narrative,
 // rules config, map preview with approve/regenerate/cancel, then redirect to lead.
 // changelog:
-//   2026-03-03 — swapped Campaign Scale above Map Layout; biome toggle switch;
+//   2026-03-03 – swapped Campaign Scale above Map Layout; biome toggle switch;
 //                biome dropdown only shown in single-biome mode; 12 biomes from
 //                MapGenerationFields.tsx; zone counts fixed to 4/8/12 (10 for
 //                void warship Large); campaign_narrative passed to generate-map;
 //                confirm redirects to /lead; cancel deletes campaign + storage.
-//   2026-03-03 — restored AI narrative generator using Anthropic API; structured
+//   2026-03-03 – restored AI narrative generator using Anthropic API; structured
 //                prompt uses selected layout, campaign scale, and zone/location names
 //                derived from biome or void warship compartment list; void warship
 //                capped at 10 zones/players (Large = 10 not 12).
-“use client”;
 import React, { useCallback, useEffect, useMemo, useState } from “react”;
 import { supabaseBrowser } from “@/lib/supabaseBrowser”;
 import { Frame } from “@/components/Frame”;
