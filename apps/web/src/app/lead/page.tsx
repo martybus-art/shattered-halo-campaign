@@ -2,6 +2,12 @@
 // Lead Controls — campaign management for lead/admin roles.
 // Stage order: spend → recon → movement → conflicts → missions → results → publish
 // Instability uses a two-phase roll/confirm to prevent accidental double-application.
+// changelog:
+//   2026-03-03 — moved Start Campaign, Advance Stage, Assign Missions, Apply Instability
+//                into Campaign Status Card; replaced Late Player Allocation with
+//                Player Invite (email-based via send-invite edge fn); Late Player
+//                Allocation now a separate card shown post-start only; added
+//                Delete Campaign with two-step confirm inside Campaign Status Card.
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -44,6 +50,8 @@ function getQueryParam(name: string): string | null {
   return new URL(window.location.href).searchParams.get(name);
 }
 
+const STAGES = ["spend", "recon", "movement", "conflicts", "missions", "results", "publish"];
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function LeadControls() {
@@ -55,8 +63,19 @@ export default function LeadControls() {
   const [role, setRole]               = useState<string>("player");
   const [mapZones, setMapZones]       = useState<MapZone[]>([]);
 
-  // Late player allocation
+  // Player invite
+  const [inviteEmail, setInviteEmail] = useState<string>("");
+  const [inviteStatus, setInviteStatus] = useState<string>("");
+
+  // Late player allocation (post-start only)
   const [lateUserId, setLateUserId]   = useState<string>("");
+  const [lateStatus, setLateStatus]   = useState<string>("");
+
+  // Delete campaign
+  const [deleteConfirm, setDeleteConfirm] = useState<boolean>(false);
+  const [deleteStatus, setDeleteStatus]   = useState<string>("");
+
+  // Start campaign
   const [startStatus, setStartStatus] = useState<string>("");
 
   // Generic action status
@@ -69,6 +88,7 @@ export default function LeadControls() {
   const [instSelectedZone, setInstSelectedZone]   = useState<string>("");
   const [instSelectedZones, setInstSelectedZones] = useState<string[]>([]);
   const [instStatus, setInstStatus]         = useState<string>("");
+  const [instOpen, setInstOpen]             = useState<boolean>(false);
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -103,7 +123,6 @@ export default function LeadControls() {
       .maybeSingle();
     setRound(r);
 
-    // Load map zones for instability zone selector
     if ((c as any).map_id) {
       const { data: mapRow } = await supabase
         .from("maps").select("map_json")
@@ -130,7 +149,7 @@ export default function LeadControls() {
     return sess.session?.access_token ?? null;
   };
 
-  // ── Generic function caller (for simple one-shot actions) ─────────────────
+  // ── Generic function caller ───────────────────────────────────────────────
 
   const callFn = async (
     fn: string,
@@ -179,20 +198,67 @@ export default function LeadControls() {
     await load(campaignId);
   };
 
-  const allocateLatePlayer = async () => {
-    if (!lateUserId.trim()) { setStartStatus("Enter the late player's user_id."); return; }
-    setStartStatus("Allocating…");
+  // ── Player invite ─────────────────────────────────────────────────────────
+
+  const sendInvite = async () => {
+    if (!inviteEmail.trim()) { setInviteStatus("Enter an email address."); return; }
+    setInviteStatus("Sending…");
     const token = await getToken();
-    if (!token) { setStartStatus("Session expired — refresh."); return; }
+    if (!token) { setInviteStatus("Session expired — refresh."); return; }
+
+    const { data, error } = await supabase.functions.invoke("send-invite", {
+      body: { campaign_id: campaignId, email: inviteEmail.trim().toLowerCase() },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (error) { setInviteStatus(`Error: ${error.message}`); return; }
+    if (!data?.ok) { setInviteStatus(`Failed: ${data?.error ?? "Unknown error"}`); return; }
+
+    setInviteStatus(`✓ Invite sent to ${inviteEmail.trim()}.`);
+    setInviteEmail("");
+  };
+
+  // ── Late player allocation (post-start) ───────────────────────────────────
+
+  const allocateLatePlayer = async () => {
+    if (!lateUserId.trim()) { setLateStatus("Enter the late player's user_id."); return; }
+    setLateStatus("Allocating…");
+    const token = await getToken();
+    if (!token) { setLateStatus("Session expired — refresh."); return; }
 
     const { data, error } = await supabase.functions.invoke("start-campaign", {
       body: { campaign_id: campaignId, mode: "late", late_user_id: lateUserId.trim() },
       headers: { Authorization: `Bearer ${token}` },
     });
 
-    if (error) { setStartStatus(`Error: ${error.message}`); return; }
-    setStartStatus(`✓ Allocated. ${data?.allocated ?? 0} player(s) updated.`);
+    if (error) { setLateStatus(`Error: ${error.message}`); return; }
+    setLateStatus(`✓ Allocated. ${data?.allocated ?? 0} player(s) updated.`);
     await load(campaignId);
+  };
+
+  // ── Delete campaign ───────────────────────────────────────────────────────
+
+  const deleteCampaign = async () => {
+    setDeleteStatus("Deleting…");
+    const { error } = await supabase
+      .from("campaigns")
+      .delete()
+      .eq("id", campaignId);
+
+    if (error) {
+      setDeleteStatus(`Error: ${error.message}`);
+      setDeleteConfirm(false);
+      return;
+    }
+
+    setDeleteStatus("✓ Campaign deleted.");
+    setCampaign(null);
+    setRound(null);
+    setDeleteConfirm(false);
+    // Redirect to dashboard after a short delay
+    setTimeout(() => {
+      window.location.href = "/dashboard";
+    }, 1500);
   };
 
   // ── Instability — Phase 1: Roll ───────────────────────────────────────────
@@ -247,10 +313,10 @@ export default function LeadControls() {
       (data.phase_changed ? ` Phase advanced to ${data.new_phase}.` : "")
     );
     setInstRoll(null);
+    setInstOpen(false);
     await load(campaignId);
   };
 
-  // Toggle zone selection for multi-zone effects
   const toggleZone = (key: string) => {
     setInstSelectedZones(prev =>
       prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
@@ -260,6 +326,7 @@ export default function LeadControls() {
   // ── Derived ───────────────────────────────────────────────────────────────
 
   const allowed = role === "lead" || role === "admin";
+  const campaignStarted = (campaign?.round_number ?? 0) > 0;
 
   const instNeedsZone   = instRoll?.needs_zone_selection ?? false;
   const instNeedsMulti  = instRoll?.needs_zone_destroy ?? false;
@@ -272,6 +339,10 @@ export default function LeadControls() {
     (!instNeedsMulti  || instSelectedZones.length >= instDestroyCount);
 
   const stageLabel = round?.stage ?? "unknown";
+  const nextStageLabel = stageLabel === "publish"
+    ? "next round / spend"
+    : STAGES[STAGES.indexOf(stageLabel) + 1] ?? "?";
+
   const instBandLabel =
     instRoll
       ? instRoll.threshold_band === 8 ? "Tier III (8+)"
@@ -290,34 +361,307 @@ export default function LeadControls() {
     >
       <div className="space-y-6">
 
-        {/* ── Campaign status ── */}
+        {/* ── Campaign Status Card (with all actions) ── */}
         <Card title="Campaign Status">
           {campaign ? (
-            <div className="text-sm text-parchment/80 space-y-1">
-              <div><span className="text-brass">Name:</span> {campaign.name}</div>
-              <div>
-                <span className="text-brass">Phase:</span> {campaign.phase}
-                &nbsp;&nbsp;
-                <span className="text-brass">Round:</span> {campaign.round_number}
-                &nbsp;&nbsp;
-                <span className="text-brass">Stage:</span>{" "}
-                <span className="font-mono text-brass/80 uppercase tracking-wider text-xs">{stageLabel}</span>
+            <div className="space-y-4">
+
+              {/* Status display */}
+              <div className="text-sm text-parchment/80 space-y-1">
+                <div><span className="text-brass">Name:</span> {campaign.name}</div>
+                <div>
+                  <span className="text-brass">Phase:</span> {campaign.phase}
+                  &nbsp;&nbsp;
+                  <span className="text-brass">Round:</span> {campaign.round_number}
+                  &nbsp;&nbsp;
+                  <span className="text-brass">Stage:</span>{" "}
+                  <span className="font-mono text-brass/80 uppercase tracking-wider text-xs">{stageLabel}</span>
+                </div>
+                <div>
+                  <span className="text-brass">Instability:</span>{" "}
+                  <span className={
+                    campaign.instability >= 8 ? "text-blood font-semibold" :
+                    campaign.instability >= 4 ? "text-yellow-500/80" :
+                    "text-parchment/80"
+                  }>
+                    {campaign.instability}/10
+                  </span>
+                </div>
+                <div><span className="text-brass">Role:</span> {role}</div>
+                {!allowed && (
+                  <p className="mt-2 text-blood/80 text-xs">
+                    You are not authorised for lead controls in this campaign.
+                  </p>
+                )}
               </div>
-              <div>
-                <span className="text-brass">Instability:</span>{" "}
-                <span className={
-                  campaign.instability >= 8 ? "text-blood font-semibold" :
-                  campaign.instability >= 4 ? "text-yellow-500/80" :
-                  "text-parchment/80"
-                }>
-                  {campaign.instability}/10
-                </span>
-              </div>
-              <div><span className="text-brass">Role:</span> {role}</div>
-              {!allowed && (
-                <p className="mt-2 text-blood/80 text-xs">
-                  You are not authorised for lead controls in this campaign.
-                </p>
+
+              {allowed && (
+                <>
+                  {/* ── Quick actions ── */}
+                  <div className="border-t border-brass/20 pt-4 space-y-3">
+                    <p className="text-xs text-parchment/40 uppercase tracking-wider">Actions</p>
+
+                    {/* Start Campaign */}
+                    <div>
+                      <p className="text-parchment/60 text-xs leading-relaxed mb-2">
+                        Allocates secret starting locations for all current members. Run once when ready to begin.
+                      </p>
+                      <button
+                        onClick={startCampaign}
+                        className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm transition-colors"
+                      >
+                        Start Campaign
+                      </button>
+                      {startStatus && (
+                        <p className={`mt-1 text-xs ${startStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                          {startStatus}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Advance Stage */}
+                    <div>
+                      <p className="text-parchment/60 text-xs leading-relaxed mb-1">
+                        Current:{" "}
+                        <span className="font-mono text-brass/70 uppercase">{stageLabel}</span>
+                        {" "}→{" "}
+                        <span className="font-mono text-parchment/40 uppercase">{nextStageLabel}</span>
+                      </p>
+                      <button
+                        onClick={() => callFn("advance-round", "advance")}
+                        className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm transition-colors"
+                      >
+                        Advance Stage
+                      </button>
+                      {actionStatus.advance && (
+                        <p className={`mt-1 text-xs ${actionStatus.advance.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                          {actionStatus.advance}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Assign Missions */}
+                    <div>
+                      <p className="text-parchment/60 text-xs leading-relaxed mb-2">
+                        Assigns missions to all conflicts, respecting NIP preference votes from the Spend phase.
+                      </p>
+                      <button
+                        onClick={() => callFn("assign-missions", "missions")}
+                        className="w-full px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm transition-colors"
+                      >
+                        Assign Missions
+                      </button>
+                      {actionStatus.missions && (
+                        <p className={`mt-1 text-xs ${actionStatus.missions.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                          {actionStatus.missions}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Apply Instability — collapsible */}
+                    <div className="border border-brass/20 rounded">
+                      <button
+                        onClick={() => { setInstOpen(v => !v); setInstRoll(null); setInstStatus(""); }}
+                        className="w-full px-4 py-2 flex items-center justify-between text-sm hover:bg-brass/10 transition-colors rounded"
+                      >
+                        <span>⚀ Apply Instability</span>
+                        <span className="text-xs text-parchment/40">{instOpen ? "▲ collapse" : "▼ expand"}</span>
+                      </button>
+
+                      {instOpen && (
+                        <div className="px-4 pb-4 space-y-3 border-t border-brass/20 pt-3">
+                          <p className="text-parchment/60 text-xs leading-relaxed">
+                            Roll a d10 against the current instability band, preview the event, then confirm to apply.
+                            Some events require a zone to be designated before confirming.
+                          </p>
+
+                          {/* Phase 1 — Roll */}
+                          {!instRoll && (
+                            <>
+                              <button
+                                disabled={instRolling}
+                                onClick={rollInstability}
+                                className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold disabled:opacity-40 transition-colors"
+                              >
+                                {instRolling ? (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <span className="w-3.5 h-3.5 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
+                                    Rolling…
+                                  </span>
+                                ) : "Roll Instability d10"}
+                              </button>
+                              {instStatus && (
+                                <p className={`text-xs ${instStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                                  {instStatus}
+                                </p>
+                              )}
+                            </>
+                          )}
+
+                          {/* Phase 2 — Preview + Confirm */}
+                          {instRoll && (
+                            <div className="rounded border border-brass/30 bg-black/20 p-4 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-brass text-xs uppercase tracking-widest font-semibold">
+                                    {instBandLabel} &nbsp;·&nbsp; Roll: {instRoll.d10}
+                                  </p>
+                                  <p className="text-parchment/90 font-semibold mt-0.5">{instRoll.event_name}</p>
+                                </div>
+                                <span className={`text-2xl font-mono font-bold ${
+                                  instRoll.new_instability >= 8 ? "text-blood" :
+                                  instRoll.new_instability >= 4 ? "text-yellow-500/80" :
+                                  "text-brass/70"
+                                }`}>
+                                  {instRoll.new_instability}/10
+                                </span>
+                              </div>
+
+                              <p className="text-xs text-parchment/65 italic leading-relaxed border-l-2 border-brass/20 pl-3">
+                                {instRoll.public_text}
+                              </p>
+
+                              {instRoll.auto_effects.length > 0 && (
+                                <div>
+                                  <p className="text-xs text-brass/70 uppercase tracking-wider mb-1">Auto-applied effects</p>
+                                  <ul className="space-y-0.5">
+                                    {instRoll.auto_effects.map((e, i) => (
+                                      <li key={i} className="text-xs text-parchment/70 flex gap-2">
+                                        <span className="text-brass/50">⚙</span> {e}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {instNeedsZone && !instNeedsMulti && (
+                                <div>
+                                  <p className="text-xs text-blood/80 uppercase tracking-wider mb-1.5 font-semibold">
+                                    ☠ Designate affected zone (required)
+                                  </p>
+                                  {mapZones.length > 0 ? (
+                                    <select
+                                      className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
+                                      value={instSelectedZone}
+                                      onChange={(e) => setInstSelectedZone(e.target.value)}
+                                    >
+                                      <option value="">— Select zone —</option>
+                                      {mapZones.map(z => (
+                                        <option key={z.key} value={z.key}>{z.name}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                                      placeholder="Enter zone key (map_json not loaded)"
+                                      value={instSelectedZone}
+                                      onChange={(e) => setInstSelectedZone(e.target.value)}
+                                    />
+                                  )}
+                                </div>
+                              )}
+
+                              {instNeedsMulti && (
+                                <div>
+                                  <p className="text-xs text-blood/80 uppercase tracking-wider mb-1.5 font-semibold">
+                                    ☠ Select {instDestroyCount} zone(s) to destroy ({instSelectedZones.length}/{instDestroyCount} selected)
+                                  </p>
+                                  <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
+                                    {mapZones.length > 0 ? mapZones.map(z => {
+                                      const sel = instSelectedZones.includes(z.key);
+                                      return (
+                                        <button
+                                          key={z.key}
+                                          onClick={() => toggleZone(z.key)}
+                                          className={`px-2 py-1.5 rounded border text-xs text-left transition-colors ${
+                                            sel
+                                              ? "border-blood bg-blood/20 text-blood"
+                                              : "border-brass/25 bg-void hover:border-brass/40 text-parchment/60"
+                                          }`}
+                                        >
+                                          {z.name}
+                                        </button>
+                                      );
+                                    }) : (
+                                      <p className="text-xs text-parchment/40 col-span-2">
+                                        No zones loaded — map_json may not have a zones array.
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  onClick={() => { setInstRoll(null); setInstStatus(""); }}
+                                  className="flex-1 px-3 py-2 rounded border border-brass/25 text-xs text-parchment/60 hover:text-parchment/90 hover:border-brass/40 transition-colors"
+                                >
+                                  ← Re-roll
+                                </button>
+                                <button
+                                  onClick={confirmInstability}
+                                  disabled={!instCanConfirm}
+                                  className="flex-1 px-3 py-2 rounded bg-blood/20 border border-blood/50 hover:bg-blood/30 text-xs font-semibold text-blood disabled:opacity-40 transition-colors"
+                                >
+                                  {instConfirming ? (
+                                    <span className="flex items-center justify-center gap-1.5">
+                                      <span className="w-3 h-3 border-2 border-blood/30 border-t-blood rounded-full animate-spin" />
+                                      Applying…
+                                    </span>
+                                  ) : "☠ Confirm & Apply"}
+                                </button>
+                              </div>
+
+                              {instStatus && (
+                                <p className={`text-xs ${instStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                                  {instStatus}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ── Danger zone: Delete Campaign ── */}
+                  <div className="border-t border-blood/20 pt-4">
+                    <p className="text-xs text-parchment/40 uppercase tracking-wider mb-3">Danger Zone</p>
+                    {!deleteConfirm ? (
+                      <button
+                        onClick={() => { setDeleteConfirm(true); setDeleteStatus(""); }}
+                        className="w-full px-4 py-2 rounded border border-blood/40 bg-blood/10 hover:bg-blood/20 text-sm text-blood/80 hover:text-blood transition-colors"
+                      >
+                        Delete Campaign
+                      </button>
+                    ) : (
+                      <div className="rounded border border-blood/40 bg-blood/10 p-3 space-y-2">
+                        <p className="text-xs text-blood font-semibold">
+                          ☠ This will permanently delete &ldquo;{campaign.name}&rdquo; and all associated data. This cannot be undone.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { setDeleteConfirm(false); setDeleteStatus(""); }}
+                            className="flex-1 px-3 py-2 rounded border border-brass/25 text-xs text-parchment/60 hover:text-parchment/90 hover:border-brass/40 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={deleteCampaign}
+                            className="flex-1 px-3 py-2 rounded bg-blood/30 border border-blood/60 hover:bg-blood/50 text-xs font-semibold text-blood transition-colors"
+                          >
+                            Confirm Delete
+                          </button>
+                        </div>
+                        {deleteStatus && (
+                          <p className={`text-xs ${deleteStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                            {deleteStatus}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           ) : (
@@ -330,269 +674,66 @@ export default function LeadControls() {
           )}
         </Card>
 
-        {campaign && (
+        {campaign && allowed && (
           <div className="grid md:grid-cols-2 gap-6">
 
-            {/* ── Start Campaign ── */}
-            <Card title="Start Campaign">
+            {/* ── Invite Players ── */}
+            <Card title="Invite Players">
               <p className="text-parchment/70 text-sm leading-relaxed">
-                Allocates secret starting locations for all current members without revealing assignments.
-                Run this once when the campaign is ready to begin.
-              </p>
-              <button
-                disabled={!allowed}
-                onClick={startCampaign}
-                className="mt-3 w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm disabled:opacity-40 transition-colors"
-              >
-                Start Campaign
-              </button>
-              {startStatus && (
-                <p className={`mt-2 text-xs ${startStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
-                  {startStatus}
-                </p>
-              )}
-            </Card>
-
-            {/* ── Late Player Allocation ── */}
-            <Card title="Late Player Allocation">
-              <p className="text-parchment/70 text-sm leading-relaxed">
-                Reassigns one sector from the dominant player to a late joiner.
-                Paste the late player's <span className="font-mono text-brass/80">user_id</span> (UUID) from the Supabase auth table.
+                Send an email invite to a player. They will be added to this campaign automatically
+                the next time they log in.
               </p>
               <input
+                type="email"
                 className="mt-3 w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
-                value={lateUserId}
-                onChange={(e) => setLateUserId(e.target.value)}
-                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") sendInvite(); }}
+                placeholder="player@example.com"
                 disabled={!allowed}
               />
               <button
-                disabled={!allowed || !lateUserId.trim()}
-                onClick={allocateLatePlayer}
-                className="mt-2 w-full px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm disabled:opacity-40 transition-colors"
+                disabled={!allowed || !inviteEmail.trim()}
+                onClick={sendInvite}
+                className="mt-2 w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm disabled:opacity-40 transition-colors"
               >
-                Allocate Late Player
+                Send Invite
               </button>
-            </Card>
-
-            {/* ── Advance Stage ── */}
-            <Card title="Advance Stage">
-              <p className="text-parchment/70 text-sm leading-relaxed">
-                Moves through the stage order:{" "}
-                <span className="text-brass font-mono text-xs">
-                  spend → recon → movement → conflicts → missions → results → publish
-                </span>.
-                Advancing from <span className="text-brass">movement</span> automatically detects zone conflicts.
-              </p>
-              <p className="mt-1 text-xs text-parchment/50">
-                Current stage:{" "}
-                <span className="uppercase tracking-wider font-mono text-brass/70">{stageLabel}</span>
-                {" "}→{" "}
-                <span className="uppercase tracking-wider font-mono text-parchment/50">
-                  {round ? (
-                    stageLabel === "publish" ? "next round / spend"
-                    : ["spend","recon","movement","conflicts","missions","results","publish"][
-                        (["spend","recon","movement","conflicts","missions","results","publish"].indexOf(stageLabel) + 1)]
-                    ?? "?"
-                  ) : "?"}
-                </span>
-              </p>
-              <button
-                disabled={!allowed}
-                onClick={() => callFn("advance-round", "advance")}
-                className="mt-3 w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm disabled:opacity-40 transition-colors"
-              >
-                Advance Stage
-              </button>
-              {actionStatus.advance && (
-                <p className={`mt-2 text-xs ${actionStatus.advance.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
-                  {actionStatus.advance}
+              {inviteStatus && (
+                <p className={`mt-2 text-xs ${inviteStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                  {inviteStatus}
                 </p>
               )}
             </Card>
 
-            {/* ── Assign Missions ── */}
-            <Card title="Assign Missions">
-              <p className="text-parchment/70 text-sm leading-relaxed">
-                Assigns missions to all conflicts in the current round, respecting any NIP preference
-                votes submitted by players during the Spend phase.
-              </p>
-              <button
-                disabled={!allowed}
-                onClick={() => callFn("assign-missions", "missions")}
-                className="mt-3 w-full px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm disabled:opacity-40 transition-colors"
-              >
-                Assign Missions
-              </button>
-              {actionStatus.missions && (
-                <p className={`mt-2 text-xs ${actionStatus.missions.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
-                  {actionStatus.missions}
-                </p>
-              )}
-            </Card>
-
-            {/* ── Apply Instability ── */}
-            <Card title="Apply Instability">
-              <div className="space-y-3">
+            {/* ── Late Player Allocation (post-start only) ── */}
+            {campaignStarted && (
+              <Card title="Late Player Allocation">
                 <p className="text-parchment/70 text-sm leading-relaxed">
-                  Roll a d10 against the current instability band, preview the event, then confirm to apply.
-                  Some events require you to designate an affected zone before confirming.
+                  Reassigns one sector from the dominant player to a late joiner.
+                  Paste the late player&rsquo;s <span className="font-mono text-brass/80">user_id</span> (UUID) from the Supabase auth table.
                 </p>
-
-                {/* Phase 1 — Roll button */}
-                {!instRoll && (
-                  <>
-                    <button
-                      disabled={!allowed || instRolling}
-                      onClick={rollInstability}
-                      className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold disabled:opacity-40 transition-colors"
-                    >
-                      {instRolling ? (
-                        <span className="flex items-center justify-center gap-2">
-                          <span className="w-3.5 h-3.5 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
-                          Rolling…
-                        </span>
-                      ) : "⚀ Roll Instability d10"}
-                    </button>
-                    {instStatus && (
-                      <p className={`text-xs ${instStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
-                        {instStatus}
-                      </p>
-                    )}
-                  </>
+                <input
+                  className="mt-3 w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
+                  value={lateUserId}
+                  onChange={(e) => setLateUserId(e.target.value)}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  disabled={!allowed}
+                />
+                <button
+                  disabled={!allowed || !lateUserId.trim()}
+                  onClick={allocateLatePlayer}
+                  className="mt-2 w-full px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm disabled:opacity-40 transition-colors"
+                >
+                  Allocate Late Player
+                </button>
+                {lateStatus && (
+                  <p className={`mt-2 text-xs ${lateStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
+                    {lateStatus}
+                  </p>
                 )}
-
-                {/* Phase 2 — Preview + Confirm */}
-                {instRoll && (
-                  <div className="rounded border border-brass/30 bg-black/20 p-4 space-y-3">
-                    {/* Roll result header */}
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-brass text-xs uppercase tracking-widest font-semibold">
-                          {instBandLabel} &nbsp;·&nbsp; Roll: {instRoll.d10}
-                        </p>
-                        <p className="text-parchment/90 font-semibold mt-0.5">{instRoll.event_name}</p>
-                      </div>
-                      <span className={`text-2xl font-mono font-bold ${
-                        instRoll.new_instability >= 8 ? "text-blood" :
-                        instRoll.new_instability >= 4 ? "text-yellow-500/80" :
-                        "text-brass/70"
-                      }`}>
-                        {instRoll.new_instability}/10
-                      </span>
-                    </div>
-
-                    {/* Event text */}
-                    <p className="text-xs text-parchment/65 italic leading-relaxed border-l-2 border-brass/20 pl-3">
-                      {instRoll.public_text}
-                    </p>
-
-                    {/* Auto effects */}
-                    {instRoll.auto_effects.length > 0 && (
-                      <div>
-                        <p className="text-xs text-brass/70 uppercase tracking-wider mb-1">
-                          Auto-applied effects
-                        </p>
-                        <ul className="space-y-0.5">
-                          {instRoll.auto_effects.map((e, i) => (
-                            <li key={i} className="text-xs text-parchment/70 flex gap-2">
-                              <span className="text-brass/50">⚙</span> {e}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {/* Zone selector — single zone */}
-                    {instNeedsZone && !instNeedsMulti && (
-                      <div>
-                        <p className="text-xs text-blood/80 uppercase tracking-wider mb-1.5 font-semibold">
-                          ☠ Designate affected zone (required)
-                        </p>
-                        {mapZones.length > 0 ? (
-                          <select
-                            className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
-                            value={instSelectedZone}
-                            onChange={(e) => setInstSelectedZone(e.target.value)}
-                          >
-                            <option value="">— Select zone —</option>
-                            {mapZones.map(z => (
-                              <option key={z.key} value={z.key}>{z.name}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
-                            placeholder="Enter zone key (map_json not loaded)"
-                            value={instSelectedZone}
-                            onChange={(e) => setInstSelectedZone(e.target.value)}
-                          />
-                        )}
-                      </div>
-                    )}
-
-                    {/* Zone selector — multi zone destroy */}
-                    {instNeedsMulti && (
-                      <div>
-                        <p className="text-xs text-blood/80 uppercase tracking-wider mb-1.5 font-semibold">
-                          ☠ Select {instDestroyCount} zone(s) to destroy ({instSelectedZones.length}/{instDestroyCount} selected)
-                        </p>
-                        <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
-                          {mapZones.length > 0 ? mapZones.map(z => {
-                            const sel = instSelectedZones.includes(z.key);
-                            return (
-                              <button
-                                key={z.key}
-                                onClick={() => toggleZone(z.key)}
-                                className={`px-2 py-1.5 rounded border text-xs text-left transition-colors
-                                  ${sel
-                                    ? "border-blood bg-blood/20 text-blood"
-                                    : "border-brass/25 bg-void hover:border-brass/40 text-parchment/60"
-                                  }`}
-                              >
-                                {z.name}
-                              </button>
-                            );
-                          }) : (
-                            <p className="text-xs text-parchment/40 col-span-2">
-                              No zones loaded — map_json may not have a zones array.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Action row */}
-                    <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={() => { setInstRoll(null); setInstStatus(""); }}
-                        className="flex-1 px-3 py-2 rounded border border-brass/25 text-xs text-parchment/60 hover:text-parchment/90 hover:border-brass/40 transition-colors"
-                      >
-                        ← Re-roll
-                      </button>
-                      <button
-                        onClick={confirmInstability}
-                        disabled={!instCanConfirm}
-                        className="flex-1 px-3 py-2 rounded bg-blood/20 border border-blood/50 hover:bg-blood/30 text-xs font-semibold text-blood disabled:opacity-40 transition-colors"
-                      >
-                        {instConfirming ? (
-                          <span className="flex items-center justify-center gap-1.5">
-                            <span className="w-3 h-3 border-2 border-blood/30 border-t-blood rounded-full animate-spin" />
-                            Applying…
-                          </span>
-                        ) : "☠ Confirm & Apply"}
-                      </button>
-                    </div>
-
-                    {instStatus && (
-                      <p className={`text-xs ${instStatus.startsWith("✓") ? "text-brass/70" : "text-blood/70"}`}>
-                        {instStatus}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </Card>
+              </Card>
+            )}
 
           </div>
         )}

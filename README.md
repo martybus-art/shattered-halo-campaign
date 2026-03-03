@@ -1,27 +1,8 @@
 # Embers of the Shattered Halo — Campaign App
 
-A fog-of-war, multi-player narrative campaign tracker for tabletop wargames (Warhammer 40,000).
-Built to run a full campaign without a GM — the system is the arbiter.
+A full-featured digital campaign manager for Warhammer 40,000 narrative campaigns. Automates round flow, NIP/NCP economy, instability events, mission assignment, fog-of-war, and AI-generated maps — removing the manual admin burden from campaign play.
 
-**Live:** [40kcampaigngame.fun](https://40kcampaigngame.fun)
-
----
-
-## What It Does
-
-- **Player dashboards** — secret location, NIP/NCP economy, status, private whisper prompts
-- **Fog-of-war map** — public sector reveals, private intel, zone ownership
-- **Immutable economy ledger** — NIP (Narrative Influence Points) and NCP (Narrative Campaign Points)
-- **Automated round flow** — Movement → Recon → Conflicts → Missions → Results → Spend → Publish
-- **Mission selection** — Random, player choice, or NIP-weighted influence
-- **Halo Instability clock** — d10 event table, phase-gated triggers
-- **Faction system** — 10 playable factions with art, crests, and lead-assignable locks
-- **Recap prompt generator** — public Lead bulletin + per-player private whisper (AI-ready prompts)
-- **Invite system** — email invites with AI-generated grimdark narrative blurb, accept/decline flow
-- **Faction allegiance** — permanent one-time faction lock with themed visual banner
-- **Campaign Chronicle** — AI-generated narrative summary of the entire campaign at end of game
-- **Campaign archive** — full JSON export of all campaign data including the chronicle
-- **No GM required** — optional Admin role for disputes only
+**Live:** [shattered-halo-campaign.vercel.app](https://shattered-halo-campaign.vercel.app)
 
 ---
 
@@ -29,143 +10,115 @@ Built to run a full campaign without a GM — the system is the arbiter.
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 14+ (App Router), TypeScript, TailwindCSS |
-| Backend | Supabase — Postgres 17, Auth, Row Level Security, Edge Functions |
-| Edge runtime | Deno |
-| Hosting | Vercel (frontend) + Supabase (backend) |
+| Frontend | Next.js (App Router) + TypeScript |
+| Backend / DB | Supabase (Postgres + Auth + RLS + Edge Functions) |
+| Styling | TailwindCSS (grimdark theme) |
+| AI Map Generation | OpenAI `gpt-image-1` |
+| Hosting | Vercel |
+| Version Control | GitHub |
 
 ---
 
-## Project Structure
+## Repo Layout
 
 ```
-apps/web/                        # Next.js frontend
-  src/
-    app/
-      campaigns/page.tsx         # Create campaign (size picker, auto-map, AI invite message)
-      dashboard/page.tsx         # Player command throne
-      lead/page.tsx              # Lead/admin controls & round flow
-      conflicts/page.tsx         # Active conflicts
-      ledger/page.tsx            # Economy ledger
-      map/page.tsx               # Fog-of-war map
-    components/
-      theme.ts                   # Faction definitions (canonical source)
-      Card.tsx / Frame.tsx       # UI primitives
-    lib/
-      supabaseBrowser.ts         # Client-side Supabase instance
-      supabaseServer.ts          # Server-side Supabase instance
-
-supabase/
-  migrations/                    # SQL schema (run in order)
-    001_init.sql                 # Core tables
-    002_rls.sql                  # Row Level Security policies
-    003_pending_invites.sql      # Invite system
-    004_relics_instability.sql   # Evolution Pack — relics & events
-  functions/                     # Deno edge functions
-    accept-invites/              # list/accept/decline pending invites
-    advance-round/
-    apply-instability/
-    assign-missions/
-    create-campaign/              # auto-generates map from campaign_size
-    create-map/
-    delete-campaign/              # safe cascade delete (lead/admin only)
-    ensure-player-state/
-    generate-narrative/           # Claude API proxy (avoids browser CORS)
-    invite-players/               # sends invite emails via Supabase Auth SMTP
-    lead-set-faction/
-    set-faction/
-    start-campaign/
-    _shared/
-      rules.ts                   # EffectiveRules type & rule merging
-      utils.ts                   # Shared helpers (cors, auth, admin client)
-  seed/
-    missions_shattered_halo.json
-    seed_evolution_pack.sql
-    template_shattered_halo.json
+/
+├── apps/web/                    # Next.js application
+│   └── src/
+│       ├── app/                 # App Router pages & API routes
+│       └── components/          # React components (Card-based UI)
+├── supabase/
+│   ├── functions/               # Edge Functions (Deno/TypeScript)
+│   └── migrations/              # SQL migrations (run in order)
+├── README.md
+└── REFERENCE.md
 ```
 
 ---
 
-## Playable Factions
+## 1) Supabase Setup
 
-| Key | Display Name |
+### Create project
+
+Create a project at [supabase.com](https://supabase.com). Note the project URL and keys.
+
+### Run migrations
+
+In the **SQL Editor**, run all files in `supabase/migrations/` in numbered order:
+
+| File | Purpose |
 |---|---|
-| `space_marines` | Space Marines |
-| `astra_militarum` | Astra Militarum |
-| `adeptus_mechanicus` | Adeptus Mechanicus |
-| `adepta_sororitas` | Adepta Sororitas |
-| `orks` | Orks |
-| `necrons` | Necrons |
-| `chaos_space_marines` | Chaos Space Marines |
-| `tyranids` | Tyranids |
-| `tau_empire` | T'au Empire |
-| `aeldari` | Aeldari |
+| `001_initial_schema.sql` | Core tables: campaigns, campaign_members, player_state, ledger, rounds |
+| `002_game_objects.sql` | missions, moves, recon_ops, conflicts, battle_results, posts, pending_invites |
+| `003_templates.sql` | templates, sectors |
+| `004_relics_instability.sql` | relics, campaign_relics, instability_events, campaign_events |
+| `005_rulesets_maps.sql` | rulesets, maps |
+| `006_extended_tables.sql` | mission_influence, round_spends, player_state_secret |
+| `007_faction_fields.sql` | faction_key, faction_locked, faction_set_at on campaign_members |
+| `008_map_ai_fields.sql` | AI generation fields on maps (seed, layout, planet_profile, generation_status, etc.) |
+| `009_campaign_extras.sql` | invite_message on campaigns, ruleset_id FK |
 
-Faction art lives in `apps/web/public/art/factions/<key>/` as `bg.jpg`, `crest.png`, `preview.jpg`.
+> **Seed data:** After migrations, run `supabase/seed/seed_evolution_pack.sql` to populate the 20 missions, 30 instability events, and 2 rulesets.
 
----
+### Auth
 
-## Round Flow
+Email auth with **magic link** is the recommended setup (low friction for players).
 
-The system advances through these stages in order, controlled by the Lead player:
-
-```
-Movement → Recon → Conflicts → Missions → Results → Spend → Publish → (next round)
-```
-
-Each stage transition is handled by the `advance-round` edge function.
-
----
-
-## Roles
-
-| Role | Access |
-|---|---|
-| `player` | Own dashboard, moves, recon, private posts |
-| `lead` | Everything above + round control, public bulletins, faction assignment |
-| `admin` | Everything above + read access to all player states (for disputes) |
-
----
-
-## Economy
-
-- **NIP** (Narrative Influence Points) — short-term currency. Spent on recon, mission influence bids, and twists.
-- **NCP** (Narrative Campaign Points) — longer-term progression currency earned from battle outcomes.
-- All transactions are recorded in the immutable `ledger` table (no deletes, no edits).
-
----
-
-## Setup
-
-### 1. Supabase
-
-1. Create a Supabase project
-2. In **SQL Editor**, run migrations in order: `001_init.sql` → `002_rls.sql` → `003_pending_invites.sql` → `004_relics_instability.sql`
-3. Enable **Email Auth** (magic link recommended for low friction)
-4. Seed a template row manually or via the seed files in `supabase/seed/`
-5. Deploy edge functions: `supabase functions deploy --project-ref <your-ref>`
-
-### 2. Environment Variables
+### Environment Variables
 
 Create `apps/web/.env.local`:
 
-```bash
-NEXT_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<your-anon-key>
-SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key>
+```
+NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<publishable key>
+SUPABASE_SERVICE_ROLE_KEY=<secret key — server-only, never expose to client>
+OPENAI_API_KEY=<for AI map generation>
 ```
 
-Edge Function secrets (set via Supabase Dashboard → Edge Functions → Secrets or CLI):
+Add the same variables as **Environment Variables** in your Vercel project settings.
+
+> **JWT Note:** The Supabase client uses ECC asymmetric JWT signing (migrated from legacy HS256). Edge Functions use the `requireUser` utility from `utils.ts` for auth — do not use the older `getAuthenticatedUser` pattern.
+
+---
+
+## 2) Deploy
 
 ```bash
-supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+# Push to GitHub → Vercel auto-deploys main branch
+git push origin main
 ```
 
-> ⚠️ `SUPABASE_SERVICE_ROLE_KEY` is server-only. Never expose it to the client or commit it to version control.
+In Vercel:
+- Set **Root Directory** to `apps/web`
+- Add all environment variables listed above
 
-Add the same three variables in your Vercel project settings under **Environment Variables**.
+### Deploy Edge Functions
 
-### 3. Run locally
+```bash
+supabase functions deploy create-campaign
+supabase functions deploy accept-invites
+supabase functions deploy advance-round
+supabase functions deploy assign-missions
+supabase functions deploy apply-instability
+supabase functions deploy lead-set-faction
+supabase functions deploy set-faction
+supabase functions deploy ensure-player-state
+supabase functions deploy create-map
+supabase functions deploy start-campaign
+supabase functions deploy invite-players
+supabase functions deploy delete-campaign
+supabase functions deploy generate-narrative
+supabase functions deploy submit-move
+supabase functions deploy spend-nip
+supabase functions deploy resolve-conflict
+supabase functions deploy generate-map
+```
+
+All functions currently run with `verify_jwt: false` — authentication is handled inside each function body via the `requireUser` utility.
+
+---
+
+## 3) Run Locally
 
 ```bash
 cd apps/web
@@ -173,119 +126,51 @@ npm install
 npm run dev
 ```
 
-### 4. Deploy
+---
 
-1. Push to GitHub
-2. Import `apps/web` into Vercel as the project root (set **Root Directory** to `apps/web`)
-3. Add env vars in Vercel dashboard
-4. Vercel auto-deploys on every push to `main`
+## 4) User Roles & Access
+
+| Role | Capabilities |
+|---|---|
+| **Lead** | Creates campaign, invites players, advances rounds, triggers instability, assigns missions, sets factions, accesses `/lead` dashboard |
+| **Player** | Views own dashboard, submits moves, spends NIP, reports battle results |
+
+- Campaign creation: `/campaigns` — any authenticated user can create a campaign and becomes Lead.
+- Lead controls: `/lead?campaign=<id>`
+- Pending invites are stored and processed automatically via `accept-invites` when an invited player signs in.
 
 ---
 
-## AI Integration
+## 5) Security Model
 
-This app uses AI in two ways: generating prompts from live campaign data (feed into any LLM), and making direct Claude API calls via the `generate-narrative` edge function.
-
-### generate-narrative Edge Function
-
-The `generate-narrative` Supabase edge function proxies calls to the Claude API server-side, avoiding CORS restrictions that block direct browser-to-Anthropic calls. It requires an `ANTHROPIC_API_KEY` secret set in Supabase Edge Function secrets.
-
-Used for:
-- **Invite message generation** (campaigns page) — grimdark 40K call-to-arms blurb from campaign name
-- **Campaign Chronicle** (lead page) — end-of-campaign narrative summary using all campaign data
-
-### Built-in Prompt Generator (Dashboard)
-
-The **Dashboard** page can copy two types of prompts to clipboard:
-
-- **Public Recap Prompt** (Lead only) — pulls public posts and campaign state. Safe to share with all players. Generates a grimdark "Halo War Bulletin."
-- **Private Whisper Prompt** (each player) — includes secret location, NIP/NCP, and private posts. Generates personalised intel and objectives.
-
-### Connecting an AI Assistant (e.g. Claude)
-
-To give an AI assistant full project context, provide:
-
-1. **This README** — for architecture and conventions
-2. **`REFERENCE.md`** (in repo root) — for the full schema, canonical value sets, and change log
-3. **Supabase MCP** — for live database access (see below)
-
-### Supabase MCP (Model Context Protocol)
-
-The Supabase MCP server gives AI assistants direct read/write access to the live database. To connect:
-
-1. Go to your Supabase project → **Integrations → MCP**
-2. Copy the MCP server URL
-3. Add it to your AI tool's MCP configuration
-
-Once connected, an AI assistant can: inspect the live schema, run queries, apply migrations, read logs, and deploy edge functions — all from the chat interface.
-
-### Other Tool Integrations
-
-Add your connected tools here as you set them up:
-
-| Tool | Purpose | Status |
-|---|---|---|
-| Supabase MCP | Live DB access, migrations, edge functions | ✅ Connected |
-| Vercel | Frontend deployment | ✅ Connected |
-| GitHub | Version control | ✅ Connected |
-| _(your tool)_ | _(purpose)_ | 🔲 Not connected |
-| _(your tool)_ | _(purpose)_ | 🔲 Not connected |
+- **RLS** on all 24 public tables prevents cross-player data leakage.
+- Fog-of-war: `sectors.revealed_public` controls map visibility. Private intel is stored as `posts` with `visibility='private'` and `audience_user_id`.
+- Secret locations stored in `player_state_secret` with restricted RLS — only the owning player can read their own row.
+- Compound RLS policies allow both player self-access and Lead administrative oversight.
 
 ---
 
-## Security Model (Fog of War)
+## 6) AI Map Generation
 
-- **RLS** prevents players reading other players' secret locations or private intel
-- **Public map** only shows sectors where `revealed_public = true`
-- **Private posts** are stored with `visibility = 'private'` and an `audience_user_id` — only that user can read them
-- **Edge functions** that modify sensitive data run with the service role key on the server — clients never hold it
-- Players can only read/write their own `moves`, `recon_ops`, and `player_state` rows
-
----
-
-## Campaign Creation (No-GM Flow)
-
-1. Go to `/campaigns` and sign in
-2. Select a template, name your campaign, choose a campaign size (Small/Medium/Large)
-3. Optionally generate a grimdark AI invite message, or write your own
-4. Optionally invite players by email — they receive an invite email and accept/decline on their profile page
-5. You become the **Lead** automatically
-6. A map is auto-generated from the campaign size and stored in the `maps` table
-5. Lead controls are at `/lead?campaign=<id>`
+Maps are generated using OpenAI's `gpt-image-1` model via the `generate-map` edge function. The `maps` table stores:
+- `seed` — generation seed for reproducibility
+- `layout` — map topology (e.g. `ring`, default 8 zones)
+- `planet_profile` / `ship_profile` — climate/environment JSON fed to the prompt
+- `generation_status` — `none | generating | complete | failed`
+- `image_path` / `bg_image_path` / `thumbs` — stored image references
 
 ---
 
-## Conventions & Reference
+## 7) Changelog / Development Log
 
-All naming conventions, canonical value sets, table schemas, TypeScript types, and the change log are maintained in **`REFERENCE.md`** in the repo root. Consult it before adding new variables, columns, or string literals to keep everything consistent across chats and sessions.
-
-Key rules:
-- TypeScript types: `PascalCase`
-- Variables/functions: `camelCase`
-- DB tables/columns: `snake_case`
-- Faction keys: `snake_case` matching the folder name under `public/art/factions/`
-- Env var for anon key: `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (not `ANON_KEY`)
+See **REFERENCE.md §7 — Changelog** for a session-by-session log of changes, decisions, and troubleshooting resolutions. Use this to resume work from any prior chat or development session.
 
 ---
 
-## Planned / In Progress
+## Next Features (Planned)
 
-### Completed
-- ✅ `start-campaign` edge function (fixed map_id join)
-- ✅ Campaign size picker with auto-generated maps
-- ✅ Email invite system with accept/decline flow
-- ✅ Faction allegiance picker with permanent lock
-- ✅ AI invite message generation
-- ✅ Campaign Chronicle (AI narrative summary)
-- ✅ Campaign archive export (full JSON)
-- ✅ Campaign delete with confirmation
-- ✅ RLS policies for `rulesets` and `maps` tables
-
-### In Progress / Backlog
-- Shared `src/types/index.ts` (types currently duplicated per page)
-- Resolve `player_state_secret` table purpose (no migration file)
 - Multiple maps per campaign (moonlets / sub-theatres)
 - Image uploads for battle reports
 - Discord webhook for bulletins
-- Elo-style threat level + dynamic bounties
-- One-click game day flow (batch 2–3 rounds)
+- Elo-like "threat level" + dynamic bounties
+- GM/host "one-click game day" flow batching 2–3 rounds
