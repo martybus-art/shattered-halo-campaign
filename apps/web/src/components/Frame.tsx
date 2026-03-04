@@ -23,20 +23,20 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
   const isLead = role === "lead" || role === "admin";
 
   return (
-    <div className="min-h-screen bg-void">
+    <div className="min-h-screen">
       {/* ── Top bar ── */}
-      <header className="sticky top-0 z-10 bg-iron/80 backdrop-blur border-b border-brass/30">
+      <header className="sticky top-0 z-10 bg-iron/70 backdrop-blur border-b border-steel/10">
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-baseline gap-3">
-            <a href="/" className="text-brass font-gothic tracking-wider hover:text-brass/80 transition-colors">
+            <a href="/" className="text-steel font-gothic tracking-wider hover:text-steel/80 transition-colors">
               SHATTERED HALO
             </a>
             {title && (
-              <span className="text-parchment/90 font-mono text-sm">{title}</span>
+              <span className="text-parchment/70 font-mono text-sm">{title}</span>
             )}
           </div>
           {right && (
-            <div className="text-parchment/70 text-sm">{right}</div>
+            <div className="text-parchment/60 text-sm">{right}</div>
           )}
         </div>
 
@@ -49,8 +49,8 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
             className={[
               "px-3 py-1 rounded text-sm font-mono transition-colors",
               currentPage === "home"
-                ? "bg-brass/30 text-brass border border-brass/50"
-                : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
+                ? "bg-steel/10 text-steel border border-steel/20"
+                : "text-parchment/60 hover:text-parchment hover:bg-steel/5 border border-transparent",
             ].join(" ")}
           >
             Profile
@@ -66,8 +66,8 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
                 className={[
                   "px-3 py-1 rounded text-sm font-mono transition-colors",
                   active
-                    ? "bg-brass/30 text-brass border border-brass/50"
-                    : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
+                    ? "bg-steel/10 text-steel border border-steel/20"
+                    : "text-parchment/60 hover:text-parchment hover:bg-steel/5 border border-transparent",
                 ].join(" ")}
               >
                 {label}
@@ -82,8 +82,8 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
               className={[
                 "px-3 py-1 rounded text-sm font-mono transition-colors",
                 currentPage === "lead"
-                  ? "bg-blood/40 text-blood border border-blood/60"
-                  : "text-blood/70 hover:text-blood hover:bg-blood/10 border border-transparent",
+                  ? "bg-blood/10 text-blood border border-blood/30"
+                  : "text-blood/80 hover:text-blood hover:bg-blood/5 border border-transparent",
               ].join(" ")}
             >
               Lead Controls
@@ -96,8 +96,8 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
             className={[
               "px-3 py-1 rounded text-sm font-mono transition-colors ml-auto",
               currentPage === "campaigns"
-                ? "bg-brass/30 text-brass border border-brass/50"
-                : "text-parchment/60 hover:text-parchment hover:bg-brass/10 border border-transparent",
+                ? "bg-steel/10 text-steel border border-steel/20"
+                : "text-parchment/60 hover:text-parchment hover:bg-steel/5 border border-transparent",
             ].join(" ")}
           >
             + New Campaign
