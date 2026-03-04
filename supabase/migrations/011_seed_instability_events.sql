@@ -206,7 +206,7 @@ VALUES
 
 ('8147ef28-7fd8-411b-a35a-b0ff863aae28', 8, 8,
  'Mass Psychic Event',
- 'Every psyker on the Halo simultaneously suffers a vision of the same thing. No two of them describe it the same way. All of them weep. The clarity of it is terrible.',
+ 'Every psyker simultaneously suffers a vision of the same thing. No two of them describe it the same way. All of them weep. The clarity of it is terrible.',
  '{"type":"nip_gain_all","amount":1}',
  true),
 
@@ -217,7 +217,7 @@ VALUES
  true),
 
 ('8147ef28-7fd8-411b-a35a-b0ff863aae28', 8, 10,
- 'The Halo Chooses',
- 'The Shattered Halo itself — whatever intelligence remains in its dying substrate — reaches out and touches every commander simultaneously. It has seen wars before. It knows which ones end badly.',
+ 'The Void Speaks',
+ 'Whatever intelligence remains in its dying substrate — reaches out and touches every commander simultaneously. It has seen wars before. It knows which ones end badly.',
  '{"type":"nip_gain_last","nip":3,"ncp":1}',
  true);

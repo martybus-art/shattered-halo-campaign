@@ -1,4 +1,4 @@
-# Embers of the Shattered Halo — Campaign App
+# 40K Campaign Console — Campaign App
 
 A full-featured digital campaign manager for Warhammer 40,000 narrative campaigns. Automates round flow, NIP/NCP economy, instability events, mission assignment, fog-of-war, and AI-generated maps — removing the manual admin burden from campaign play.
 

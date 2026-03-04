@@ -613,7 +613,7 @@ export default function CampaignsPage() {
                     className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
                     value={campaignName}
                     onChange={(e) => setCampaignName(e.target.value)}
-                    placeholder="e.g. Embers of the Shattered Halo (Season 1)"
+                    placeholder="e.g. Embers of the Shattered Halo"
                     disabled={loading || creating}
                   />
                 </div>
