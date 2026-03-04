@@ -11,6 +11,9 @@
 //                Added campaign_name and campaign_narrative params — these are
 //                injected into the OpenAI prompt for thematic image generation.
 //                Biome-specific prompt modifiers added for all 12 biomes.
+//   2026-03-05 — Reworded the prompts to be more cinematic and aligned with the warhammer 40K universe
+//                
+
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
@@ -64,27 +67,26 @@ function buildPrompt(params: {
 
   const sharedStyle = [
     "Warhammer 40,000 official art style.",
-    "Top-down overhead bird's-eye view, flat 2D tactical map perspective.",
     "Hand-painted illustrated campaign map aesthetic — rich ink wash textures, painted borders between zones.",
-    "Dark and grimdark colour palette: black, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
+    "Dark and grimdark colour palette for the core of the image:black, stone, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
+    "Vibrant colours to contrast zone territories: Toxic Orange, rich royal Purple, Deep magestic blue, Forrest Green, Heroic Yellow and Gold",
     "Clearly delineated zone territories separated by visible borders — roads, walls, rivers, energy barriers, or terrain breaks.",
-    "Imperial iconography: aquila symbols, purity seals, skull motifs visible on structures.",
+    "The feel of the art should be for a faction commander to strategically plan and direct a battle.",
     "Battle damage visible — craters, scorch marks, ruined buildings.",
-    "No text overlays. No UI elements. No photo-realistic renders. No 3D perspective.",
-    "Pure overhead 2D illustrated map — painterly, detailed, grimdark.",
+    "No text overlays. No UI elements.",
+    "Overhead Illustrated map — painterly, detailed, Cinematic.",
   ].join(" ");
 
   switch (layout) {
     case "ring": {
       return [
-        `Top-down 2D campaign map of a curved section of a Warhammer 40K Halo megastructure ring.`,
+        `Top-down campaign map of a complete Ring or Halo World or part of a former Dyson Sphere set in Warhammer 40K as a megastructure, viewed from space.`,
         `${narrativeContext}${campaignNameContext}`,
-        `${zone_count} clearly separated battle zones arranged along the curve of the ring arc, each zone visible as a distinct territory from directly above.`,
+        `${zone_count} clearly separated battle zones arranged around the ring, each zone visible as a distinct territory from directly above.`,
         `Terrain: ${biomeMod}`,
-        `The ring arc curves across the image horizontally. The inner edge faces the central void — visible as a black abyss.`,
+        `The ring is complete as a barely intact structure. The inner edge faces the central void — visible as a black abyss.`,
         `The outer edge shows the megastructure's superstructure frame — iron girders, plasma conduits, atmospheric vents.`,
-        `Chaos corruption bleeds through several zones — purple warp-energy ground cracks, eye-of-terror sigils burned into the terrain.`,
-        `Imperial fortifications visible as bastions and trench lines along zone edges.`,
+        `The zones of the ring represent many of the 40K factions that have had influence of the the terrain (Imperium, Chaos, Xenos) but the age of the ring is much older indicating the presence of relics from the golden age of humanity.`,
         `Atmospheric haze, plasma glow from the ring's power conduits visible as amber light along the inner edge.`,
         sharedStyle,
       ].join(" ");
@@ -92,51 +94,65 @@ function buildPrompt(params: {
 
     case "continent": {
       return [
-        `Top-down 2D campaign map of a shattered continent on a Warhammer 40K world, viewed directly from above.`,
+        `Top-down campaign map of a Warhammer 40K planet with shattered continents, viewed from space.`,
         `${narrativeContext}${campaignNameContext}`,
         `${zone_count} clearly delineated territorial zones, each zone a distinct landmass plate separated from its neighbours by chasms, lava channels, collapsed terrain, or fortification lines.`,
         `Terrain: ${biomeMod}`,
-        `The continent has a ragged coastline or void-cliff edge on its perimeter. Rivers of lava or toxic sludge form natural zone dividers.`,
-        `Imperial settlements visible in contested zones — hexagonal hab-blocks, forge-stacks, cathedral spires.`,
+        `The continent has a ragged coastlines or void-cliffs edge on their perimeter. or Rivers of lava or toxic sludge from long ago natural disasters.`,
         `Zone borders are marked by terrain features — not drawn lines. Natural breaks in terrain delineate each territory.`,
-        `Chaos taint visible as spreading purple-black corruption patches across several zones.`,
+        `The continents of the planet represent many of the 40K factions that have had influence of the the terrain (Imperium, Chaos, Xenos) from wars long past and of the wars yet to come to fracture the contenents even more.`,
         sharedStyle,
       ].join(" ");
     }
 
     case "radial": {
       return [
-        `Top-down 2D campaign map in a radial spoke pattern, viewed directly from above — a Warhammer 40K warzone.`,
+        `Top-down campaign map of a disc floting in space that formed in a radial spoke pattern, viewed from above in space.`,
         `${narrativeContext}${campaignNameContext}`,
         `${zone_count} zones arranged radially — a central hub objective zone surrounded by spoke corridors extending outward to outer ring zones.`,
         `Terrain: ${biomeMod}`,
-        `The central objective zone is the most heavily fortified and contested — a ruined Mechanicus shrine, orbital defence laser emplacement, or ancient xenos monolith at the exact centre.`,
+        `The central objective zone is the most heavily fortified and contested — a tower much older than the setting of the Warhammer 40K timeline still stands fortified yet abandond in the exact centre of the disc.`,
         `Each spoke corridor is a distinct battle zone flanked by ruins and terrain obstacles.`,
-        `The outer zones are more wild and less fortified but equally dangerous.`,
-        `Chaos corruption radiates outward from the centre — tainted ground, warped architecture.`,
+        `The outer zones are more wild and less fortified but equally dangerous and represent many of the 40K factions that have battled here in the past.`,
         sharedStyle,
       ].join(" ");
     }
 
     case "ship_line": {
       return [
-        `Top-down 2D tactical map of the interior of a colossal Warhammer 40K Gothic warship, viewed from directly above — like a building floor plan.`,
+        `Top-down tactical map of the interior of a colossal Warhammer 40K Gothic warship, viewed from above — like a building floor plan.`,
         `${narrativeContext}${campaignNameContext}`,
         `The warship hull is arranged bow (left) to stern (right) across the full width of the image.`,
-        `${zone_count} clearly distinct interior combat zones along the hull — each zone is a major ship compartment: bridge citadel, plasma reactor chambers, enginarium, torpedo bays, barracks, medicae, sanctum, and void-lock bays.`,
+        `${zone_count} clearly distinct interior combat zones along the hull — each zone is a major ship compartment: Command Bridge, Navigators Sanctum,  Astropathic Choir, Crew Quarters & Shrines, Plasma Drive & Reactors, Warp Drive, Geller Fields, Augur Arrays, Void Shields, Armoured Hull & Prow, Macro Cannons, High Energy Lances, Nova CAnnons, Torpedo Tubes, Launch Bays.`,
+        `Plasma Drive & Reactors: These occupy up to a third of the ship's length, usually in the aft section. The reactors are massive enough to power entire hive cities.`,
+        `Warp Drive: Essential for interstellar travel, this allows the ship to breach the barrier into the Immaterium.`,
+        `Geller Field: A vital protective bubble that shields the ship and its crew from the predations of daemons while in the Warp.`,
+        `Augur Arrays: The ship's primary sensory and scanning equipment for detecting enemies across the vastness of space. `,
+        `Void Shields: Multiple layers of energy barriers that absorb incoming fire before it can reach the hull.`,
+        `Armoured Hull: Often composed of meters-thick layers of adamantium and plasteel.`,
+        `Armoured Prow: A massive slab of reinforced metal at the front, often used for ramming enemy vessels.`,
+        `Macrocannons: Gigantic broadside batteries that fire building-sized shells at a significant fraction of the speed of light.`,
+        `Lances: High-powered energy beams (lasers or plasma) designed to burn through the thickest enemy armour.`,
+        `Nova Cannon: A rare and devastating prow-mounted weapon that fires a projectile capable of obliterating entire fleets.`,
+        `Torpedo Tubes: Large tubes in the prow that launch massive self-propelled munitions.`,
+        `Launch Bays: Hangar spaces housing squadrons of Fury Interceptors and Starhawk Bombers`,
+        `The Bridge: The command centre, often located in a towering spire, from which the Captain and senior officers control the vessel.`,
+        `Navigator’s Sanctum: A specialized chamber for the Navis Nobilite who steer the ship through the Warp.`,
+        `Astropathic Choir: A dedicated area for psykers to send and receive interstellar communications.`,
+        `Crew Quarters & Shrines: Living spaces for tens of thousands of personnel, ranging from opulent officer staterooms to squalid holds for press-ganged bondsmen, often interspersed with massive gothic cathedrals and shrines to the Emperor. `,
         `Each compartment is separated by thick armoured bulkheads and blast doors, clearly visible as thick dark walls.`,
         `Interior aesthetic: dark corroded iron deckplates, cathedral vaulted ceilings seen from above, glowing amber cogitator console banks, servo-skull stations, hanging incense braziers, purity scroll dispensers, weapon lockers.`,
         `The ship exterior hull outline is visible as a massive iron silhouette against the void of space — stars and nebula glow visible around the hull outline.`,
         `Battle damage within compartments: blast scorches, breached hull sections showing stars through holes, blood smears, toppled statues.`,
         `Each combat zone has multiple entry/exit points — corridors, access hatches, blast doors.`,
-        `Imperial Aquila marked on the bridge section. Engine plasma glow (deep blue-white) visible at stern end.`,
+        `Engine plasma glow (deep blue-white) visible at stern end.`,
         sharedStyle,
       ].join(" ");
     }
 
     default: {
       return [
-        `Top-down 2D tactical Warhammer 40K campaign map with ${zone_count} distinct battle zones.`,
+        `Top-down cinematic and tactical Warhammer 40K campaign map with ${zone_count} distinct battle zones.`,
         `${narrativeContext}`,
         `Terrain: ${biomeMod}`,
         sharedStyle,
