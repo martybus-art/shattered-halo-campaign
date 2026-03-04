@@ -469,18 +469,29 @@ export default function CampaignsPage() {
   };
 
   // ── Cancel preview ────────────────────────────────────────────────────────
+  // Shows a confirmation dialog then calls the delete-campaign edge function
+  // which handles storage cleanup and cascade delete.
 
   const cancelPreview = async () => {
     if (!previewCampaignId) { window.location.href = "/"; return; }
+
+    const confirmed = window.confirm(
+      "Cancel campaign creation?\n\n" +
+      "This will permanently delete this campaign and all generated map artwork. " +
+      "This cannot be undone."
+    );
+    if (!confirmed) return;
+
     setCancelling(true);
     try {
-      if (previewMapId) {
-        await supabase.storage
-          .from("campaign-maps")
-          .remove([`${previewCampaignId}/maps/${previewMapId}/bg.png`]);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        await supabase.functions.invoke("delete-campaign", {
+          body: { campaign_id: previewCampaignId },
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
       }
-      await supabase.from("campaigns").delete().eq("id", previewCampaignId);
-    } catch { /* non-fatal */ } finally {
+    } catch { /* non-fatal -- navigate home regardless */ } finally {
       setCancelling(false);
     }
     window.location.href = "/";
