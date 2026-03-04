@@ -3,8 +3,8 @@ import "../components/ui.css";
 import React from "react";
 
 export const metadata = {
-  title: "Shattered Halo Campaign",
-  description: "Fog-of-war narrative campaign tracker"
+  title: "40K Campaign Console",
+  description: "Campaign Console for the small scale 40K Skirmishes"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

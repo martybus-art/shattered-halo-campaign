@@ -35,8 +35,12 @@ body::before{
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  opacity: 0.45; /* keep it classy */
-  filter: saturate(0.95) contrast(1.02);
+
+  /* crisp + present */
+  opacity: 0.55;
+  filter: saturate(1.05) contrast(1.12) brightness(0.98);
+  transform: translateZ(0); /* helps some GPUs render sharp */
+
   z-index: -2;
 }
 
@@ -46,10 +50,14 @@ body::after{
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(1000px 600px at 20% 10%, rgba(255,255,255,0.60), rgba(255,255,255,0.18) 60%, rgba(255,255,255,0.08)),
-    linear-gradient(180deg, rgba(248,245,246,0.86), rgba(248,245,246,0.72));
+     radial-gradient(900px 520px at 20% 10%, rgba(255,255,255,0.42), rgba(255,255,255,0.14) 60%, rgba(255,255,255,0.06)),
+    linear-gradient(180deg, rgba(248,245,246,0.62), rgba(248,245,246,0.52));
   z-index: -1;
 }
 
 /* Smoother default typography */
 *{ box-sizing: border-box; }
+
+main{
+  backdrop-filter: blur(2px);
+}
