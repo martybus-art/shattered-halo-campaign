@@ -71,7 +71,7 @@ function buildPrompt(params: {
     "Dark and grimdark colour palette for the core of the image:black, stone, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
     "Vibrant colours to contrast zone territories: Toxic Orange, rich royal Purple, Deep magestic blue, Forrest Green, Heroic Yellow and Gold",
     "Clearly delineated zone territories separated by visible borders — roads, walls, rivers, energy barriers, or terrain breaks.",
-    "The feel of the art should be for a faction commander to strategically plan and direct a battle.",
+    "The feel of the art should be for a faction commander strategically planning and directing a battle.",
     "Battle damage visible — craters, scorch marks, ruined buildings.",
     "No text overlays. No UI elements.",
     "Overhead Illustrated map — painterly, detailed, Cinematic.",
