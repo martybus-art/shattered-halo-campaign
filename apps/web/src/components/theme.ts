@@ -22,3 +22,16 @@ export const FACTION_THEMES: FactionTheme[] = [
 export function getFactionTheme(key?: string | null) {
   return FACTION_THEMES.find(t => t.key === key) ?? null;
 }
+
+// apps/web/src/components/theme.ts
+export const theme = {
+  colors: {
+    indigo: "#424696",
+    mist: "#E7D6D6",
+    sand: "#FBB874",
+    ember: "#FB6812",
+    inferno: "#E64100",
+  }
+} as const;
+
+export type ThemeColors = typeof theme.colors;

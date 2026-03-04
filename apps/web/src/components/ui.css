@@ -1,17 +1,38 @@
 :root{
-  --void:#0e0e11;
-  --steel:#17181d;
-  --brass:#b08d57;
-  --parchment:#e8dcc6;
-  --blood:#7a1f1f;
+  /* Brand palette (from your reference image) */
+  --indigo:#424696;
+  --mist:#E7D6D6;
+  --sand:#FBB874;
+  --ember:#FB6812;
+  --inferno:#E64100;
+
+  /* Semantic UI tokens (corporate, bright, readable) */
+  --bg: #f8f5f6;
+  --surface: rgba(255,255,255,.82);
+  --surface-strong: rgba(255,255,255,.92);
+  --border: rgba(66,70,150,.14);
+
+  --text: #111827;
+  --muted: rgba(17,24,39,.68);
+
+  --primary: var(--indigo);
+  --primary-foreground: #ffffff;
+
+  --accent: var(--sand);
+  --warning: var(--ember);
+  --danger: var(--inferno);
+
+  --shadow: 0 10px 30px rgba(17,24,39,.10);
 }
 
 /* Works without Tailwind */
 .ui-frame{
   min-height:100vh;
-  color:var(--parchment);
-  background: var(--void);
+  color:var(--text);
+  background: var(--bg);
 }
+
+/* Optional: backdrop wrapper if a page uses it */
 .ui-backdrop{
   position:relative;
   overflow:hidden;
@@ -19,21 +40,25 @@
 .ui-backdrop::before{
   content:"";
   position:absolute; inset:0;
-  background: radial-gradient(circle at 20% 10%, rgba(176,141,87,.14), transparent 45%),
-              radial-gradient(circle at 80% 0%, rgba(122,31,31,.10), transparent 45%),
-              rgba(0,0,0,.72);
-  backdrop-filter: blur(8px);
+  /* subtle, pro gradient veil (keeps bg image readable but not noisy) */
+  background:
+    radial-gradient(900px 520px at 20% 10%, rgba(255,255,255,.74), rgba(255,255,255,.18) 55%, rgba(255,255,255,.08)),
+    radial-gradient(900px 520px at 80% 0%, rgba(66,70,150,.10), transparent 60%),
+    linear-gradient(180deg, rgba(248,245,246,.92), rgba(248,245,246,.84));
 }
 .ui-backdrop > *{ position:relative; z-index:1; }
 
+/* Panels / cards */
 .ui-panel{
-  background: rgba(23,24,29,.86);
-  border:1px solid rgba(176,141,87,.35);
+  background: var(--surface);
+  border:1px solid var(--border);
   border-radius:14px;
   padding:18px;
-  box-shadow: 0 12px 35px rgba(0,0,0,.35);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
 }
 
+/* Buttons */
 .ui-btn{
   display:inline-flex;
   gap:10px;
@@ -41,21 +66,61 @@
   justify-content:center;
   padding:10px 14px;
   border-radius:12px;
-  border:1px solid rgba(176,141,87,.45);
-  background: rgba(176,141,87,.12);
-  color: var(--parchment);
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.72);
+  color: var(--text);
   cursor:pointer;
+  transition: transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease;
 }
-.ui-btn:hover{ background: rgba(176,141,87,.18); }
+.ui-btn:hover{
+  transform: translateY(-1px);
+  background: rgba(255,255,255,.90);
+  box-shadow: 0 10px 22px rgba(17,24,39,.10);
+}
+.ui-btn:active{
+  transform: translateY(0px);
+  box-shadow: 0 6px 16px rgba(17,24,39,.08);
+}
+
+/* Primary action */
+.ui-btn-primary{
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: rgba(66,70,150,.35);
+}
+.ui-btn-primary:hover{
+  background: color-mix(in srgb, var(--primary) 92%, white);
+}
+
+/* Danger (used sparingly) */
 .ui-btn-danger{
-  border-color: rgba(122,31,31,.6);
-  background: rgba(122,31,31,.18);
+  border-color: color-mix(in srgb, var(--danger) 40%, white);
+  background: color-mix(in srgb, var(--danger) 12%, white);
+  color: #4b1d13;
 }
+.ui-btn-danger:hover{
+  background: color-mix(in srgb, var(--danger) 18%, white);
+}
+
+/* Badges */
 .ui-badge{
   display:inline-flex;
+  align-items:center;
+  gap:8px;
   padding:4px 10px;
   border-radius:999px;
-  border:1px solid rgba(176,141,87,.4);
-  background: rgba(0,0,0,.35);
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.60);
   font-size:12px;
+  color: var(--muted);
+}
+.ui-badge-accent{
+  background: color-mix(in srgb, var(--sand) 24%, white);
+  border-color: color-mix(in srgb, var(--sand) 40%, white);
+  color: #3b2b16;
+}
+.ui-badge-danger{
+  background: color-mix(in srgb, var(--inferno) 14%, white);
+  border-color: color-mix(in srgb, var(--inferno) 30%, white);
+  color: #4b1d13;
 }

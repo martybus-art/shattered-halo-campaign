@@ -2,7 +2,54 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+:root{
+  /* Prefer light UI for readability */
+  color-scheme: light;
+}
+
 html, body { height: 100%; }
-body { background: #0b0d10; color: #d8c7a3; }
-a { color: #d8c7a3; }
+
+body{
+  margin: 0;
+  background: var(--bg, #f8f5f6);
+  color: var(--text, #111827);
+}
+
+/* Links read as “professional website” */
+a{
+  color: var(--primary, #424696);
+  text-decoration: none;
+}
+a:hover{
+  text-decoration: underline;
+}
+
+/* --- Background image treatment (subtle wallpaper) ---
+   Put your background image at: /public/bg/halo-cathedral.png
+*/
+body::before{
+  content:"";
+  position: fixed;
+  inset: 0;
+  background-image: url("/bg/halo-cathedral.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.22; /* keep it classy */
+  filter: saturate(0.95) contrast(1.02);
+  z-index: -2;
+}
+
+/* Soft bright veil so content stays readable */
+body::after{
+  content:"";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(1000px 600px at 20% 10%, rgba(255,255,255,0.78), rgba(255,255,255,0.22) 60%, rgba(255,255,255,0.10)),
+    linear-gradient(180deg, rgba(248,245,246,0.92), rgba(248,245,246,0.82));
+  z-index: -1;
+}
+
+/* Smoother default typography */
+*{ box-sizing: border-box; }
