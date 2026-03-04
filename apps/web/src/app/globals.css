@@ -37,7 +37,7 @@ body::before{
   background-repeat: no-repeat;
 
   /* crisp + present */
-  opacity: 0.55;
+  opacity: 0.65;
   filter: saturate(1.05) contrast(1.12) brightness(0.98);
   transform: translateZ(0); /* helps some GPUs render sharp */
 
