@@ -436,3 +436,6 @@ verify_jwt = false
 
 [functions.offer-catchup]
 verify_jwt = false
+
+[functions.deploy-unit]
+verify_jwt = false

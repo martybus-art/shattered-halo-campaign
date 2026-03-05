@@ -1,3 +1,12 @@
+// supabase/functions/start-campaign/index.ts
+// Allocates secret starting locations for all players and creates their
+// initial scout and occupation units.
+//
+// changelog:
+//   2026-03-05 -- Added unit creation: after each player's starting location
+//                 is allocated, insert 1 scout + 1 occupation unit at that
+//                 sector. Late mode also creates units for the late player.
+
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
@@ -58,9 +67,9 @@ serve(async (req) => {
 
     const admin = adminClient();
 
-    const body        = (await req.json().catch(() => ({}))) as Partial<Body>;
-    const campaign_id = (body as any)?.campaign_id as string | undefined;
-    const mode        = ((body as any)?.mode ?? "initial") as "initial" | "late";
+    const body         = (await req.json().catch(() => ({}))) as Partial<Body>;
+    const campaign_id  = (body as any)?.campaign_id as string | undefined;
+    const mode         = ((body as any)?.mode ?? "initial") as "initial" | "late";
     const late_user_id = (body as any)?.late_user_id as string | undefined;
 
     if (!campaign_id) return json(400, { ok: false, error: "Missing campaign_id" });
@@ -81,11 +90,13 @@ serve(async (req) => {
     let map: MapDef = fallbackMap();
     const { data: camp, error: campErr } = await admin
       .from("campaigns")
-      .select("id, map_id")
+      .select("id, map_id, round_number")
       .eq("id", campaign_id)
       .maybeSingle();
 
     if (campErr) return json(500, { ok: false, error: campErr.message });
+
+    const roundNumber = (camp as any)?.round_number ?? 1;
 
     if (camp?.map_id) {
       const { data: mapRow, error: mapErr } = await admin
@@ -148,13 +159,11 @@ serve(async (req) => {
       return candidates.length ? shuffle(candidates)[0]! : null;
     }
 
-    // Creates or updates the public player_state row.
-    // nip is set to STARTING_NIP on first creation; existing rows are not changed.
-    async function ensurePublicPlayerState(user_id: string) {
+    async function ensurePublicPlayerState(uid: string) {
       const { error } = await admin.from("player_state").upsert(
         {
           campaign_id,
-          user_id,
+          user_id:            uid,
           nip:                STARTING_NIP,
           ncp:                0,
           public_location:    "Unknown",
@@ -166,13 +175,55 @@ serve(async (req) => {
       if (error) throw new Error(error.message);
     }
 
-    async function writeSecret(user_id: string, loc: string) {
+    async function writeSecret(uid: string, loc: string) {
       const { error } = await admin.from("player_state_secret").upsert(
-        { campaign_id, user_id, starting_location: loc, secret_location: loc },
+        { campaign_id, user_id: uid, starting_location: loc, secret_location: loc },
         { onConflict: "campaign_id,user_id" }
       );
       if (error) throw new Error(error.message);
     }
+
+    // Creates initial scout + occupation units at the player's starting sector.
+    // Idempotent: skips creation if the player already has active units.
+    async function createInitialUnits(uid: string, loc: string, roundNum: number) {
+      const { zone_key, sector_key } = parseLocation(loc);
+      if (!zone_key || !sector_key) return;
+
+      // Check if units already exist for this player (idempotent)
+      const { data: existing } = await admin
+        .from("units")
+        .select("id")
+        .eq("campaign_id", campaign_id)
+        .eq("user_id", uid)
+        .eq("status", "active")
+        .limit(1);
+
+      if (existing?.length) return; // already has units
+
+      const { error } = await admin.from("units").insert([
+        {
+          campaign_id,
+          user_id:        uid,
+          unit_type:      "scout",
+          zone_key,
+          sector_key,
+          status:         "active",
+          round_deployed: roundNum,
+        },
+        {
+          campaign_id,
+          user_id:        uid,
+          unit_type:      "occupation",
+          zone_key,
+          sector_key,
+          status:         "active",
+          round_deployed: roundNum,
+        },
+      ]);
+      if (error) console.error(`[start-campaign] unit insert error for ${uid}:`, error.message);
+    }
+
+    // ── Late mode ─────────────────────────────────────────────────────────────
 
     if (mode === "late") {
       const uid = late_user_id!;
@@ -216,44 +267,45 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, allocatedLoc);
+      await createInitialUnits(uid, allocatedLoc, roundNumber);
       return json(200, { ok: true, allocated: 1 });
     }
 
-    // ── Initial start: allocate all unassigned members ─────────────────────────
+    // ── Initial start: allocate all unassigned members ────────────────────────
+
     const toAllocate = memberIds.filter((uid) => !assignedByUser.has(uid));
     let allocated = 0;
 
     for (const uid of toAllocate) {
       const zoneKey = pickUnusedZone();
+      let loc: string | null = null;
+
       if (!zoneKey) {
         const freeAny = allLocations.filter((k) => !usedSectors.has(k));
         if (!freeAny.length) break;
-        const loc = shuffle(freeAny)[0]!;
-        await ensurePublicPlayerState(uid);
-        await writeSecret(uid, loc);
-        usedSectors.add(loc);
-        usedZones.add(parseLocation(loc).zone_key);
-        allocated++;
-        continue;
+        loc = shuffle(freeAny)[0]!;
+      } else {
+        loc = pickFreeSectorInZone(zoneKey);
+        if (!loc) continue;
       }
-
-      const loc = pickFreeSectorInZone(zoneKey);
-      if (!loc) continue;
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, loc);
-      usedZones.add(zoneKey);
+      await createInitialUnits(uid, loc, roundNumber);
+
       usedSectors.add(loc);
+      usedZones.add(parseLocation(loc).zone_key);
       allocated++;
     }
 
-    // Open Round 1 at the Spend phase so players can trade / purchase before moving
+    // Open Round 1 at the Spend phase
     await admin.from("rounds").upsert(
       { campaign_id, round_number: 1, stage: "spend" },
       { onConflict: "campaign_id,round_number" }
     );
 
     return json(200, { ok: true, allocated });
+
   } catch (e) {
     return json(500, { ok: false, error: (e as Error).message ?? "Internal error" });
   }

@@ -11,8 +11,9 @@
 //                 Added Campaign Map preview card with territory legend.
 //                 Underdog catchup offer appears as dedicated card when pending.
 //                 Removed prompt-copy helper functions. Cleaned up debug code.
-//                 Removed Quick Links card. Nav uses Frame currentPage="dashboard"
-//                 to match site-wide nav pattern.
+//                 Removed Quick Links card. Nav fixed: Frame now receives
+//                 campaignId and role props so all nav links render correctly.
+//                 Theatre Map image is now a link to /map page.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -363,7 +364,7 @@ export default function Dashboard() {
   const isLeadOrAdmin = role === "lead" || role === "admin";
 
   return (
-    <Frame title="Command Throne" currentPage="dashboard">
+    <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
       <div className="space-y-6">
 
         {/* ── Row 1: Your Status (left) + War Bulletin (right) ─────────── */}
@@ -568,12 +569,14 @@ export default function Dashboard() {
           <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
             {mapUrl ? (
               <div className="space-y-3">
-                <img
-                  src={mapUrl}
-                  alt="Campaign theatre map"
-                  className="w-full rounded border border-brass/20 object-cover"
-                  style={{ maxHeight: "260px" }}
-                />
+                <a href={`/map?campaign=${campaignId}`} title="Open Tactical Hololith">
+                  <img
+                    src={mapUrl}
+                    alt="Campaign theatre map"
+                    className="w-full rounded border border-brass/20 object-cover hover:border-brass/50 transition-colors cursor-pointer"
+                    style={{ maxHeight: "260px" }}
+                  />
+                </a>
 
                 {/* Territory legend */}
                 {territoryByZone.size > 0 && (

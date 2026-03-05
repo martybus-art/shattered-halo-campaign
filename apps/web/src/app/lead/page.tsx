@@ -8,15 +8,13 @@
 //                 Campaign Card and Invite Players Card side-by-side (md:grid-cols-2).
 //                 Invite Players lists current members (commander_name, faction, role).
 //                 Auto late-allocation when campaign already started.
-//                 Removed manual Allocate Late Player UI.
 //                 All controls consolidated inside Campaign Card.
 //                 Stage order: spend>recon>movement>conflicts>missions>results>publish.
 //                 Start Campaign hidden after started. Advance Stage blocked until
-//                 started. Assign Missions (missions stage) and Apply Instability
-//                 (results stage) gated with confirm popups.
+//                 started. Assign Missions/Apply Instability/Offer Catchup gated.
 //                 Generate Map modal. Delete Campaign in danger section.
-//                 Added "Offer Catchup Choice" button (results stage only).
-//                 Nav uses Frame currentPage="lead" to match site-wide nav pattern.
+//                 Nav fixed: Frame now receives campaignId and role props so all
+//                 nav links (Dashboard, Map, Conflicts, Lead Controls) render.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -393,7 +391,7 @@ export default function LeadControls() {
   // -- Render ----------------------------------------------------------------
 
   return (
-    <Frame title="Lead Controls" currentPage="lead">
+    <Frame title="Lead Controls" currentPage="lead" campaignId={campaignId} role={role}>
       <div className="space-y-6">
 
         {/* ── Top row: Campaign Card + Invite Players side by side ─────── */}
