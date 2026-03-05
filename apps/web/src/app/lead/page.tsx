@@ -16,7 +16,7 @@
 //                 Nav fixed: Frame now receives campaignId and role props so all
 //                 nav links (Dashboard, Map, Conflicts, Lead Controls) render.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
