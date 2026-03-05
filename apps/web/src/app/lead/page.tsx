@@ -200,6 +200,63 @@ function GenerateMapModal({ open, campaignId, campaign, onClose, onConfirmed }: 
     </div>
   );
 }
+// Start Campaign Notification Modal
+// -- Result Modal -----------------------------------------------------------
+
+type ResultModalState =
+  | { open: false }
+  | { open: true; title: string; message: string; tone?: "brass" | "blood" };
+
+function ResultModal({
+  state,
+  onClose,
+}: {
+  state: ResultModalState;
+  onClose: () => void;
+}) {
+  if (!state.open) return null;
+
+  const tone = state.tone ?? "brass";
+  const border = tone === "brass" ? "border-brass/30" : "border-blood/30";
+  const titleCol = tone === "brass" ? "text-brass" : "text-blood";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className={`bg-void border ${border} rounded-lg shadow-2xl w-full max-w-lg`}>
+        <div className={`flex items-center justify-between px-5 py-4 border-b ${border}`}>
+          <h2 className={`${titleCol} font-semibold uppercase tracking-widest text-sm`}>
+            {state.title}
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-parchment/40 hover:text-parchment/70 text-xs uppercase tracking-widest"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="p-5">
+          <p className="text-parchment/70 text-sm leading-relaxed whitespace-pre-line">
+            {state.message}
+          </p>
+        </div>
+
+        <div className={`px-5 py-4 border-t ${border}`}>
+          <button
+            onClick={onClose}
+            className={`w-full px-4 py-2.5 rounded ${
+              tone === "brass"
+                ? "bg-brass/25 border border-brass/60 hover:bg-brass/40 text-brass"
+                : "bg-blood/15 border border-blood/50 hover:bg-blood/25 text-blood"
+            } font-bold text-sm uppercase tracking-wider transition-colors`}
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // -- Spinner helper ---------------------------------------------------------
 
@@ -230,6 +287,7 @@ export default function LeadControls() {
   const [startStatus, setStartStatus]   = useState<string>("");
   const [mapModalOpen, setMapModalOpen] = useState(false);
   const [deleting, setDeleting]         = useState(false);
+  const [resultModal, setResultModal]   = useState<ResultModalState>({ open: false });
 
   const load = async (cid: string) => {
     const { data: userResp } = await supabase.auth.getUser();
@@ -245,7 +303,7 @@ export default function LeadControls() {
       .from("campaigns")
       .select("id,name,phase,round_number,instability,map_id,rules_overrides,campaign_narrative")
       .eq("id", cid).single();
-    if (cErr || !c) { alert(cErr?.message ?? "Campaign not found"); setCampaign(null); setRound(null); return; }
+    if (cErr || !c) { setResultModal({ open: true, tone: "blood", title: "Campaign Not Found", message: cErr?.message ?? "Campaign not found" }); setCampaign(null); setRound(null); return; }
     setCampaign(c as Campaign);
 
     // Load all members with their commander/faction names
@@ -268,7 +326,7 @@ export default function LeadControls() {
   const getToken = async (): Promise<string | null> => {
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
-    if (!token) { alert("Session expired. Please refresh and try again."); return null; }
+    if (!token) { setResultModal({ open: true, tone: "blood", title: "Session Expired", message: "Session expired. Please refresh and try again." }); return null; }
     return token;
   };
 
@@ -279,9 +337,9 @@ export default function LeadControls() {
       body: { campaign_id: campaignId, ...extraBody },
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (error) return alert(error.message);
-    if (!data?.ok) return alert(data?.error || "Failed");
-    alert("Done");
+    if (error) { setResultModal({ open: true, tone: "blood", title: "Action Failed", message: error.message }); return; }
+    if (!data?.ok) { setResultModal({ open: true, tone: "blood", title: "Action Failed", message: data?.error || "Failed" }); return; }
+    setResultModal({ open: true, tone: "brass", title: "Success", message: "Done." });
     await load(campaignId);
   };
 
@@ -293,9 +351,16 @@ export default function LeadControls() {
       body: { campaign_id: campaignId, mode: "initial" },
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (error) { setStartStatus(`Error: ${error.message}`); return alert(`Start failed: ${error.message}`); }
-    setStartStatus(`OK. Allocated: ${data?.allocated ?? 0}`);
-    alert(`Campaign started. Allocated ${data?.allocated ?? 0} starting locations.`);
+    if (error) { setStartStatus(`Error: ${error.message}`); setResultModal({ open: true, tone: "blood", title: "Start Failed", message: `Start failed: ${error.message}` }); return; }
+    const allocated = data?.allocated ?? 0;
+    setStartStatus(`OK. Allocated: ${allocated}`);
+
+    setResultModal({
+      open: true,
+      tone: "brass",
+      title: "Campaign Started",
+      message: `Allocated ${allocated} starting location${allocated === 1 ? "" : "s"}.`,
+    });
     await load(campaignId);
   };
 
@@ -331,14 +396,15 @@ export default function LeadControls() {
       body: { campaign_id: campaignId },
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (error) return alert(`Failed: ${error.message}`);
-    if (!data?.ok) return alert(data?.error ?? "Failed");
-    alert(
-      `Catchup offer sent to: ${data.commander_name ?? data.underdog_id}\n` +
-      `They currently hold ${data.sector_count} sector(s).`
-    );
+    if (error) { setResultModal({ open: true, tone: "blood", title: "Catchup Failed", message: `Failed: ${error.message}` }); return; }
+    if (!data?.ok) { setResultModal({ open: true, tone: "blood", title: "Catchup Failed", message: data?.error ?? "Failed" }); return; }
+    setResultModal({
+      open: true,
+      tone: "brass",
+      title: "Catchup Offered",
+      message: `Catchup offer sent to: ${data.commander_name ?? data.underdog_id}\nThey currently hold ${data.sector_count} sector(s).`,
+    });
   };
-
   // Invite players. If campaign already started, late-allocate each via
   // start-campaign (mode: late) once they accept the invite and sign in --
   // the accept-invites edge function handles this automatically on login.
@@ -367,8 +433,8 @@ export default function LeadControls() {
         body: { campaign_id: campaignId },
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (error) return alert(`Delete failed: ${error.message}`);
-      if (!data?.ok) return alert(data?.error ?? "Delete failed");
+      if (error) { setResultModal({ open: true, tone: "blood", title: "Delete Failed", message: `Delete failed: ${error.message}` }); return; }
+      if (!data?.ok) { setResultModal({ open: true, tone: "blood", title: "Delete Failed", message: data?.error ?? "Delete failed" }); return; }
       window.location.href = "/";
     } finally { setDeleting(false); }
   };
@@ -625,6 +691,12 @@ export default function LeadControls() {
           onConfirmed={() => { setMapModalOpen(false); load(campaignId); }}
         />
       )}
+      
+      <ResultModal
+        state={resultModal}
+        onClose={() => setResultModal({ open: false })}
+      />
+      
 
     </Frame>
   );

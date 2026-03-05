@@ -10,11 +10,19 @@ serve(async (req) => {
     const result = await requireUser(req);
     if (!result?.user) return json(401, { ok: false, error: "Not authenticated" });
     const user = result.user;
-
+    
     if (!user.email) return json(400, { ok: false, error: "User has no email" });
 
     const admin = adminClient();
     const email = user.email.toLowerCase();
+
+    // Fetch latest auth user (fresh metadata, not token snapshot)
+    const { data: fresh, error: freshErr } = await admin.auth.admin.getUserById(user.id);
+    if (freshErr) return json(500, { ok: false, error: freshErr.message });
+
+    const displayName = (fresh.user?.user_metadata?.display_name as string | undefined)?.trim() || null;
+   
+    const fallbackName = displayName ?? (user.email ? user.email.split("@")[0] : null) ?? "Commander";
 
     // Parse optional mode from body — defaults to "list"
     const body = await req.json().catch(() => ({}));
@@ -77,14 +85,14 @@ serve(async (req) => {
       }
 
       // Insert campaign membership
-      const { error: insertErr } = await admin
+      const { error: upsertErr } = await admin
         .from("campaign_members")
-        .insert({ campaign_id: invite.campaign_id, user_id: user.id, role: "player" });
+        .upsert({ campaign_id: invite.campaign_id, user_id: user.id, role: "player", commander_name: fallbackName});
 
-      if (insertErr) {
+      if (upsertErr) {
         // Ignore duplicate — already a member, still clean up the invite below
-        if (!insertErr.message.includes("duplicate") && !insertErr.message.includes("unique")) {
-          return json(500, { ok: false, error: insertErr.message });
+        if (!upsertErr.message.includes("duplicate") && !upsertErr.message.includes("unique")) {
+          return json(500, { ok: false, error: upsertErr.message });
         }
       }
 
