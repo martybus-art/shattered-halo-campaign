@@ -258,6 +258,79 @@ function ResultModal({
   );
 }
 
+
+// -- Confirm Modal -----------------------------------------------------------
+
+type ConfirmModalState =
+  | { open: false }
+  | {
+      open: true;
+      title: string;
+      message: string;
+      confirmText?: string;
+      cancelText?: string;
+      tone?: "brass" | "blood";
+    };
+
+function ConfirmModal({
+  state,
+  onConfirm,
+  onCancel,
+}: {
+  state: ConfirmModalState;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!state.open) return null;
+
+  const tone = state.tone ?? "blood";
+  const border = tone === "brass" ? "border-brass/30" : "border-blood/30";
+  const titleCol = tone === "brass" ? "text-brass" : "text-blood";
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className={`bg-void border ${border} rounded-lg shadow-2xl w-full max-w-lg`}>
+        <div className={`flex items-center justify-between px-5 py-4 border-b ${border}`}>
+          <h2 className={`${titleCol} font-semibold uppercase tracking-widest text-sm`}>
+            {state.title}
+          </h2>
+          <button
+            onClick={onCancel}
+            className="text-parchment/40 hover:text-parchment/70 text-xs uppercase tracking-widest"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="p-5">
+          <p className="text-parchment/70 text-sm leading-relaxed whitespace-pre-line">
+            {state.message}
+          </p>
+        </div>
+
+        <div className={`px-5 py-4 border-t ${border} flex gap-3`}>
+          <button
+            onClick={onCancel}
+            className="flex-1 px-4 py-2.5 rounded border border-parchment/20 hover:border-parchment/30 text-parchment/70 hover:text-parchment/85 font-bold text-sm uppercase tracking-wider transition-colors"
+          >
+            {state.cancelText ?? "Cancel"}
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`flex-1 px-4 py-2.5 rounded ${
+              tone === "brass"
+                ? "bg-brass/25 border border-brass/60 hover:bg-brass/40 text-brass"
+                : "bg-blood/15 border border-blood/50 hover:bg-blood/25 text-blood"
+            } font-bold text-sm uppercase tracking-wider transition-colors`}
+          >
+            {state.confirmText ?? "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // -- Spinner helper ---------------------------------------------------------
 
 function Spinner({ colour, label }: { colour: "brass" | "blood"; label: string }) {
@@ -289,6 +362,25 @@ export default function LeadControls() {
   const [deleting, setDeleting]         = useState(false);
   const [resultModal, setResultModal]   = useState<ResultModalState>({ open: false });
 
+
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({ open: false });
+  const confirmResolverRef = useRef<((v: boolean) => void) | null>(null);
+
+  const askConfirm = (
+    opts: Omit<Extract<ConfirmModalState, { open: true }>, "open">
+  ) => {
+    return new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmModal({ open: true, ...opts });
+    });
+  };
+
+  const closeConfirm = (result: boolean) => {
+    const resolver = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmModal({ open: false });
+    resolver?.(result);
+  };
   const load = async (cid: string) => {
     const { data: userResp } = await supabase.auth.getUser();
     const uid = userResp.user?.id;
@@ -364,31 +456,60 @@ export default function LeadControls() {
     await load(campaignId);
   };
 
-  const handleAssignMissions = () => {
-    const go = window.confirm(
-      "Assign Missions to all conflicts?\n\n" +
-      "Missions will be assigned based on NIP influence settings.\n" +
-      "Make sure all players have submitted their NIP spending choices before proceeding.\n\nProceed?"
-    );
+  const handleAssignMissions = async () => {
+    const go = await askConfirm({
+      title: "Confirm Action",
+      tone: "blood",
+      confirmText: "Proceed",
+      message:
+        "Assign Missions to all conflicts?
+
+" +
+        "Missions will be assigned based on NIP influence settings.
+" +
+        "Make sure all players have submitted their NIP spending choices before proceeding.
+
+Proceed?",
+    });
     if (go) callFn("assign-missions");
   };
 
-  const handleApplyInstability = () => {
-    const go = window.confirm(
-      "Apply Halo Instability?\n\n" +
-      "This increments the Instability counter by 1 and rolls an event from the d10 table.\n" +
-      "A public bulletin will be posted automatically.\n\n" +
-      "Make sure all conflict results have been recorded before proceeding.\n\nProceed?"
-    );
+  const handleApplyInstability = async () => {
+    const go = await askConfirm({
+      title: "Confirm Action",
+      tone: "blood",
+      confirmText: "Proceed",
+      message:
+        "Apply Halo Instability?
+
+" +
+        "This increments the Instability counter by 1 and rolls an event from the d10 table.
+" +
+        "A public bulletin will be posted automatically.
+
+" +
+        "Make sure all conflict results have been recorded before proceeding.
+
+Proceed?",
+    });
     if (go) callFn("apply-instability");
   };
 
   const handleOfferCatchup = async () => {
-    const go = window.confirm(
-      "Offer Catchup Choice to Underdog?\n\n" +
-      "This will automatically identify the player with the fewest sectors and post\n" +
-      "a catch-up offer to their dashboard. They will choose a bonus to apply.\n\nProceed?"
-    );
+    const go = await askConfirm({
+      title: "Confirm Action",
+      tone: "blood",
+      confirmText: "Proceed",
+      message:
+        "Offer Catchup Choice to Underdog?
+
+" +
+        "This will automatically identify the player with the fewest sectors and post
+" +
+        "a catch-up offer to their dashboard. They will choose a bonus to apply.
+
+Proceed?",
+    });
     if (!go) return;
     const token = await getToken();
     if (!token) return;
@@ -421,10 +542,20 @@ export default function LeadControls() {
   };
 
   const deleteCampaign = async () => {
-    if (!window.confirm(
-      `Delete campaign "${campaign?.name ?? campaignId}"?\n\n` +
-      "This permanently deletes all campaign data: sectors, rounds, player state, posts, and map artwork.\n\nThis cannot be undone."
-    )) return;
+    const go = await askConfirm({
+      title: "Delete Campaign",
+      tone: "blood",
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      message:
+        `Delete campaign "${campaign?.name ?? campaignId}"?
+
+` +
+        "This permanently deletes all campaign data: sectors, rounds, player state, posts, and map artwork.
+
+This cannot be undone.",
+    });
+    if (!go) return;
     setDeleting(true);
     try {
       const token = await getToken();
