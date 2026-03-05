@@ -1,670 +1,687 @@
-// apps/web/src/app/dashboard/page.tsx
-// Player command throne — campaign status, mission preference (NIP-gated),
-// movement submission, underdog choice, and AI recap prompt builder.
-// Subscribes to round stage changes in real-time so the UI stays current. 
-// comment testing
 "use client";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+// apps/web/src/app/dashboard/page.tsx
+// Player dashboard: status, war bulletin, faction resources, campaign map.
+//
+// changelog:
+//   2026-03-05 -- Removed My Campaigns card (campaignId from URL param).
+//                 Removed Catch-up Choice card (now a conditional card driven
+//                 by lead offer). Status (top-left) + War Bulletin (top-right).
+//                 Added stage strip to Status card. Added Faction Resources
+//                 card with NIP/NCP balances and spend-phase shopping cart.
+//                 Added Campaign Map preview card with territory legend.
+//                 Underdog catchup offer appears as dedicated card when pending.
+//                 Removed prompt-copy helper functions. Cleaned up debug code.
+
+import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Stage order (must match advance-round edge function) -------------------
+const STAGE_ORDER = ["spend", "recon", "movement", "conflicts", "missions", "results", "publish"] as const;
+type Stage = typeof STAGE_ORDER[number];
 
-type PlayerState = {
-  campaign_id: string;
-  user_id: string;
-  current_zone_key: string;
-  current_sector_key: string;
-  nip: number;
-  ncp: number;
-  status: string;
-  public_location: string;
-};
+// -- NIP shop items ---------------------------------------------------------
+// These are the purchasable abilities in the spend phase.
+const SHOP_ITEMS = [
+  { id: "deep_strike",       label: "Deep Strike",       nip: 1,
+    desc: "Move to any unoccupied sector this round, ignoring adjacency." },
+  { id: "recon",             label: "Recon",             nip: 1,
+    desc: "Reveal the zone of one enemy commander in range." },
+  { id: "mission_selection", label: "Mission Selection", nip: 2,
+    desc: "Choose or veto your mission in the next conflict." },
+  { id: "safe_passage",      label: "Safe Passage",      nip: 1,
+    desc: "Your movement this round cannot be intercepted." },
+] as const;
+
+// -- Catchup options (shown to the underdog player) ------------------------
+const CATCHUP_OPTIONS = [
+  "+2 NIP",
+  "+1 NCP next battle",
+  "Free Recon",
+  "Safe Passage (1 move cannot be intercepted)",
+] as const;
+
+// -- Types ------------------------------------------------------------------
 
 type Campaign = {
-  id: string;
-  name: string;
-  phase: number;
+  id:           string;
+  name:         string;
+  phase:        number;
   round_number: number;
-  instability: number;
-  map_id: string | null;
+  instability:  number;
+  map_id:       string | null;
 };
 
-type Membership = {
-  campaign_id: string;
-  role: string;
-  campaign_name: string;
+type PlayerState = {
+  nip:                number;
+  ncp:                number;
+  status:             string;
+  current_zone_key:   string;
+  current_sector_key: string;
 };
 
-type Round = {
-  stage: string;
-  round_number: number;
+type Round  = { stage: string };
+type Post   = { id: string; title: string; body: string; round_number: number; created_at: string };
+type Spend  = { spend_type: string; nip_spent: number };
+type Member = { user_id: string; commander_name: string | null; faction_name: string | null; role: string };
+type Sector = { zone_key: string; sector_key: string; owner_user_id: string | null; revealed_public: boolean };
+
+type UnderdogChoice = {
+  id:            string;
+  chosen_option: string | null;
+  status:        string;
 };
 
-type MapZone = { key: string; name: string };
+// -- Helpers ----------------------------------------------------------------
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function getQueryParam(name: string): string | null {
-  if (typeof window === "undefined") return null;
-  return new URL(window.location.href).searchParams.get(name);
+function getQueryParam(name: string): string {
+  if (typeof window === "undefined") return "";
+  return new URL(window.location.href).searchParams.get(name) ?? "";
 }
 
-const STARTING_NIP = 1;
-const SECTORS      = ["A", "B", "C", "D"];
+function fmtKey(key: string): string {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
-const MISSION_PREF_OPTIONS = [
-  { value: "",               label: "— No preference —"  },
-  { value: "assassination",  label: "Assassination"       },
-  { value: "sabotage",       label: "Sabotage"            },
-  { value: "border_clash",   label: "Border Clash"        },
-  { value: "supply_raid",    label: "Supply Raid"         },
-  { value: "recon_in_force", label: "Recon in Force"      },
-  { value: "zone_mortalis",  label: "Zone Mortalis"       },
-  { value: "siege",          label: "Siege"               },
-  { value: "ambush",         label: "Ambush"              },
+// Stable colour per player index for territory display
+const PLAYER_COLOURS = [
+  "bg-brass/30 border-brass/60 text-brass",
+  "bg-blood/30 border-blood/60 text-blood/90",
+  "bg-blue-500/25 border-blue-400/50 text-blue-300",
+  "bg-green-600/25 border-green-500/50 text-green-300",
+  "bg-purple-500/25 border-purple-400/50 text-purple-300",
+  "bg-orange-500/25 border-orange-400/50 text-orange-300",
+  "bg-pink-500/25 border-pink-400/50 text-pink-300",
+  "bg-teal-500/25 border-teal-400/50 text-teal-300",
 ];
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// -- Main Component ---------------------------------------------------------
 
 export default function Dashboard() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
-  const [campaignId, setCampaignId]     = useState<string>("");
-  const [campaign, setCampaign]         = useState<Campaign | null>(null);
-  const [state, setState]               = useState<PlayerState | null>(null);
-  const [role, setRole]                 = useState<string>("player");
-  const [memberships, setMemberships]   = useState<Membership[]>([]);
-  const [currentRound, setCurrentRound] = useState<Round | null>(null);
-  const [mapZones, setMapZones]         = useState<MapZone[]>([]);
-  const [loadingCampaign, setLoadingCampaign] = useState(false);
-  const [pageError, setPageError]       = useState<string | null>(null);
+  // campaignId is read directly from URL so nav links are always populated
+  const [campaignId] = useState<string>(() => getQueryParam("campaign"));
 
-  // Underdog
-  const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
+  const [campaign,        setCampaign]        = useState<Campaign | null>(null);
+  const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
+  const [round,           setRound]           = useState<Round | null>(null);
+  const [role,            setRole]            = useState<string>("player");
+  const [bulletin,        setBulletin]        = useState<Post | null>(null);
+  const [spends,          setSpends]          = useState<Spend[]>([]);
+  const [mapUrl,          setMapUrl]          = useState<string | null>(null);
+  const [sectors,         setSectors]         = useState<Sector[]>([]);
+  const [members,         setMembers]         = useState<Member[]>([]);
+  const [underdogChoice,  setUnderdogChoice]  = useState<UnderdogChoice | null>(null);
+  const [cart,            setCart]            = useState<Record<string, boolean>>({});
+  const [purchasing,      setPurchasing]      = useState(false);
+  const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
+  const [accepting,       setAccepting]       = useState(false);
+  const [uid,             setUid]             = useState<string>("");
 
-  // Mission preference
-  const [missionPref, setMissionPref]             = useState<string>("");
-  const [missionPrefSaved, setMissionPrefSaved]   = useState<string>("");
-  const [missionPrefStatus, setMissionPrefStatus] = useState<string>("");
-  const [submittingPref, setSubmittingPref]       = useState(false);
-
-  // Movement
-  const [moveToZone, setMoveToZone]         = useState<string>("");
-  const [moveToSector, setMoveToSector]     = useState<string>("A");
-  const [isDeepStrike, setIsDeepStrike]     = useState(false);
-  const [moveStatus, setMoveStatus]         = useState<string>("");
-  const [submittingMove, setSubmittingMove] = useState(false);
-  const [moveSubmitted, setMoveSubmitted]   = useState(false);
-
-  // ── Accept pending invites ────────────────────────────────────────────────
-
-  const acceptInvites = async () => {
+  // -- Accept invites on load -----------------------------------------------
+  const acceptInvites = async (token: string) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      await supabase.functions.invoke("accept-invites", { body: {} });
-    } catch { /* non-fatal */ }
+      const resp = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+        }
+      );
+      if (!resp.ok) console.warn("[dashboard] accept-invites returned", resp.status);
+    } catch (e) {
+      console.warn("[dashboard] accept-invites failed:", e);
+    }
   };
 
-  // ── Load memberships ──────────────────────────────────────────────────────
+  // -- Load all dashboard data ----------------------------------------------
+  const load = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    setUid(user.id);
+    const cid = campaignId;
+    if (!cid) return;
 
-  const loadMemberships = useCallback(async (uid: string) => {
-    const { data: mem, error } = await supabase
-      .from("campaign_members")
-      .select("campaign_id, role, campaigns(name)")
-      .eq("user_id", uid);
-    if (error) { setPageError(error.message); return; }
+    // 1. Campaign basics
+    const { data: c } = await supabase
+      .from("campaigns")
+      .select("id,name,phase,round_number,instability,map_id")
+      .eq("id", cid).single();
+    if (!c) return;
+    setCampaign(c as Campaign);
 
-    const rows = (mem ?? []).map(m => ({
-      campaign_id:   m.campaign_id,
-      role:          m.role,
-      campaign_name: (m.campaigns as any)?.name ?? m.campaign_id,
-    }));
-    setMemberships(rows);
+    // 2. My role
+    const { data: mem } = await supabase
+      .from("campaign_members").select("role")
+      .eq("campaign_id", cid).eq("user_id", user.id).single();
+    setRole(mem?.role ?? "player");
 
-    const q = getQueryParam("campaign");
-    if (q)               setCampaignId(q);
-    else if (rows.length) setCampaignId(rows[0].campaign_id);
-  }, [supabase]);
+    // 3. My player state
+    const { data: ps } = await supabase
+      .from("player_state").select("nip,ncp,status,current_zone_key,current_sector_key")
+      .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
+    setPlayerState(ps ?? null);
 
-  // ── Load campaign ─────────────────────────────────────────────────────────
+    // 4. Current round / stage
+    const { data: r } = await supabase
+      .from("rounds").select("stage")
+      .eq("campaign_id", cid).eq("round_number", c.round_number).maybeSingle();
+    setRound(r ?? null);
 
-  const loadCampaign = useCallback(async (uid: string, cid: string) => {
-    setLoadingCampaign(true);
-    setPageError(null);
-    try {
-      // Campaign row
-      const { data: c, error: ce } = await supabase
-        .from("campaigns")
-        .select("id,name,phase,round_number,instability,map_id")
-        .eq("id", cid)
-        .single();
-      if (ce) throw new Error(ce.message);
-      setCampaign(c as Campaign);
+    // 5. War bulletin (latest public post)
+    const { data: post } = await supabase
+      .from("posts").select("id,title,body,round_number,created_at")
+      .eq("campaign_id", cid).eq("visibility", "public")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    setBulletin(post ?? null);
 
-      // Membership / role
-      const { data: mem, error: me } = await supabase
-        .from("campaign_members")
-        .select("role")
-        .eq("campaign_id", cid)
-        .eq("user_id", uid)
-        .single();
-      if (me) throw new Error("You are not a member of this campaign.");
-      setRole(mem.role);
+    // 6. My spends this round
+    const { data: spendRows } = await supabase
+      .from("round_spends").select("spend_type,nip_spent")
+      .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
+    setSpends(spendRows ?? []);
 
-      // Current round stage
-      const { data: roundRow } = await supabase
-        .from("rounds")
-        .select("stage, round_number")
-        .eq("campaign_id", cid)
-        .eq("round_number", c.round_number)
-        .maybeSingle();
-      setCurrentRound(roundRow as Round | null);
-
-      // Map zones (for movement selection)
-      if ((c as any).map_id) {
-        const { data: mapRow } = await supabase
-          .from("maps")
-          .select("map_json")
-          .eq("id", (c as any).map_id)
-          .maybeSingle();
-        const zones = (mapRow?.map_json as any)?.zones ?? [];
-        setMapZones(zones as MapZone[]);
+    // 7. Map signed URL (if campaign has a map)
+    if (c.map_id) {
+      const { data: mapRow } = await supabase
+        .from("maps").select("bg_image_path,image_path")
+        .eq("id", c.map_id).single();
+      const path = mapRow?.bg_image_path ?? mapRow?.image_path;
+      if (path) {
+        const { data: urlData } = await supabase.storage
+          .from("campaign-maps").createSignedUrl(path, 3600);
+        setMapUrl(urlData?.signedUrl ?? null);
       }
-
-      // Player state — upsert default if missing
-      const { data: existing, error: pe } = await supabase
-        .from("player_state")
-        .select("*")
-        .eq("campaign_id", cid)
-        .eq("user_id", uid)
-        .maybeSingle();
-      if (pe) throw new Error(pe.message);
-
-      let ps: PlayerState;
-      if (existing) {
-        ps = existing as PlayerState;
-      } else {
-        const { data: inserted, error: insErr } = await supabase
-          .from("player_state")
-          .insert({
-            campaign_id:        cid,
-            user_id:            uid,
-            nip:                STARTING_NIP,
-            ncp:                0,
-            current_zone_key:   "unknown",
-            current_sector_key: "unknown",
-            public_location:    "Unknown",
-            status:             "active",
-          })
-          .select("*")
-          .single();
-        if (insErr) throw new Error(insErr.message);
-        ps = inserted as PlayerState;
-      }
-      setState(ps);
-
-      // Check if player already moved this round
-      if (roundRow?.stage === "movement") {
-        const { data: existingMove } = await supabase
-          .from("moves")
-          .select("id,to_zone_key,to_sector_key")
-          .eq("campaign_id", cid)
-          .eq("user_id", uid)
-          .eq("round_number", c.round_number)
-          .maybeSingle();
-        if (existingMove) {
-          setMoveSubmitted(true);
-          setMoveToZone((existingMove as any).to_zone_key ?? "");
-          setMoveToSector((existingMove as any).to_sector_key ?? "A");
-        } else {
-          setMoveSubmitted(false);
-        }
-      }
-
-      // Load any saved mission preference for this round.
-      // round_spends uses spend_type + payload JSONB — no standalone mission_pref column.
-      if (roundRow) {
-        const { data: prefRow } = await supabase
-          .from("round_spends")
-          .select("spend_type, payload")
-          .eq("campaign_id", cid)
-          .eq("user_id", uid)
-          .eq("round_number", roundRow.round_number)
-          .eq("spend_type", "mission_pref")
-          .maybeSingle();
-        const saved = (prefRow as any)?.payload?.mission_pref ?? "";
-        setMissionPrefSaved(saved);
-        setMissionPref(saved);
-      }
-
-    } catch (e: any) {
-      setPageError(e?.message ?? String(e));
-    } finally {
-      setLoadingCampaign(false);
     }
-  }, [supabase]);
 
-  // ── Effects ───────────────────────────────────────────────────────────────
+    // 8. Sectors visible to this player (RLS: own + revealed_public)
+    const { data: sectorRows } = await supabase
+      .from("sectors").select("zone_key,sector_key,owner_user_id,revealed_public")
+      .eq("campaign_id", cid);
+    setSectors((sectorRows ?? []) as Sector[]);
+
+    // 9. Members (for territory display and commander names)
+    const { data: memberRows } = await supabase
+      .from("campaign_members").select("user_id,commander_name,faction_name,role")
+      .eq("campaign_id", cid);
+    setMembers((memberRows ?? []) as Member[]);
+
+    // 10. Pending underdog choice for this player
+    const { data: udChoice } = await supabase
+      .from("underdog_choices").select("id,chosen_option,status")
+      .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "pending")
+      .maybeSingle();
+    setUnderdogChoice(udChoice ?? null);
+  };
 
   useEffect(() => {
     (async () => {
-      const { data: userResp } = await supabase.auth.getUser();
-      const uid = userResp.user?.id;
-      if (!uid) return;
-      await acceptInvites();
-      await loadMemberships(uid);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) await acceptInvites(session.access_token);
+      await load();
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (!campaignId) return;
-    (async () => {
-      const { data: userResp } = await supabase.auth.getUser();
-      const uid = userResp.user?.id;
-      if (!uid) return;
-      await loadCampaign(uid, campaignId);
-    })();
-  }, [campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // -- Purchase cart --------------------------------------------------------
 
-  // ── Real-time stage subscription ─────────────────────────────────────────
-  // Refreshes the dashboard automatically when the Lead advances the stage.
+  const toggleCart = (itemId: string) => {
+    setCart((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
+  };
 
-  useEffect(() => {
-    if (!campaignId) return;
+  const cartItems   = SHOP_ITEMS.filter((i) => cart[i.id]);
+  const cartTotal   = cartItems.reduce((sum, i) => sum + i.nip, 0);
+  const alreadyBought = new Set(spends.map((s) => s.spend_type));
 
-    const channel = supabase
-      .channel(`rounds:dashboard:${campaignId}`)
-      .on(
-        "postgres_changes",
-        {
-          event:  "*",
-          schema: "public",
-          table:  "rounds",
-          filter: `campaign_id=eq.${campaignId}`,
-        },
-        async () => {
-          const { data: userResp } = await supabase.auth.getUser();
-          const uid = userResp.user?.id;
-          if (uid) await loadCampaign(uid, campaignId);
-        }
-      )
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [campaignId, supabase, loadCampaign]);
-
-  // ── Submit movement ───────────────────────────────────────────────────────
-
-  const submitMove = async () => {
-    if (!campaignId || submittingMove || !moveToZone) return;
-    setSubmittingMove(true);
-    setMoveStatus("");
+  const purchaseCart = async () => {
+    if (!cartItems.length || !campaign || !playerState) return;
+    if (cartTotal > playerState.nip) return alert("Not enough NIP.");
+    setPurchasing(true);
     try {
-      const { data, error } = await supabase.functions.invoke("submit-move", {
-        body: {
-          campaign_id:   campaignId,
-          to_zone_key:   moveToZone,
-          to_sector_key: moveToSector,
-          is_deep_strike: isDeepStrike,
-        },
-      });
-      if (error) throw error;
-      if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
-
-      setMoveSubmitted(true);
-      setMoveStatus("Move submitted.");
-      const { data: userResp } = await supabase.auth.getUser();
-      if (userResp.user) await loadCampaign(userResp.user.id, campaignId);
+      // Insert spend records
+      const { error: spendErr } = await supabase.from("round_spends").insert(
+        cartItems.map((i) => ({
+          campaign_id:  campaign.id,
+          round_number: campaign.round_number,
+          user_id:      uid,
+          spend_type:   i.id,
+          nip_spent:    i.nip,
+        }))
+      );
+      if (spendErr) throw spendErr;
+      // Deduct NIP from player state (player_state_update_self RLS allows this)
+      const { error: nipErr } = await supabase
+        .from("player_state")
+        .update({ nip: playerState.nip - cartTotal })
+        .eq("campaign_id", campaign.id)
+        .eq("user_id", uid);
+      if (nipErr) throw nipErr;
+      setCart({});
+      await load();
     } catch (e: any) {
-      setMoveStatus(`Error: ${e?.message ?? String(e)}`);
+      alert(`Purchase failed: ${e?.message ?? String(e)}`);
     } finally {
-      setSubmittingMove(false);
+      setPurchasing(false);
     }
   };
 
-  // ── Mission preference submit ─────────────────────────────────────────────
+  // -- Accept catchup choice ------------------------------------------------
 
-  const submitMissionPref = async () => {
-    if (!campaignId || !currentRound || submittingPref) return;
-    if ((state?.nip ?? 0) < 1) return;
-    setSubmittingPref(true);
-    setMissionPrefStatus("");
+  const acceptCatchup = async () => {
+    if (!underdogChoice || !campaign) return;
+    setAccepting(true);
     try {
-      const { data, error } = await supabase.functions.invoke("spend-nip", {
-        body: { campaign_id: campaignId, mode: "mission_pref", mission_pref: missionPref },
-      });
-      if (error) throw error;
-      if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
-      setMissionPrefSaved(missionPref);
-      setMissionPrefStatus("Preference saved.");
-      const { data: userResp } = await supabase.auth.getUser();
-      if (userResp.user) await loadCampaign(userResp.user.id, campaignId);
+      // Record the choice
+      const { error: choiceErr } = await supabase
+        .from("underdog_choices")
+        .update({ chosen_option: catchupOption, chosen_at: new Date().toISOString(), status: "accepted" })
+        .eq("id", underdogChoice.id);
+      if (choiceErr) throw choiceErr;
+
+      // Apply the benefit directly where possible
+      if (catchupOption === "+2 NIP" && playerState) {
+        await supabase.from("player_state")
+          .update({ nip: playerState.nip + 2 })
+          .eq("campaign_id", campaign.id).eq("user_id", uid);
+      }
+      if (catchupOption === "Free Recon") {
+        // Insert a zero-cost recon spend for this round
+        await supabase.from("round_spends").insert({
+          campaign_id:  campaign.id,
+          round_number: campaign.round_number,
+          user_id:      uid,
+          spend_type:   "recon",
+          nip_spent:    0,
+          payload:      { source: "underdog_bonus" },
+        });
+      }
+      if (catchupOption === "Safe Passage (1 move cannot be intercepted)") {
+        await supabase.from("round_spends").insert({
+          campaign_id:  campaign.id,
+          round_number: campaign.round_number,
+          user_id:      uid,
+          spend_type:   "safe_passage",
+          nip_spent:    0,
+          payload:      { source: "underdog_bonus" },
+        });
+      }
+      // "+1 NCP next battle" is recorded in the choice and applied by lead manually.
+
+      setUnderdogChoice(null);
+      await load();
     } catch (e: any) {
-      setMissionPrefStatus(`Error: ${e?.message ?? String(e)}`);
+      alert(`Failed to accept: ${e?.message ?? String(e)}`);
     } finally {
-      setSubmittingPref(false);
+      setAccepting(false);
     }
   };
 
-  // ── Recap prompt builder ──────────────────────────────────────────────────
+  // -- Derived state --------------------------------------------------------
 
-  const makePublicRecapPrompt = async () => {
-    if (!campaign) return;
-    const { data: publicPosts } = await supabase
-      .from("posts")
-      .select("round_number,title,body,tags,created_at")
-      .eq("campaign_id", campaign.id)
-      .eq("visibility", "public")
-      .order("round_number", { ascending: false })
-      .limit(40);
+  const campaignStarted = round !== null;
+  const currentStage    = (round?.stage ?? null) as Stage | null;
+  const stageIndex      = currentStage ? STAGE_ORDER.indexOf(currentStage) : -1;
+  const inSpendPhase    = currentStage === "spend";
 
-    const prompt = [
-      `Campaign: ${campaign.name}`,
-      `Phase: ${campaign.phase}`,
-      `Current Round: ${campaign.round_number}`,
-      `Halo Instability: ${campaign.instability}/10`,
-      "",
-      "PUBLIC CONTEXT (no secrets):",
-      JSON.stringify(publicPosts ?? [], null, 2),
-      "",
-      "Task:",
-      "1) Write a 300–600 word grimdark 'Halo War Bulletin' summarizing recent public events.",
-      "2) Include paranoia, disputed sightings, and ominous references to the Ashen King.",
-      "3) Suggest 3 bounties for next round tied to public tensions.",
-      "Tone: 40K grimdark, cosmic horror, military dispatch.",
-    ].join("\n");
+  // Build member colour index for territory display
+  const memberColour = useMemo(() => {
+    const map = new Map<string, string>();
+    members.forEach((m, i) => map.set(m.user_id, PLAYER_COLOURS[i % PLAYER_COLOURS.length]));
+    return map;
+  }, [members]);
 
-    await navigator.clipboard.writeText(prompt);
-    alert("War Bulletin prompt copied to clipboard.");
-  };
+  // Group visible sectors by zone_key, then by owner
+  const territoryByZone = useMemo(() => {
+    const zones = new Map<string, Map<string, number>>();
+    for (const s of sectors) {
+      if (!s.owner_user_id) continue;
+      if (!zones.has(s.zone_key)) zones.set(s.zone_key, new Map());
+      const owners = zones.get(s.zone_key)!;
+      owners.set(s.owner_user_id, (owners.get(s.owner_user_id) ?? 0) + 1);
+    }
+    return zones;
+  }, [sectors]);
 
-  // ── Derived ───────────────────────────────────────────────────────────────
+  const mySectorCount = sectors.filter((s) => s.owner_user_id === uid).length;
 
-  const hasNip        = (state?.nip ?? 0) >= 1;
-  const isSpendStage  = currentRound?.stage === "spend";
-  const isMoveStage   = currentRound?.stage === "movement";
-  const canSubmitPref = hasNip && isSpendStage && !submittingPref;
-  const prefChanged   = missionPref !== missionPrefSaved;
+  const memberById = useMemo(() => {
+    const m = new Map<string, Member>();
+    members.forEach((mem) => m.set(mem.user_id, mem));
+    return m;
+  }, [members]);
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // -- Render ----------------------------------------------------------------
+
+  const isLeadOrAdmin = role === "lead" || role === "admin";
 
   return (
     <Frame
       title="Command Throne"
-      campaignId={campaignId}
-      role={role}
-      currentPage="dashboard"
+      right={
+        <div className="flex items-center gap-4 text-sm">
+          {isLeadOrAdmin && (
+            <a className="underline hover:text-parchment" href={`/lead?campaign=${campaignId}`}>Lead Controls</a>
+          )}
+          <a className="underline hover:text-parchment" href={`/map?campaign=${campaignId}`}>Map</a>
+          <a className="underline hover:text-parchment" href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
+          <a className="underline hover:text-parchment" href="/campaigns">Campaigns</a>
+        </div>
+      }
     >
       <div className="space-y-6">
 
-        {/* ── Campaign selector ── */}
-        <Card title="My Campaigns">
-          {memberships.length ? (
-            <select
-              className="w-full px-3 py-2 rounded bg-void border border-brass/30"
-              value={campaignId}
-              onChange={(e) => setCampaignId(e.target.value)}
-            >
-              {memberships.map(m => (
-                <option key={m.campaign_id} value={m.campaign_id}>
-                  {m.campaign_name} ({m.role})
-                </option>
-              ))}
-            </select>
-          ) : (
-            <p className="text-parchment/70">
-              No campaigns found. Create one in{" "}
-              <a className="underline text-brass" href="/campaigns">Campaigns</a>.
-            </p>
-          )}
-        </Card>
+        {/* ── Row 1: Your Status (left) + War Bulletin (right) ─────────── */}
+        <div className="grid md:grid-cols-2 gap-6 items-start">
 
-        {loadingCampaign && (
-          <p className="text-parchment/50 animate-pulse text-sm px-1">Loading…</p>
-        )}
-        {pageError && (
-          <Card title="Error">
-            <p className="text-blood text-sm">{pageError}</p>
+          {/* Your Status */}
+          <Card title="Your Status">
+            {campaign && playerState ? (
+              <div className="space-y-3">
+                <div className="space-y-0.5">
+                  <p className="text-parchment font-semibold">{campaign.name}</p>
+                  <p className="text-parchment/50 text-xs">
+                    Phase {campaign.phase} &bull; Round {campaign.round_number} &bull; Instability {campaign.instability}/10
+                  </p>
+                  <p className="text-parchment/40 text-xs">Role: {role}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-brass/10 text-sm">
+                  <div>
+                    <p className="text-parchment/40 text-xs">Location</p>
+                    <p className="text-parchment/80">{fmtKey(playerState.current_zone_key)}</p>
+                    <p className="text-parchment/40 text-xs font-mono">{playerState.current_sector_key}</p>
+                  </div>
+                  <div>
+                    <p className="text-parchment/40 text-xs">Status</p>
+                    <p className="text-parchment/80 capitalize">{playerState.status}</p>
+                    <p className="text-parchment/40 text-xs">{mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held</p>
+                  </div>
+                </div>
+
+                {/* Stage strip */}
+                {campaignStarted && (
+                  <div className="pt-1 border-t border-brass/10">
+                    <p className="text-xs text-parchment/40 mb-1.5">Current Stage</p>
+                    <div className="flex gap-1 flex-wrap">
+                      {STAGE_ORDER.map((s, i) => (
+                        <span key={s} className={`px-2 py-0.5 rounded text-xs font-mono uppercase ${
+                          s === currentStage
+                            ? "bg-brass/30 border border-brass/60 text-brass font-bold"
+                            : i < stageIndex
+                              ? "bg-void border border-parchment/10 text-parchment/25 line-through"
+                              : "bg-void border border-parchment/10 text-parchment/35"
+                        }`}>{s}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {!campaignStarted && (
+                  <p className="text-parchment/30 text-xs italic">Campaign not yet started.</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-parchment/40 text-sm italic">Loading status...</p>
+            )}
+          </Card>
+
+          {/* War Bulletin */}
+          <Card title="War Bulletin">
+            {bulletin ? (
+              <div className="space-y-2">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-parchment font-semibold leading-snug">{bulletin.title}</p>
+                  <span className="shrink-0 text-xs text-parchment/30 font-mono">R{bulletin.round_number}</span>
+                </div>
+                <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
+                  {bulletin.body.length > 600 ? bulletin.body.slice(0, 600) + "..." : bulletin.body}
+                </p>
+                <p className="text-parchment/25 text-xs">
+                  {new Date(bulletin.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                </p>
+              </div>
+            ) : (
+              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
+            )}
+          </Card>
+
+        </div>
+
+        {/* ── Row 2: Faction Resources (left) + Campaign Map (right) ───── */}
+        <div className="grid md:grid-cols-2 gap-6 items-start">
+
+          {/* Faction Resources */}
+          <Card title="Faction Resources">
+            {playerState ? (
+              <div className="space-y-4">
+
+                {/* NIP / NCP balances */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="px-3 py-2.5 rounded bg-brass/10 border border-brass/25 text-center">
+                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NIP</p>
+                    <p className="text-2xl font-bold text-brass">{playerState.nip}</p>
+                    <p className="text-xs text-parchment/30">Influence Points</p>
+                  </div>
+                  <div className="px-3 py-2.5 rounded bg-parchment/5 border border-parchment/15 text-center">
+                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NCP</p>
+                    <p className="text-2xl font-bold text-parchment/80">{playerState.ncp}</p>
+                    <p className="text-xs text-parchment/30">Campaign Points</p>
+                  </div>
+                </div>
+
+                {/* Purchased abilities this round -- always visible after spend */}
+                {spends.length > 0 && (
+                  <div>
+                    <p className="text-xs text-parchment/40 mb-1.5 font-semibold uppercase tracking-widest">
+                      Round {campaign?.round_number} Purchases
+                    </p>
+                    <div className="space-y-1">
+                      {spends.map((s, i) => {
+                        const item = SHOP_ITEMS.find((x) => x.id === s.spend_type);
+                        return (
+                          <div key={i} className="flex items-center justify-between px-2.5 py-1.5 rounded bg-brass/5 border border-brass/15 text-sm">
+                            <span className="text-parchment/75">{item?.label ?? fmtKey(s.spend_type)}</span>
+                            {s.nip_spent > 0
+                              ? <span className="text-parchment/35 text-xs font-mono">{s.nip_spent} NIP</span>
+                              : <span className="text-brass/60 text-xs font-mono">Free</span>
+                            }
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Shopping cart -- spend phase only */}
+                {inSpendPhase && (
+                  <div className="border-t border-brass/10 pt-3 space-y-3">
+                    <p className="text-xs text-parchment/40 font-semibold uppercase tracking-widest">Spend NIP</p>
+                    <div className="space-y-2">
+                      {SHOP_ITEMS.filter((i) => !alreadyBought.has(i.id)).map((item) => {
+                        const inCart    = !!cart[item.id];
+                        const canAfford = cart[item.id]
+                          ? true
+                          : playerState.nip - cartTotal >= item.nip;
+                        return (
+                          <div key={item.id}
+                            className={`flex items-start gap-3 px-3 py-2 rounded border transition-colors ${
+                              inCart
+                                ? "bg-brass/15 border-brass/50"
+                                : "bg-void border-brass/15 hover:border-brass/30"
+                            }`}>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-baseline gap-2">
+                                <p className="text-parchment/85 text-sm font-semibold">{item.label}</p>
+                                <p className="text-brass/80 text-xs font-mono">{item.nip} NIP</p>
+                              </div>
+                              <p className="text-parchment/40 text-xs mt-0.5">{item.desc}</p>
+                            </div>
+                            <button
+                              onClick={() => toggleCart(item.id)}
+                              disabled={!canAfford && !inCart}
+                              className={`shrink-0 px-3 py-1 rounded text-xs font-semibold border transition-colors disabled:opacity-30 ${
+                                inCart
+                                  ? "bg-brass/30 border-brass/60 text-brass"
+                                  : "bg-void border-parchment/20 hover:border-brass/40 text-parchment/60 hover:text-parchment/90"
+                              }`}>
+                              {inCart ? "Remove" : "Add"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Cart total + checkout */}
+                    {cartItems.length > 0 && (
+                      <div className="pt-2 border-t border-brass/15 space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-parchment/50">
+                            {cartItems.length} item{cartItems.length !== 1 ? "s" : ""} selected
+                          </span>
+                          <span className="text-brass font-bold font-mono">{cartTotal} NIP</span>
+                        </div>
+                        {cartTotal > playerState.nip && (
+                          <p className="text-blood/70 text-xs">Insufficient NIP ({playerState.nip} available).</p>
+                        )}
+                        <button
+                          onClick={purchaseCart}
+                          disabled={purchasing || cartTotal > playerState.nip}
+                          className="w-full px-4 py-2 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
+                          {purchasing ? "Purchasing..." : `Spend ${cartTotal} NIP`}
+                        </button>
+                      </div>
+                    )}
+
+                    {SHOP_ITEMS.every((i) => alreadyBought.has(i.id)) && (
+                      <p className="text-parchment/30 text-xs italic">All available abilities purchased this round.</p>
+                    )}
+                  </div>
+                )}
+
+                {!inSpendPhase && spends.length === 0 && (
+                  <p className="text-parchment/25 text-xs italic">No purchases this round.</p>
+                )}
+
+              </div>
+            ) : (
+              <p className="text-parchment/40 text-sm italic">Loading resources...</p>
+            )}
+          </Card>
+
+          {/* Campaign Map */}
+          <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
+            {mapUrl ? (
+              <div className="space-y-3">
+                <img
+                  src={mapUrl}
+                  alt="Campaign theatre map"
+                  className="w-full rounded border border-brass/20 object-cover"
+                  style={{ maxHeight: "260px" }}
+                />
+
+                {/* Territory legend */}
+                {territoryByZone.size > 0 && (
+                  <div>
+                    <p className="text-xs text-parchment/35 mb-2 uppercase tracking-widest">Visible Territory</p>
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {Array.from(territoryByZone.entries()).map(([zoneKey, owners]) => (
+                        <div key={zoneKey} className="flex items-start gap-2">
+                          <span className="text-parchment/40 text-xs font-mono w-32 shrink-0 pt-0.5">{fmtKey(zoneKey)}</span>
+                          <div className="flex flex-wrap gap-1">
+                            {Array.from(owners.entries()).map(([ownerId, count]) => {
+                              const m = memberById.get(ownerId);
+                              const colour = memberColour.get(ownerId) ?? PLAYER_COLOURS[0];
+                              return (
+                                <span key={ownerId}
+                                  className={`px-1.5 py-0.5 rounded border text-xs font-mono ${colour}`}>
+                                  {m?.commander_name ?? "Unknown"} ×{count}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-parchment/20 text-xs mt-2 italic">
+                      Fog of war — only your sectors and publicly revealed sectors are shown.
+                    </p>
+                  </div>
+                )}
+
+                {territoryByZone.size === 0 && (
+                  <p className="text-parchment/30 text-xs italic">
+                    No territory data visible. Fog of war conceals all positions.
+                  </p>
+                )}
+              </div>
+            ) : campaign?.map_id ? (
+              <p className="text-parchment/40 text-sm italic">Loading map...</p>
+            ) : (
+              <p className="text-parchment/30 text-sm italic">
+                No map generated yet. The theatre of war awaits its cartographer.
+              </p>
+            )}
+          </Card>
+
+        </div>
+
+        {/* ── Row 3: Catchup Offer (conditional — underdog only) ───────── */}
+        {underdogChoice && (
+          <Card title="Catch-up Offer — Underdog Bonus">
+            <div className="space-y-4">
+              <p className="text-parchment/70 text-sm leading-relaxed">
+                The campaign lead has identified you as the current underdog. Choose one benefit
+                to apply before the next round begins.
+              </p>
+              <div className="space-y-2">
+                <p className="text-xs text-parchment/40 uppercase tracking-widest">Select your benefit</p>
+                <select
+                  className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
+                  value={catchupOption}
+                  onChange={(e) => setCatchupOption(e.target.value)}
+                >
+                  {CATCHUP_OPTIONS.map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+                {catchupOption === "+1 NCP next battle" && (
+                  <p className="text-xs text-parchment/35 italic">
+                    This bonus is recorded and applied by the campaign lead at your next conflict.
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={acceptCatchup}
+                disabled={accepting}
+                className="w-full px-4 py-2.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
+                {accepting ? "Accepting..." : "Accept Bonus"}
+              </button>
+            </div>
           </Card>
         )}
 
-        {/* ── Player cards ── */}
-        {campaign && state && !loadingCampaign && (
-          <div className="grid md:grid-cols-2 gap-6">
-
-            {/* ── Status ── */}
-            <Card title="Your Status">
-              <div className="space-y-2 text-sm text-parchment/85">
-                <div><span className="text-brass">Campaign:</span> {campaign.name}</div>
-                <div>
-                  <span className="text-brass">Phase:</span> {campaign.phase}
-                  &nbsp;&nbsp;
-                  <span className="text-brass">Round:</span> {campaign.round_number}
-                  {currentRound && (
-                    <span className="ml-2 text-xs text-parchment/40 uppercase tracking-wider">
-                      [{currentRound.stage}]
-                    </span>
-                  )}
-                </div>
-                <div>
-                  <span className="text-brass">Instability:</span>{" "}
-                  <span className={
-                    campaign.instability >= 8 ? "text-blood font-semibold" :
-                    campaign.instability >= 4 ? "text-yellow-500/80" :
-                    "text-parchment/80"
-                  }>
-                    {campaign.instability}/10
-                  </span>
-                </div>
-                <div><span className="text-brass">Role:</span> {role}</div>
-                <div className="pt-2 border-t border-brass/20 space-y-1">
-                  <div>
-                    <span className="text-brass">NIP:</span> {state.nip}
-                    &nbsp;&nbsp;
-                    <span className="text-brass">NCP:</span> {state.ncp}
-                  </div>
-                  <div>
-                    <span className="text-brass">Location:</span>{" "}
-                    {state.current_zone_key === "unknown"
-                      ? <span className="text-parchment/40 italic">Undeployed</span>
-                      : `${state.current_zone_key} – ${state.current_sector_key}`
-                    }
-                  </div>
-                  <div><span className="text-brass">Status:</span> {state.status}</div>
-                </div>
-              </div>
-            </Card>
-
-            {/* ── Mission Preference (spend stage, NIP-gated) ── */}
-            <Card title="Mission Preference">
-              <div className="space-y-3">
-                <p className="text-xs text-parchment/60 leading-relaxed">
-                  Spend 1 NIP during the Spend phase to influence which mission
-                  is assigned this round.
-                </p>
-
-                <div className={!hasNip || !isSpendStage ? "opacity-40 pointer-events-none select-none" : ""}>
-                  <select
-                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
-                    value={missionPref}
-                    onChange={(e) => setMissionPref(e.target.value)}
-                    disabled={!canSubmitPref}
-                  >
-                    {MISSION_PREF_OPTIONS.map(opt => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {!hasNip && (
-                  <p className="text-xs text-blood/70 italic">
-                    ☠ No NIP — mission preference locked this round.
-                  </p>
-                )}
-                {hasNip && !isSpendStage && (
-                  <p className="text-xs text-parchment/40 italic">
-                    Available during the Spend phase only.
-                    {currentRound ? ` Current: ${currentRound.stage}.` : ""}
-                  </p>
-                )}
-
-                <button
-                  onClick={submitMissionPref}
-                  disabled={!canSubmitPref || !prefChanged || !missionPref}
-                  className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold transition-colors disabled:opacity-40"
-                >
-                  {submittingPref ? "Submitting…" : missionPrefSaved ? "Update preference (1 NIP)" : "Submit preference (1 NIP)"}
-                </button>
-
-                {missionPrefSaved && (
-                  <p className="text-xs text-brass/70">
-                    ✓ {MISSION_PREF_OPTIONS.find(o => o.value === missionPrefSaved)?.label ?? missionPrefSaved}
-                  </p>
-                )}
-                {missionPrefStatus && (
-                  <p className={`text-xs ${missionPrefStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
-                    {missionPrefStatus}
-                  </p>
-                )}
-              </div>
-            </Card>
-
-            {/* ── Movement (movement stage only) ── */}
-            {isMoveStage && (
-              <Card title="Submit Movement">
-                <div className="space-y-3">
-                  {moveSubmitted ? (
-                    <div className="space-y-2">
-                      <p className="text-sm text-brass">
-                        ✓ Move submitted — {moveToZone} / Sector {moveToSector}
-                      </p>
-                      <p className="text-xs text-parchment/45 italic">
-                        Conflicts will be detected when the Lead advances to the Conflicts stage.
-                      </p>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-xs text-parchment/60 leading-relaxed">
-                        Choose your destination zone and sector. You may only move to an adjacent zone
-                        unless you pay {3} NIP for a Deep Strike to any zone.
-                      </p>
-
-                      <div>
-                        <label className="block text-xs text-parchment/60 mb-1">Destination zone</label>
-                        <select
-                          className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
-                          value={moveToZone}
-                          onChange={(e) => setMoveToZone(e.target.value)}
-                          disabled={submittingMove}
-                        >
-                          <option value="">— Select zone —</option>
-                          {mapZones.length > 0
-                            ? mapZones.map((z) => (
-                                <option key={z.key} value={z.key}>{z.name}</option>
-                              ))
-                            : [
-                                "vault_ruins","ash_wastes","halo_spire","sunken_manufactorum",
-                                "warp_scar_basin","obsidian_fields","signal_crater","xenos_forest",
-                              ].map(k => (
-                                <option key={k} value={k}>
-                                  {k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
-                                </option>
-                              ))
-                          }
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs text-parchment/60 mb-1">Sector</label>
-                        <div className="grid grid-cols-4 gap-2">
-                          {SECTORS.map((s) => (
-                            <button
-                              key={s}
-                              onClick={() => setMoveToSector(s)}
-                              disabled={submittingMove}
-                              className={`py-2 rounded border text-sm font-mono transition-colors disabled:opacity-40
-                                ${moveToSector === s
-                                  ? "border-brass bg-brass/20 text-brass"
-                                  : "border-brass/25 bg-void hover:border-brass/40 text-parchment/55"
-                                }`}
-                            >
-                              {s}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <label className="flex items-center gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={isDeepStrike}
-                          onChange={(e) => setIsDeepStrike(e.target.checked)}
-                          disabled={submittingMove}
-                        />
-                        <span className="text-sm">
-                          Deep Strike <span className="text-parchment/40 text-xs">(costs 3 NIP, reach any zone)</span>
-                        </span>
-                      </label>
-
-                      <button
-                        onClick={submitMove}
-                        disabled={submittingMove || !moveToZone}
-                        className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold transition-colors disabled:opacity-40"
-                      >
-                        {submittingMove ? "Submitting…" : "Submit Move"}
-                      </button>
-
-                      {moveStatus && (
-                        <p className={`text-xs ${moveStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
-                          {moveStatus}
-                        </p>
-                      )}
-                    </>
-                  )}
-                </div>
-              </Card>
+        {/* ── Row 4: Quick Links ───────────────────────────────────────── */}
+        <Card title="Quick Links">
+          <div className="flex flex-wrap gap-3">
+            <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
+              href={`/map?campaign=${campaignId}`}>Map</a>
+            <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
+              href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
+            <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
+              href={`/ledger?campaign=${campaignId}`}>Ledger</a>
+            {isLeadOrAdmin && (
+              <a className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm"
+                href={`/lead?campaign=${campaignId}`}>Lead Controls</a>
             )}
-
-            {/* ── Catch-up / Underdog ── */}
-            <Card title="Catch-up Choice (Underdog)">
-              <p className="text-parchment/80 text-sm">
-                If flagged as <span className="text-brass">Underdog</span> this round, choose one benefit:
-              </p>
-              <select
-                className="mt-3 w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
-                value={underdogChoice}
-                onChange={(e) => setUnderdogChoice(e.target.value)}
-              >
-                <option>+2 NIP</option>
-                <option>+1 NCP next battle</option>
-                <option>Free Recon</option>
-                <option>Safe Passage (1 move cannot be intercepted)</option>
-              </select>
-              <p className="mt-2 text-parchment/50 text-xs">
-                Underdog status is assigned by the Lead at the start of each round.
-              </p>
-            </Card>
-
-            {/* ── War Bulletin prompt (lead only) ── */}
-            {(role === "lead" || role === "admin") && (
-              <Card title="War Bulletin">
-                <p className="text-xs text-parchment/60 mb-3">
-                  Generate an AI War Bulletin prompt summarising public campaign events for this round.
-                </p>
-                <button
-                  className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                  onClick={makePublicRecapPrompt}
-                >
-                  ✦ Copy War Bulletin prompt
-                </button>
-              </Card>
-            )}
-
           </div>
-        )}
+        </Card>
+
       </div>
     </Frame>
   );
