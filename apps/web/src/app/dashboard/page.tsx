@@ -11,6 +11,8 @@
 //                 Added Campaign Map preview card with territory legend.
 //                 Underdog catchup offer appears as dedicated card when pending.
 //                 Removed prompt-copy helper functions. Cleaned up debug code.
+//                 Removed Quick Links card. Nav uses Frame currentPage="dashboard"
+//                 to match site-wide nav pattern.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -361,19 +363,7 @@ export default function Dashboard() {
   const isLeadOrAdmin = role === "lead" || role === "admin";
 
   return (
-    <Frame
-      title="Command Throne"
-      right={
-        <div className="flex items-center gap-4 text-sm">
-          {isLeadOrAdmin && (
-            <a className="underline hover:text-parchment" href={`/lead?campaign=${campaignId}`}>Lead Controls</a>
-          )}
-          <a className="underline hover:text-parchment" href={`/map?campaign=${campaignId}`}>Map</a>
-          <a className="underline hover:text-parchment" href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
-          <a className="underline hover:text-parchment" href="/campaigns">Campaigns</a>
-        </div>
-      }
-    >
+    <Frame title="Command Throne" currentPage="dashboard">
       <div className="space-y-6">
 
         {/* ── Row 1: Your Status (left) + War Bulletin (right) ─────────── */}
@@ -666,21 +656,6 @@ export default function Dashboard() {
           </Card>
         )}
 
-        {/* ── Row 4: Quick Links ───────────────────────────────────────── */}
-        <Card title="Quick Links">
-          <div className="flex flex-wrap gap-3">
-            <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-              href={`/map?campaign=${campaignId}`}>Map</a>
-            <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-              href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
-            <a className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-              href={`/ledger?campaign=${campaignId}`}>Ledger</a>
-            {isLeadOrAdmin && (
-              <a className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm"
-                href={`/lead?campaign=${campaignId}`}>Lead Controls</a>
-            )}
-          </div>
-        </Card>
 
       </div>
     </Frame>

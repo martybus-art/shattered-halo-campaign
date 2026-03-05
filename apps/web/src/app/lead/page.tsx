@@ -15,9 +15,8 @@
 //                 started. Assign Missions (missions stage) and Apply Instability
 //                 (results stage) gated with confirm popups.
 //                 Generate Map modal. Delete Campaign in danger section.
-//                 Added "Offer Catchup Choice" button (results stage only) -- calls
-//                 offer-catchup edge function to auto-detect underdog and post offer
-//                 to their dashboard.
+//                 Added "Offer Catchup Choice" button (results stage only).
+//                 Nav uses Frame currentPage="lead" to match site-wide nav pattern.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -394,16 +393,7 @@ export default function LeadControls() {
   // -- Render ----------------------------------------------------------------
 
   return (
-    <Frame
-      title="Lead Controls"
-      right={
-        <div className="flex items-center gap-4 text-sm">
-          <a className="underline hover:text-parchment" href={`/map?campaign=${campaignId}`}>Map</a>
-          <a className="underline hover:text-parchment" href={`/conflicts?campaign=${campaignId}`}>Conflicts</a>
-          <a className="underline hover:text-parchment" href={`/dashboard?campaign=${campaignId}`}>Dashboard</a>
-        </div>
-      }
-    >
+    <Frame title="Lead Controls" currentPage="lead">
       <div className="space-y-6">
 
         {/* ── Top row: Campaign Card + Invite Players side by side ─────── */}
