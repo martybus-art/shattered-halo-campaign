@@ -1,18 +1,18 @@
 // supabase/functions/generate-map/index.ts
 // Generates a campaign map image via OpenAI gpt-image-1 and stores it in
-// Supabase Storage. Called by create-campaign (background) and directly for
-// regeneration requests.
+// Supabase Storage. Called from the lead page Generate Map modal.
 //
 // changelog:
-//   2026-03-03 — Completely rewrote image prompts to produce top-down tactical
-//                map imagery instead of 3D rendered scenes. Each layout now has
-//                a dedicated prompt that emphasises 2D overhead game-map aesthetic,
-//                zone delineation, and Warhammer 40K grimdark visual style.
-//                Added campaign_name and campaign_narrative params — these are
-//                injected into the OpenAI prompt for thematic image generation.
+//   2026-03-03 -- Completely rewrote image prompts to produce top-down tactical
+//                map imagery. Each layout has a dedicated prompt emphasising 2D
+//                overhead game-map aesthetic, zone delineation, and 40K grimdark.
+//                Added campaign_name and campaign_narrative params.
 //                Biome-specific prompt modifiers added for all 12 biomes.
-//   2026-03-05 — Reworded the prompts to be more cinematic and aligned with the warhammer 40K universe
-//                
+//   2026-03-05 -- Reworded prompts to be more cinematic and aligned with 40K universe.
+//   2026-03-05 -- map_id now optional: self-creates map record when not provided
+//                (new lead-page Generate Map modal flow). Fixed DB column names:
+//                generation_status (not status), writes both bg_image_path and
+//                image_path for MapImageDisplay compatibility.
 
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -66,89 +66,128 @@ function buildPrompt(params: {
     : "";
 
   const sharedStyle = [
-    "Warhammer 40,000 official art style.",
-    "Hand-painted illustrated campaign map aesthetic — rich ink wash textures, painted borders between zones.",
-    "Dark and grimdark colour palette for the core of the image:black, stone, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
-    "Vibrant colours to contrast zone territories: Toxic Orange, rich royal Purple, Deep magestic blue, Forrest Green, Heroic Yellow and Gold",
-    "Clearly delineated zone territories separated by visible borders — roads, walls, rivers, energy barriers, or terrain breaks.",
-    "The feel of the art should be for a faction commander strategically planning and directing a battle.",
-    "Battle damage visible — craters, scorch marks, ruined buildings.",
-    "No text overlays. No UI elements.",
-    "Overhead Illustrated map — painterly, detailed, Cinematic.",
-  ].join(" ");
+  "Warhammer 40,000 official art style.",
+  "Epic grimdark sci-fi environment concept art.",
+  "Hand-painted illustrated campaign map aesthetic — rich ink wash textures and painterly terrain detail.",
+  "Dark grimdark palette for the core of the image: black, stone, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
+  "Vibrant colours to contrast zone territories: Toxic Orange, rich royal Purple, Deep majestic Blue, Forest Green, Heroic Yellow and Gold.",
+  "Zones should feel like physical regions carved into the megastructure terrain, not diagram segments.",
+  "Each region has distinct environmental storytelling — ruins, war damage, alien growth, manufactorum structures.",
+  "Battle damage visible — craters, scorch marks, ruined buildings, shattered infrastructure.",
+  "Cinematic lighting, atmospheric haze, volumetric glow from plasma conduits.",
+  "Designed as a strategic theatre map used by a commander planning a planetary campaign.",
+  "No text overlays. No UI elements. No radial diagram layout.",
+  "Painterly, highly detailed, cinematic sci-fi concept art.",
+  "massive sci-fi megastructure strategic campaign map",
+  "Massive scale environments — structures feel kilometers large, not room-sized.",
+  "avoid segmented wheels, radial wedges, pie charts, infographics, UI, menus, blueprints, floor plans, grid lines, clean diagrams, labels, text"
+].join(" ");
+
+const sharedShotLock = [
+  "Single image, cinematic environment concept art used as a strategic campaign map.",
+  "Orbital / high-altitude perspective: the subject is a real physical place or megastructure, not a UI diagram.",
+  "Readable territories emerge from terrain and structural breaks (fractures, walls, ridgelines, chasms, ruined seams), not clean geometric wedges.",
+  "Large-scale sense of depth: shadows, atmospheric haze, volumetric light, drifting debris, smoke, ash clouds.",
+  "Composition is wide and dramatic, with a clear focal point and secondary points of interest.",
+  "Avoid infographic styling: no radial wedges, no pie slices, no schematic floor plan, no blueprint lines, no grid overlay, no menu UI.",
+].join(" ");
+
+const sharedLighting = [
+  "Strategic map readability lighting — terrain and structures must remain clearly visible.",
+  "Global soft illumination across the entire scene so no major areas disappear into darkness.",
+  "Multiple light sources reveal terrain: lava glow, reactor glow, city lights, atmospheric haze, reflected starlight.",
+  "Rim lighting and ambient light outlining structures and terrain edges.",
+  "High contrast between territories while maintaining a dark grimdark palette.",
+  "Important terrain features clearly visible from the orbital perspective.",
+  "The scene should feel like a commander’s war map — dramatic but readable."
+].join(" ");
 
   switch (layout) {
     case "ring": {
-      return [
-        `Top-down campaign map of a complete Ring or Halo World or part of a former Dyson Sphere set in Warhammer 40K as a megastructure, viewed from space.`,
-        `${narrativeContext}${campaignNameContext}`,
-        `${zone_count} clearly separated battle zones arranged around the ring, each zone visible as a distinct territory from directly above.`,
-        `Terrain: ${biomeMod}`,
-        `The ring is complete as a barely intact structure. The inner edge faces the central void — visible as a black abyss.`,
-        `The outer edge shows the megastructure's superstructure frame — iron girders, plasma conduits, atmospheric vents.`,
-        `The zones of the ring represent many of the 40K factions that have had influence of the the terrain (Imperium, Chaos, Xenos) but the age of the ring is much older indicating the presence of relics from the golden age of humanity.`,
-        `Atmospheric haze, plasma glow from the ring's power conduits visible as amber light along the inner edge.`,
-        sharedStyle,
-      ].join(" ");
-    }
+  return [
+    `Cinematic orbital view of a colossal Ringworld or Halo megastructure in Warhammer 40K, seen from space.`,
+    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
+    `The ring forms a vast broken halo around a central abyss, ancient and partially ruined.`,
+    `${zone_count} major war-torn regions spread organically across the ring structure, each territory emerging naturally from the terrain rather than forming radial segments.`,
+    `Terrain across the ring: ${biomeMod}`,
+    `Each region shows environmental identity and faction influence — ruined imperial strongholds, corrupted chaos landscapes, alien xenos ecosystems.`,
+    `The inner edge of the ring opens into a deep black void at the center.`,
+    `The outer edge exposes the megastructure frame — colossal iron girders, plasma conduits, shattered armor plating, atmospheric vents.`,
+    `The ring shows signs of ancient Golden Age engineering, far older than the current factions fighting over it.`,
+    `Zones are separated by natural breaks: collapsed superstructure seams, fractured causeways, river-chasms, trench lines, energy barriers, and debris fields — not clean painted wedges.`,
+    `The zones represent competing influences from Imperium, Chaos, and Xenos factions.`,
+    `Debris fields, shattered structures, and floating wreckage surround sections of the ring.`,
+    `Glowing plasma conduits run through the megastructure, casting amber light along the inner edge.`,
+    `Atmospheric haze, dust storms, warp glow, and burning ruins across the surface.`,
+    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+    sharedStyle, sharedLighting,
+  ].join(" ");
+}
 
     case "continent": {
-      return [
-        `Top-down campaign map of a Warhammer 40K planet with shattered continents, viewed from space.`,
-        `${narrativeContext}${campaignNameContext}`,
-        `${zone_count} clearly delineated territorial zones, each zone a distinct landmass plate separated from its neighbours by chasms, lava channels, collapsed terrain, or fortification lines.`,
-        `Terrain: ${biomeMod}`,
-        `The continent has a ragged coastlines or void-cliffs edge on their perimeter. or Rivers of lava or toxic sludge from long ago natural disasters.`,
-        `Zone borders are marked by terrain features — not drawn lines. Natural breaks in terrain delineate each territory.`,
-        `The continents of the planet represent many of the 40K factions that have had influence of the the terrain (Imperium, Chaos, Xenos) from wars long past and of the wars yet to come to fracture the contenents even more.`,
-        sharedStyle,
-      ].join(" ");
-    }
+  return [
+    `Cinematic orbital view of a war-torn Warhammer 40K planet with fractured continents and catastrophic geological damage, seen from space.`,
+    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
+    `${zone_count} major war zones spread across the planet's broken continents and tectonic plates, each territory emerging naturally from the terrain rather than forming neat or symmetrical regions.`,
+    `Terrain across the continents: ${biomeMod}`,
+    `The planetary crust is shattered — continents split apart by colossal chasms, tectonic fractures, magma seas, toxic sludge oceans, and collapsed hive-city ruins.`,
+    `Ragged coastlines, void-cliffs, and shattered landmasses drift apart across boiling oceans or exposed mantle.`,
+    `Zone boundaries appear through environmental breaks: mountain chains, crater fields, fortress walls, canyon systems, toxic seas, lava rivers, and ancient defense lines — not drawn borders.`,
+    `Evidence of ancient wars scars the landscape: orbital bombardment craters, shattered hive cities, broken manufactorum complexes, trench networks, and abandoned fortresses.`,
+    `The continents show the lingering influence of many factions — Imperial bastions, Chaos-corrupted wastelands, and alien Xenos ecosystems — layered across millennia of warfare.`,
+    `Storm systems, ash clouds, warp anomalies, and atmospheric haze swirl across the planet, illuminated by distant sunlight and fires from ongoing conflict.`,
+    `Floating debris fields and fragments of shattered moons orbit nearby.`,
+    `epic sci-fi planetary campaign map environment concept art`,
+    `No text overlays. No UI elements. Avoid infographic or boardgame map layouts.`,
+    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+    sharedStyle, sharedLighting,
+  ].join(" ");
+}
 
     case "radial": {
-      return [
-        `Top-down campaign map of a disc floting in space that formed in a radial spoke pattern, viewed from above in space.`,
-        `${narrativeContext}${campaignNameContext}`,
-        `${zone_count} zones arranged radially — a central hub objective zone surrounded by spoke corridors extending outward to outer ring zones.`,
-        `Terrain: ${biomeMod}`,
-        `The central objective zone is the most heavily fortified and contested — a tower much older than the setting of the Warhammer 40K timeline still stands fortified yet abandond in the exact centre of the disc.`,
-        `Each spoke corridor is a distinct battle zone flanked by ruins and terrain obstacles.`,
-        `The outer zones are more wild and less fortified but equally dangerous and represent many of the 40K factions that have battled here in the past.`,
-        sharedStyle,
-      ].join(" ");
-    }
+  return [
+    `Cinematic orbital view of a colossal disc-shaped megastructure floating in space in the Warhammer 40K universe, engineered as a hub-and-spoke radial fortress-world.`,
+    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
+    `${zone_count} distinct war zones laid out as a central hub objective with massive spoke corridors radiating outward to perimeter territories — the spokes are physical land-bridges and superstructure causeways, not clean diagram wedges.`,
+    `Terrain across the disc and spokes: ${biomeMod}`,
+    `The central hub is the primary objective: an ancient pre-Imperial tower or spire older than the Warhammer 40K era, heavily fortified, scarred by sieges, partially abandoned yet still powered by failing archeotech.`,
+    `Each spoke corridor is its own battle theatre: shattered transit arteries lined with ruined bastions, collapsed manufactorum gantries, barricades, crater fields, and broken defense pylons.`,
+    `The spoke corridors show heavy bombardment, void-exposure fractures, and sections patched with brutalist 40K fortifications.`,
+    `The outer perimeter territories are more wild and unstable — fractured habitats, alien overgrowth, ash deserts, warp-tainted scars, and forgotten outposts — bearing evidence of old Imperium, Chaos, and Xenos occupations.`,
+    `Zones are separated by natural breaks: collapsed superstructure seams, fractured causeways, river-chasms, trench lines, energy barriers, and debris fields — not clean painted wedges.`,
+    `Visible superstructure on the underside edges: iron ribs, plasma conduits, exposed deck plating, vents, cables, and broken docking pylons; floating debris and wreckage in the surrounding void.`,
+    `Atmospheric haze and smoke pockets cling to surviving terrain; intermittent amber plasma glow runs through conduits; occasional sickly green warp-light bleeds from ruptures.`,
+    `No text overlays. No UI elements. Avoid boardgame wheel or infographic styling — this is a physical environment seen from space.`,
+    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+    sharedStyle, sharedLighting,
+  ].join(" ");
+}
 
     case "ship_line": {
-      return [
-        `Top-down tactical map of the interior of a colossal Warhammer 40K Gothic warship, viewed from above — like a building floor plan.`,
-        `${narrativeContext}${campaignNameContext}`,
-        `The warship hull is arranged bow (left) to stern (right) across the full width of the image.`,
-        `${zone_count} clearly distinct interior combat zones along the hull — each zone is a major ship compartment: Command Bridge, Navigators Sanctum,  Astropathic Choir, Crew Quarters & Shrines, Plasma Drive & Reactors, Warp Drive, Geller Fields, Augur Arrays, Void Shields, Armoured Hull & Prow, Macro Cannons, High Energy Lances, Nova CAnnons, Torpedo Tubes, Launch Bays.`,
-        `Plasma Drive & Reactors: These occupy up to a third of the ship's length, usually in the aft section. The reactors are massive enough to power entire hive cities.`,
-        `Warp Drive: Essential for interstellar travel, this allows the ship to breach the barrier into the Immaterium.`,
-        `Geller Field: A vital protective bubble that shields the ship and its crew from the predations of daemons while in the Warp.`,
-        `Augur Arrays: The ship's primary sensory and scanning equipment for detecting enemies across the vastness of space. `,
-        `Void Shields: Multiple layers of energy barriers that absorb incoming fire before it can reach the hull.`,
-        `Armoured Hull: Often composed of meters-thick layers of adamantium and plasteel.`,
-        `Armoured Prow: A massive slab of reinforced metal at the front, often used for ramming enemy vessels.`,
-        `Macrocannons: Gigantic broadside batteries that fire building-sized shells at a significant fraction of the speed of light.`,
-        `Lances: High-powered energy beams (lasers or plasma) designed to burn through the thickest enemy armour.`,
-        `Nova Cannon: A rare and devastating prow-mounted weapon that fires a projectile capable of obliterating entire fleets.`,
-        `Torpedo Tubes: Large tubes in the prow that launch massive self-propelled munitions.`,
-        `Launch Bays: Hangar spaces housing squadrons of Fury Interceptors and Starhawk Bombers`,
-        `The Bridge: The command centre, often located in a towering spire, from which the Captain and senior officers control the vessel.`,
-        `Navigator’s Sanctum: A specialized chamber for the Navis Nobilite who steer the ship through the Warp.`,
-        `Astropathic Choir: A dedicated area for psykers to send and receive interstellar communications.`,
-        `Crew Quarters & Shrines: Living spaces for tens of thousands of personnel, ranging from opulent officer staterooms to squalid holds for press-ganged bondsmen, often interspersed with massive gothic cathedrals and shrines to the Emperor. `,
-        `Each compartment is separated by thick armoured bulkheads and blast doors, clearly visible as thick dark walls.`,
-        `Interior aesthetic: dark corroded iron deckplates, cathedral vaulted ceilings seen from above, glowing amber cogitator console banks, servo-skull stations, hanging incense braziers, purity scroll dispensers, weapon lockers.`,
-        `The ship exterior hull outline is visible as a massive iron silhouette against the void of space — stars and nebula glow visible around the hull outline.`,
-        `Battle damage within compartments: blast scorches, breached hull sections showing stars through holes, blood smears, toppled statues.`,
-        `Each combat zone has multiple entry/exit points — corridors, access hatches, blast doors.`,
-        `Engine plasma glow (deep blue-white) visible at stern end.`,
-        sharedStyle,
-      ].join(" ");
-    }
+  return [
+    `Cinematic top-down cutaway view of a colossal Warhammer 40K Gothic warship drifting through space, its armored hull partially exposed to reveal the vast internal structure like a megastructure cross-section.`,
+    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
+    `The warship spans the image from bow (left) to stern (right), its immense gothic silhouette visible against the void.`,
+    `${zone_count} major interior battle zones are distributed along the length of the ship — each zone representing a massive strategic compartment or cluster of decks rather than small rooms.`,
+    `Terrain of the interior war zones: ${biomeMod}`,
+    `These zones include areas such as command sanctums, cathedral-like crew districts, reactor cathedrals, weapon batteries, launch bays, warp engines, and sensor arrays.`,
+    `Each zone is separated by colossal armoured bulkheads, blast doors, and deck-spanning structural ribs — visible as thick dark mechanical barriers within the ship.`,
+    `The ship is unimaginably vast, containing cathedral vaults, towering reactor chambers, kilometre-long corridors, shrine complexes, and weapon halls.`,
+    `The Command Bridge rises in a gothic tower structure filled with cogitator banks and tactical hololiths.`,
+    `The Navigator’s Sanctum and Astropathic Choir chambers glow with eerie psychic light.`,
+    `The Plasma Reactors and Warp Drive sections dominate the stern half of the vessel — colossal cathedral-like machinery glowing with blue-white plasma energy.`,
+    `Weapon decks line the hull — macro cannon batteries, lance arrays, torpedo chambers, and launch bays embedded into the armoured sides of the ship.`,
+    `Void shield generators and augur arrays form massive machinery chambers surrounded by defensive infrastructure.`,
+    `Crew districts appear as dense industrial labyrinths of barracks, shrines, manufactorums, and gothic halls.`,
+    `Interior aesthetic: corroded iron deck plates, gothic arches, cathedral vaults, cogitator consoles glowing amber, incense braziers, servo skull stations, purity seals and devotional statues.`,
+    `Battle damage throughout the ship: breached decks exposing the void, fires, plasma leaks, collapsed corridors, shattered statues, blast marks and wreckage.`,
+    `Stars and nebula glow are visible beyond the hull outline where armor plates have been torn open.`,
+    `The stern engines burn with intense blue-white plasma light illuminating surrounding compartments.`,
+    `No blueprint diagrams, no dungeon grid layout, no UI overlays — this is a grimdark environment concept art tactical map.`,
+    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+    sharedStyle, sharedLighting,
+  ].join(" ");
+}
 
     default: {
       return [
@@ -168,12 +207,12 @@ serve(async (req) => {
   if (req.method !== "POST") return json(405, { ok: false, error: "Method not allowed" });
 
   try {
-    // Auth — allow both authenticated calls and service-role background calls
+    // Auth -- allow both authenticated user calls and service-role background calls
     let userId: string | null = null;
     const authHeader = req.headers.get("Authorization");
 
     if (authHeader) {
-      const result = await requireUser(req);
+      const result = await requireUser(req).catch(() => null);
       if (result?.user) userId = result.user.id;
     }
 
@@ -200,10 +239,9 @@ serve(async (req) => {
       campaign_narrative?: string;
     };
 
-    if (!map_id)      return json(400, { ok: false, error: "map_id required" });
     if (!campaign_id) return json(400, { ok: false, error: "campaign_id required" });
 
-    // If authenticated user, verify they are lead/admin of this campaign
+    // Verify caller is lead/admin if this is an authenticated user call
     if (userId) {
       const { data: mem } = await admin
         .from("campaign_members")
@@ -212,12 +250,42 @@ serve(async (req) => {
         .eq("user_id", userId)
         .maybeSingle();
       if (!mem || !["lead", "admin"].includes(mem.role)) {
-        return json(403, { ok: false, error: "Only the campaign Lead can regenerate the map." });
+        return json(403, { ok: false, error: "Only the campaign Lead can generate or regenerate the map." });
       }
     }
 
-    // Mark map as generating
-    await admin.from("maps").update({ status: "generating" }).eq("id", map_id);
+    // -- Create or reuse map record ------------------------------------------
+    // If no map_id provided (first generation from lead page modal), create one now.
+    // The returned map_id lets the modal confirm or cancel the map.
+
+    let activeMapId = map_id ?? null;
+
+    if (!activeMapId) {
+      const { data: newMap, error: mapInsertErr } = await admin
+        .from("maps")
+        .insert({
+          name:              `${String(campaign_name)} Map`,
+          description:       campaign_narrative ? String(campaign_narrative).slice(0, 200) : null,
+          map_json:          {},
+          created_by:        userId,
+          layout,
+          zone_count,
+          art_version:       "grimdark-v2",
+          generation_status: "generating",
+        })
+        .select("id")
+        .single();
+
+      if (mapInsertErr || !newMap) {
+        console.error("[generate-map] Map record insert failed:", mapInsertErr?.message);
+        return json(500, { ok: false, error: "Failed to create map record" });
+      }
+      activeMapId = newMap.id;
+      console.log(`[generate-map] Created new map record: ${activeMapId}`);
+    } else {
+      // Mark existing map as regenerating
+      await admin.from("maps").update({ generation_status: "generating" }).eq("id", activeMapId);
+    }
 
     // Build the OpenAI prompt
     const prompt = buildPrompt({
@@ -229,13 +297,13 @@ serve(async (req) => {
       campaign_narrative,
     });
 
-    console.log(`[generate-map] campaign=${campaign_id} map=${map_id} layout=${layout} zones=${zone_count}`);
+    console.log(`[generate-map] campaign=${campaign_id} map=${activeMapId} layout=${layout} zones=${zone_count}`);
     console.log(`[generate-map] prompt length=${prompt.length}`);
 
     // Call OpenAI gpt-image-1
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiKey) {
-      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      await admin.from("maps").update({ generation_status: "failed" }).eq("id", activeMapId);
       return json(500, { ok: false, error: "OpenAI API key not configured" });
     }
 
@@ -257,7 +325,7 @@ serve(async (req) => {
     if (!imageResp.ok) {
       const errText = await imageResp.text().catch(() => "unknown");
       console.error("[generate-map] OpenAI error:", errText);
-      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      await admin.from("maps").update({ generation_status: "failed" }).eq("id", activeMapId);
       return json(500, { ok: false, error: `OpenAI error: ${imageResp.status}` });
     }
 
@@ -265,18 +333,18 @@ serve(async (req) => {
     const b64 = imageData?.data?.[0]?.b64_json as string | undefined;
 
     if (!b64) {
-      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      await admin.from("maps").update({ generation_status: "failed" }).eq("id", activeMapId);
       return json(500, { ok: false, error: "No image data returned from OpenAI" });
     }
 
     // Decode base64 to Uint8Array
-    const raw    = atob(b64);
-    const bytes  = new Uint8Array(raw.length);
+    const raw   = atob(b64);
+    const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
     // Upload to Supabase Storage
     // Path: campaign-maps/{campaign_id}/maps/{map_id}/bg.png
-    const storagePath = `${campaign_id}/maps/${map_id}/bg.png`;
+    const storagePath = `${campaign_id}/maps/${activeMapId}/bg.png`;
 
     const { error: uploadErr } = await admin.storage
       .from("campaign-maps")
@@ -287,26 +355,28 @@ serve(async (req) => {
 
     if (uploadErr) {
       console.error("[generate-map] Storage upload error:", uploadErr.message);
-      await admin.from("maps").update({ status: "failed" }).eq("id", map_id);
+      await admin.from("maps").update({ generation_status: "failed" }).eq("id", activeMapId);
       return json(500, { ok: false, error: `Storage upload failed: ${uploadErr.message}` });
     }
 
-    // Update map record with path and status
+    // Update map record -- write both bg_image_path (correct schema column) and
+    // image_path (legacy, read by MapImageDisplay) so both are populated.
     const { error: updateErr } = await admin
       .from("maps")
       .update({
-        image_path: storagePath,
-        status:     "complete",
+        bg_image_path:     storagePath,
+        image_path:        storagePath,
+        generation_status: "complete",
       })
-      .eq("id", map_id);
+      .eq("id", activeMapId);
 
     if (updateErr) {
       console.error("[generate-map] Map update error:", updateErr.message);
       return json(500, { ok: false, error: `Map update failed: ${updateErr.message}` });
     }
 
-    console.log(`[generate-map] Complete. path=${storagePath}`);
-    return json(200, { ok: true, map_id, image_path: storagePath });
+    console.log(`[generate-map] Complete. map=${activeMapId} path=${storagePath}`);
+    return json(200, { ok: true, map_id: activeMapId, image_path: storagePath });
 
   } catch (e: any) {
     console.error("[generate-map] Unexpected error:", e?.message ?? String(e));

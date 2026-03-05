@@ -1,31 +1,28 @@
 "use client";
 // apps/web/src/app/campaigns/page.tsx
-// Create Campaign wizard -- map layout, S/M/L zone size, biome toggle, AI narrative,
-// rules config, map preview with approve/regenerate/cancel, then redirect to lead.
+// Create Campaign -- form only. Map generation happens from the lead page
+// after the campaign is created. Fill in form, generate narrative, create
+// campaign, redirect to /lead for map generation.
+//
 // changelog:
-//   2026-03-03 -- swapped Campaign Scale above Map Layout; biome toggle switch;
-//                biome dropdown only shown in single-biome mode; 12 biomes from
-//                MapGenerationFields.tsx; zone counts fixed to 4/8/12 (10 for
-//                void warship Large); campaign_narrative passed to generate-map;
-//                confirm redirects to /lead; cancel deletes campaign + storage.
-//   2026-03-03 -- restored AI narrative generator using Anthropic API; structured
-//                prompt uses selected layout, campaign scale, and zone/location names
-//                derived from biome or void warship compartment list; void warship
-//                capped at 10 zones/players (Large = 10 not 12).
+//   2026-03-03 -- Initial implementation with AI narrative generator.
+//   2026-03-04 -- Removed map preview step; create campaign redirects directly
+//                 to /lead?campaign=xxx. Map params saved in rules_overrides
+//                 for the lead page generate-map modal to use.
+//   2026-03-04 -- Cancel redirects to / (home page).
+
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
-import { MapImageDisplay } from "@/components/MapImageDisplay";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types ------------------------------------------------------------------
 
 type Template    = { id: string; name: string; description: string | null };
 type LayoutKey   = "ring" | "continent" | "radial" | "ship_line";
 type ZoneSizeKey = "small" | "medium" | "large";
-type WizardStep  = "configure" | "previewing";
 
-// ── Toast ─────────────────────────────────────────────────────────────────────
+// -- Toast ------------------------------------------------------------------
 
 type ToastType = "success" | "error" | "info";
 interface Toast { id: number; type: ToastType; title: string; body?: string }
@@ -63,14 +60,14 @@ function ToastContainer({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: nu
   );
 }
 
-// ── Layout options ────────────────────────────────────────────────────────────
+// -- Layout options ---------------------------------------------------------
 
 const LAYOUT_OPTIONS: { key: LayoutKey; label: string; icon: string; description: string }[] = [
   {
     key: "ring",
     label: "Halo Ring",
     icon: "O",
-    description: "Arc segments of a megastructure ring. Classic halo layout — evenly spaced zones arranged in a circle around a central void.",
+    description: "Arc segments of a megastructure ring. Classic halo layout -- evenly spaced zones arranged in a circle around a central void.",
   },
   {
     key: "continent",
@@ -88,29 +85,27 @@ const LAYOUT_OPTIONS: { key: LayoutKey; label: string; icon: string; description
     key: "ship_line",
     label: "Void Warship",
     icon: ">",
-    description: "An ancient warship viewed top-down — compartments arranged bow to stern. Tight corridors and strategic chokepoints. Maximum 10 players.",
+    description: "An ancient warship viewed top-down -- compartments arranged bow to stern. Tight corridors and strategic chokepoints. Maximum 10 players.",
   },
 ];
 
-// ── Zone sizes ────────────────────────────────────────────────────────────────
-// Void warship is capped at 10 zones (Large = 10, not 12).
+// -- Zone sizes -------------------------------------------------------------
 
 const ZONE_SIZES: { key: ZoneSizeKey; label: string; subLabel: string }[] = [
-  { key: "small",  label: "Small",  subLabel: "4 zones — fast, brutal campaign"  },
-  { key: "medium", label: "Medium", subLabel: "8 zones — balanced campaign"       },
-  { key: "large",  label: "Large",  subLabel: "12 zones — epic campaign"           },
+  { key: "small",  label: "Small",  subLabel: "4 zones -- fast, brutal campaign"  },
+  { key: "medium", label: "Medium", subLabel: "8 zones -- balanced campaign"       },
+  { key: "large",  label: "Large",  subLabel: "12 zones -- epic campaign"           },
 ];
 
 const BASE_ZONE_COUNT: Record<ZoneSizeKey, number> = { small: 4, medium: 8, large: 12 };
 
 function getZoneCount(layout: LayoutKey, size: ZoneSizeKey): number {
   const base = BASE_ZONE_COUNT[size];
-  // Void warship is capped at 10 compartments (ship anatomy limits)
   if (layout === "ship_line") return Math.min(base, 10);
   return base;
 }
 
-// ── Biome options (12 matching MapGenerationFields.tsx) ───────────────────────
+// -- Biome options ----------------------------------------------------------
 
 const BIOME_OPTIONS = [
   { value: "gothic_ruins",            label: "Gothic Ruins"            },
@@ -127,87 +122,32 @@ const BIOME_OPTIONS = [
   { value: "halo_spire",              label: "Halo Spire"              },
 ];
 
-// ── Zone names per biome (12 names each, truncated to zone count in prompt) ───
+// -- Zone names per biome (12 each, used for AI narrative prompt) -----------
 
 const ZONE_NAMES_BY_BIOME: Record<string, string[]> = {
-  gothic_ruins: [
-    "Shattered Nave", "The Ossuary Vaults", "Collapsed Bell Tower", "Iron Reliquary",
-    "The Penitent Quarter", "Archway of Screams", "The Burning Transept", "Catacombs Below",
-    "The Blessed Ruin", "Sanctum of Dust", "The Fallen Spire", "Gate of the Damned",
-  ],
-  ash_wastes: [
-    "Cinder Flats", "The Smouldering Reach", "Ashen Maw", "Dust Shelf Primus",
-    "Toxic Plume Ridge", "The Grey Expanse", "Slag Heap Delta", "Ember Dunes",
-    "Acid Rain Basin", "Soot Columns", "The Choking Fields", "Ruin of Hive Tertius",
-  ],
-  xenos_forest: [
-    "The Amber Canopy", "Bioluminescent Hollow", "Spore Cloud Thicket", "The Grasping Root-Web",
-    "Glowing Mire", "Xenos Nest Site Alpha", "Pheromone Ridge", "The Sap Rivers",
-    "Hive-Organism Scar", "Crystal Fungus Grove", "Alien Spawning Pools", "The Deep Verdance",
-  ],
-  industrial_manufactorum: [
-    "Forge Deck Alpha", "Smelting Basin", "Conveyor Line Seven", "The Cooling Towers",
-    "Cogitator Hive", "Plasma Conduit Junction", "Iron Foundry", "The Slag Yards",
-    "Machine Spirit Shrine", "Manufactory Floor Sigma", "Promethium Storage", "The Great Press",
-  ],
-  warp_scar: [
-    "The First Tear", "Daemon Bridge", "Reality Inversion Point", "Screaming Void Rift",
-    "Corruption Epicentre", "The Bleeding Ground", "Warp-Crystal Formation", "Inverted Spire",
-    "The Maddening Corridor", "Chaos Incursion Site", "Eye of the Wound", "Abyssal Threshold",
-  ],
-  obsidian_fields: [
-    "The Mirror Plain", "Black Glass Plateau", "Obsidian Razor Ridge", "The Shard Forest",
-    "Volcanic Vent Cluster", "Geode Caverns", "Reflective Salt Flats", "The Glass Labyrinth",
-    "Magma Blister Fields", "Obsidian Spire", "The Black Shore", "Vitrified Ruins",
-  ],
-  signal_crater: [
-    "Impact Zone Alpha", "The Antenna Array", "Anomaly Site Seven", "Signal Processing Core",
-    "The Crater Lip", "Debris Field Omega", "Interference Zone", "The Transmission Bunker",
-    "Electromagnetic Null Zone", "Seismic Fracture Line", "The Buried Signal", "Crater Lake Secundus",
-  ],
-  ghost_harbor: [
-    "The Sunken Fleet", "Fog Bank Crossing", "Rusted Iron Docks", "The Drowned Quarter",
-    "Silted Shipping Lane", "Spectral Lighthouse", "Hab-Block Ruins", "The Black Water",
-    "Tidal Surge Basin", "Wreck of the Iron Faith", "The Murky Shallows", "Harbor Gate Ruins",
-  ],
-  blighted_reach: [
-    "Nurgle's Garden", "The Plague Pools", "Rotting Arbour", "Infected Hive Sump",
-    "Bloat Fly Nesting Ground", "The Festering Mire", "Corruption Bloom", "Diseased Hab Ring",
-    "The Pox Fields", "Bile River Delta", "Blighted Croplands", "Gangrene Reach",
-  ],
-  null_fields: [
-    "The Dead Plain", "Null Obelisk Field", "Iron Monolith Circle", "The Silent Reach",
-    "Psychic Void Zone", "Blank Expanse Alpha", "The Oppression Fields", "Emptied Hab Ruins",
-    "Anti-Warp Boundary", "The Soulless Ground", "Null Shrine", "The Featureless Dark",
-  ],
-  iron_sanctum: [
-    "The Outer Ramparts", "Gate House Alpha", "The Inner Courtyard", "Siege Artillery Mount",
-    "The Barracks", "Trophy Hall", "Armoury Vault", "The Great Keep",
-    "Chapel of the Skull", "The Undercroft", "Outer Gatehouse", "The Command Bastion",
-  ],
-  halo_spire: [
-    "The Viewing Gallery", "Cogitator Pylon Array", "Void-Glass Walkway", "The Spire Summit",
-    "Gravitational Lock Chamber", "Ancient Data-Core", "The Crystalline Shaft", "Service Conduit Level",
-    "The Observation Deck", "Long Range Sensor Array", "Power Relay Hub", "The Outer Spire",
-  ],
+  gothic_ruins:            ["Shattered Nave", "The Ossuary Vaults", "Collapsed Bell Tower", "Iron Reliquary", "The Penitent Quarter", "Archway of Screams", "The Burning Transept", "Catacombs Below", "The Blessed Ruin", "Sanctum of Dust", "The Fallen Spire", "Gate of the Damned"],
+  ash_wastes:              ["Cinder Flats", "The Smouldering Reach", "Ashen Maw", "Dust Shelf Primus", "Toxic Plume Ridge", "The Grey Expanse", "Slag Heap Delta", "Ember Dunes", "Acid Rain Basin", "Soot Columns", "The Choking Fields", "Ruin of Hive Tertius"],
+  xenos_forest:            ["The Amber Canopy", "Bioluminescent Hollow", "Spore Cloud Thicket", "The Grasping Root-Web", "Glowing Mire", "Xenos Nest Site Alpha", "Pheromone Ridge", "The Sap Rivers", "Hive-Organism Scar", "Crystal Fungus Grove", "Alien Spawning Pools", "The Deep Verdance"],
+  industrial_manufactorum: ["Forge Deck Alpha", "Smelting Basin", "Conveyor Line Seven", "The Cooling Towers", "Cogitator Hive", "Plasma Conduit Junction", "Iron Foundry", "The Slag Yards", "Machine Spirit Shrine", "Manufactory Floor Sigma", "Promethium Storage", "The Great Press"],
+  warp_scar:               ["The First Tear", "Daemon Bridge", "Reality Inversion Point", "Screaming Void Rift", "Corruption Epicentre", "The Bleeding Ground", "Warp-Crystal Formation", "Inverted Spire", "The Maddening Corridor", "Chaos Incursion Site", "Eye of the Wound", "Abyssal Threshold"],
+  obsidian_fields:         ["The Mirror Plain", "Black Glass Plateau", "Obsidian Razor Ridge", "The Shard Forest", "Volcanic Vent Cluster", "Geode Caverns", "Reflective Salt Flats", "The Glass Labyrinth", "Magma Blister Fields", "Obsidian Spire", "The Black Shore", "Vitrified Ruins"],
+  signal_crater:           ["Impact Zone Alpha", "The Antenna Array", "Anomaly Site Seven", "Signal Processing Core", "The Crater Lip", "Debris Field Omega", "Interference Zone", "The Transmission Bunker", "Electromagnetic Null Zone", "Seismic Fracture Line", "The Buried Signal", "Crater Lake Secundus"],
+  ghost_harbor:            ["The Sunken Fleet", "Fog Bank Crossing", "Rusted Iron Docks", "The Drowned Quarter", "Silted Shipping Lane", "Spectral Lighthouse", "Hab-Block Ruins", "The Black Water", "Tidal Surge Basin", "Wreck of the Iron Faith", "The Murky Shallows", "Harbor Gate Ruins"],
+  blighted_reach:          ["Nurgle's Garden", "The Plague Pools", "Rotting Arbour", "Infected Hive Sump", "Bloat Fly Nesting Ground", "The Festering Mire", "Corruption Bloom", "Diseased Hab Ring", "The Pox Fields", "Bile River Delta", "Blighted Croplands", "Gangrene Reach"],
+  null_fields:             ["The Dead Plain", "Null Obelisk Field", "Iron Monolith Circle", "The Silent Reach", "Psychic Void Zone", "Blank Expanse Alpha", "The Oppression Fields", "Emptied Hab Ruins", "Anti-Warp Boundary", "The Soulless Ground", "Null Shrine", "The Featureless Dark"],
+  iron_sanctum:            ["The Outer Ramparts", "Gate House Alpha", "The Inner Courtyard", "Siege Artillery Mount", "The Barracks", "Trophy Hall", "Armoury Vault", "The Great Keep", "Chapel of the Skull", "The Undercroft", "Outer Gatehouse", "The Command Bastion"],
+  halo_spire:              ["The Viewing Gallery", "Cogitator Pylon Array", "Void-Glass Walkway", "The Spire Summit", "Gravitational Lock Chamber", "Ancient Data-Core", "The Crystalline Shaft", "Service Conduit Level", "The Observation Deck", "Long Range Sensor Array", "Power Relay Hub", "The Outer Spire"],
 };
 
-// ── Void warship compartments (10 max — ship anatomy limits) ─────────────────
+// -- Void warship compartments (10 max) ------------------------------------
 
 const VOID_WARSHIP_COMPARTMENTS = [
-  "Gothic Superstructure",
-  "Adamantium-Reinforced Prow",
-  "Torpedo Tubes",
-  "Launch Bays",
-  "Macro-Cannon Decks",
-  "Lance Batteries",
-  "Void Shield Generators",
-  "Nova Cannon",
-  "Warp Drive",
-  "Plasma Reactors",
+  "Gothic Superstructure", "Adamantium-Reinforced Prow", "Torpedo Tubes", "Launch Bays",
+  "Macro-Cannon Decks", "Lance Batteries", "Void Shield Generators", "Nova Cannon",
+  "Warp Drive", "Plasma Reactors",
 ];
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------------------
 
 const LAYOUT_LABELS: Record<LayoutKey, string> = {
   ring:      "Halo Ring megastructure",
@@ -217,14 +157,12 @@ const LAYOUT_LABELS: Record<LayoutKey, string> = {
 };
 
 function getZoneNamesForPrompt(layout: LayoutKey, biome: string, count: number): string[] {
-  if (layout === "ship_line") {
-    return VOID_WARSHIP_COMPARTMENTS.slice(0, count);
-  }
+  if (layout === "ship_line") return VOID_WARSHIP_COMPARTMENTS.slice(0, count);
   const names = ZONE_NAMES_BY_BIOME[biome] ?? ZONE_NAMES_BY_BIOME["ash_wastes"];
   return names.slice(0, count);
 }
 
-// ── Toggle switch ─────────────────────────────────────────────────────────────
+// -- Toggle switch ----------------------------------------------------------
 
 function ToggleSwitch({
   checked, onChange, disabled, labelLeft, labelRight,
@@ -259,7 +197,7 @@ function ToggleSwitch({
   );
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// -- Component --------------------------------------------------------------
 
 export default function CampaignsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
@@ -285,16 +223,8 @@ export default function CampaignsPage() {
     narrative:   { cp_exchange: { enabled: true } },
   });
 
-  // Narrative generator
   const [generatingNarrative, setGeneratingNarrative] = useState(false);
-
-  // Wizard
-  const [wizardStep, setWizardStep]               = useState<WizardStep>("configure");
-  const [previewCampaignId, setPreviewCampaignId] = useState<string | null>(null);
-  const [previewMapId, setPreviewMapId]           = useState<string | null>(null);
-  const [creating, setCreating]                   = useState(false);
-  const [regenerating, setRegenerating]           = useState(false);
-  const [cancelling, setCancelling]               = useState(false);
+  const [creating, setCreating]                       = useState(false);
 
   // Toasts
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -305,13 +235,13 @@ export default function CampaignsPage() {
   }, []);
   const dismissToast = useCallback((id: number) => setToasts(t => t.filter(x => x.id !== id)), []);
 
-  // ── Derived ───────────────────────────────────────────────────────────────
+  // -- Derived ---------------------------------------------------------------
 
   const isShipLayout  = selectedLayout === "ship_line";
   const zoneCount     = getZoneCount(selectedLayout, selectedSize);
   const currentLayout = LAYOUT_OPTIONS.find(l => l.key === selectedLayout)!;
 
-  // ── Load ──────────────────────────────────────────────────────────────────
+  // -- Load ------------------------------------------------------------------
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -338,7 +268,7 @@ export default function CampaignsPage() {
 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── AI Narrative Generator ────────────────────────────────────────────────
+  // -- AI Narrative Generator ------------------------------------------------
 
   const generateNarrative = async () => {
     setGeneratingNarrative(true);
@@ -375,7 +305,7 @@ export default function CampaignsPage() {
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error("Session expired — please refresh.");
+      if (!session?.access_token) throw new Error("Session expired -- please refresh.");
 
       const { data, error } = await supabase.functions.invoke("generate-narrative", {
         body: { prompt },
@@ -391,11 +321,13 @@ export default function CampaignsPage() {
     }
   };
 
-  // ── Step 1: Generate preview ──────────────────────────────────────────────
+  // -- Create Campaign -------------------------------------------------------
+  // Creates the campaign record with map params saved in rules_overrides,
+  // then redirects to /lead?campaign=xxx where the user can generate the map.
 
-  const generatePreview = async () => {
+  const createCampaign = async () => {
     if (!selectedTemplate) { addToast("error", "No template", "Ensure the templates table has at least one row."); return; }
-    if (!campaignName.trim()) { addToast("error", "Name required", "Enter a campaign name before generating the map."); return; }
+    if (!campaignName.trim()) { addToast("error", "Name required", "Enter a campaign name before creating."); return; }
 
     setCreating(true);
     try {
@@ -424,398 +356,255 @@ export default function CampaignsPage() {
       }
       if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
 
-      setPreviewCampaignId(data.campaign_id);
-      setPreviewMapId(data.map_id ?? null);
-      setWizardStep("previewing");
+      // Redirect to lead page -- map generation happens there
+      window.location.href = `/lead?campaign=${data.campaign_id}`;
 
     } catch (e: any) {
       addToast("error", "Creation failed", e?.message ?? String(e));
-    } finally {
       setCreating(false);
     }
   };
 
-  // ── Regenerate map ────────────────────────────────────────────────────────
-
-  const regenerateMap = async () => {
-    if (!previewMapId || !previewCampaignId || regenerating) return;
-    setRegenerating(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error("Session expired");
-
-      const { data, error } = await supabase.functions.invoke("generate-map", {
-        body: {
-          map_id:             previewMapId,
-          campaign_id:        previewCampaignId,
-          layout:             selectedLayout,
-          zone_count:         zoneCount,
-          biome:              primaryBiome,
-          mixed_biomes:       mixedBiomes,
-          campaign_name:      campaignName.trim(),
-          campaign_narrative: campaignNarrative.trim(),
-          art_version:        "grimdark-v2",
-        },
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (error) throw error;
-      if (!data?.ok) throw new Error(data?.error ?? "Regenerate failed");
-      addToast("info", "Regenerating", "A new warzone is being forged. Allow 20-30 seconds.");
-    } catch (e: any) {
-      addToast("error", "Regenerate failed", e?.message ?? String(e));
-    } finally {
-      setRegenerating(false);
-    }
-  };
-
-  // ── Cancel preview ────────────────────────────────────────────────────────
-  // Shows a confirmation dialog then calls the delete-campaign edge function
-  // which handles storage cleanup and cascade delete.
-
-  const cancelPreview = async () => {
-    if (!previewCampaignId) { window.location.href = "/"; return; }
-
-    const confirmed = window.confirm(
-      "Cancel campaign creation?\n\n" +
-      "This will permanently delete this campaign and all generated map artwork. " +
-      "This cannot be undone."
-    );
-    if (!confirmed) return;
-
-    setCancelling(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        await supabase.functions.invoke("delete-campaign", {
-          body: { campaign_id: previewCampaignId },
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-      }
-    } catch { /* non-fatal -- navigate home regardless */ } finally {
-      setCancelling(false);
-    }
-    window.location.href = "/";
-  };
-
-  // ── Confirm — redirect to lead ────────────────────────────────────────────
-
-  const confirmCampaign = () => {
-    if (previewCampaignId) window.location.href = `/lead?campaign=${previewCampaignId}`;
-  };
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  // -- Render ----------------------------------------------------------------
 
   return (
     <Frame title="Create Campaign" currentPage="campaigns">
       <div className="space-y-6">
 
-        {/* ══ STEP 1: Configure ═══════════════════════════════════════════ */}
-        {wizardStep === "configure" && (
-          <>
-            <div className="flex items-center justify-between">
-              <a href="/" className="text-xs text-parchment/40 hover:text-parchment/70 transition-colors">
-                &larr; Back to Home
-              </a>
-            </div>
+        <div className="flex items-center justify-between">
+          <a href="/" className="text-xs text-parchment/40 hover:text-parchment/70 transition-colors">
+            &larr; Back to Home
+          </a>
+        </div>
 
-            <Card title="Create Campaign">
-              <div className="space-y-6">
+        <Card title="Create Campaign">
+          <div className="space-y-6">
 
-                {/* ── 1. Campaign Scale ── */}
-                <div>
-                  <p className="text-sm text-parchment/70 mb-1.5">Campaign Scale</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {ZONE_SIZES.map((sz) => {
-                      const sel = selectedSize === sz.key;
-                      const count = getZoneCount(selectedLayout, sz.key);
-                      return (
-                        <button key={sz.key} onClick={() => setSelectedSize(sz.key)}
-                          disabled={loading || creating}
-                          className={`flex flex-col items-center gap-0.5 px-3 py-3 rounded border transition-colors disabled:opacity-40
-                            ${sel ? "border-brass bg-brass/15" : "border-brass/25 bg-void hover:border-brass/40 hover:bg-brass/5"}`}
-                        >
-                          <span className={`text-sm font-bold uppercase tracking-wider ${sel ? "text-brass" : "text-parchment/60"}`}>
-                            {sz.label}
-                          </span>
-                          <span className={`text-xs leading-tight text-center ${sel ? "text-brass/70" : "text-parchment/40"}`}>
-                            {count} {isShipLayout ? "compartments" : "zones"}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-1.5 text-xs text-parchment/35">
-                    {zoneCount} {isShipLayout ? "compartments" : "zones"} for this configuration
-                    {isShipLayout && selectedSize === "large" && (
-                      <span className="text-blood/60"> — void warship maximum</span>
-                    )}
-                  </p>
-                </div>
-
-                {/* ── 2. Map Layout ── */}
-                <div>
-                  <p className="text-sm text-parchment/70 mb-2">Map Layout</p>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    {LAYOUT_OPTIONS.map((opt) => {
-                      const sel = selectedLayout === opt.key;
-                      return (
-                        <button key={opt.key} onClick={() => setSelectedLayout(opt.key)}
-                          disabled={loading || creating}
-                          className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded border transition-colors text-center disabled:opacity-40
-                            ${sel ? "border-brass bg-brass/15 text-brass" : "border-brass/25 bg-void hover:border-brass/50 hover:bg-brass/5 text-parchment/60 hover:text-parchment/90"}`}
-                        >
-                          <span className={`text-2xl leading-none font-mono ${sel ? "text-brass" : "text-parchment/40"}`}>{opt.icon}</span>
-                          <span className="text-xs font-semibold uppercase tracking-wider leading-tight">{opt.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-2 text-xs text-parchment/50 italic leading-relaxed">{currentLayout.description}</p>
-                </div>
-
-                {/* ── 3. Terrain Biome — non-ship only ── */}
-                {!isShipLayout && (
-                  <div>
-                    <p className="text-sm text-parchment/70 mb-2">Terrain Biome</p>
-                    <div className="mb-3">
-                      <ToggleSwitch
-                        checked={mixedBiomes}
-                        onChange={setMixedBiomes}
-                        disabled={loading || creating}
-                        labelLeft="Single Biome"
-                        labelRight="Mixed Biomes"
-                      />
-                      <p className="mt-1.5 text-xs text-parchment/35 leading-relaxed">
-                        {mixedBiomes
-                          ? "Each zone will receive a different terrain type."
-                          : "All zones share a single terrain type — cohesive visual theme."}
-                      </p>
-                    </div>
-                    {!mixedBiomes && (
-                      <select
-                        value={primaryBiome}
-                        onChange={(e) => setPrimaryBiome(e.target.value)}
-                        disabled={loading || creating}
-                        className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
-                      >
-                        {BIOME_OPTIONS.map(b => (
-                          <option key={b.value} value={b.value}>{b.label}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                )}
-
-                {/* ── 4. Campaign Name ── */}
-                <div>
-                  <p className="text-sm text-parchment/70 mb-1">Campaign Name</p>
-                  <input
-                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
-                    value={campaignName}
-                    onChange={(e) => setCampaignName(e.target.value)}
-                    placeholder="e.g. Embers of the Shattered Halo"
-                    disabled={loading || creating}
-                  />
-                </div>
-
-                {/* ── 5. Campaign Narrative + AI generator ── */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-sm text-parchment/70">Campaign Narrative</p>
-                    <button
-                      onClick={generateNarrative}
-                      disabled={generatingNarrative || creating || loading}
-                      className="flex items-center gap-1.5 px-3 py-1 rounded border border-brass/30 bg-brass/10 hover:bg-brass/20 text-xs text-brass disabled:opacity-40 transition-colors"
+            {/* -- 1. Campaign Scale -- */}
+            <div>
+              <p className="text-sm text-parchment/70 mb-1.5">Campaign Scale</p>
+              <div className="grid grid-cols-3 gap-2">
+                {ZONE_SIZES.map((sz) => {
+                  const sel = selectedSize === sz.key;
+                  const count = getZoneCount(selectedLayout, sz.key);
+                  return (
+                    <button key={sz.key} onClick={() => setSelectedSize(sz.key)}
+                      disabled={loading || creating}
+                      className={`flex flex-col items-center gap-0.5 px-3 py-3 rounded border transition-colors disabled:opacity-40
+                        ${sel ? "border-brass bg-brass/15" : "border-brass/25 bg-void hover:border-brass/40 hover:bg-brass/5"}`}
                     >
-                      {generatingNarrative ? (
-                        <>
-                          <span className="w-3 h-3 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>&#10022; Generate with AI</>
-                      )}
+                      <span className={`text-sm font-bold uppercase tracking-wider ${sel ? "text-brass" : "text-parchment/60"}`}>
+                        {sz.label}
+                      </span>
+                      <span className={`text-xs leading-tight text-center ${sel ? "text-brass/70" : "text-parchment/40"}`}>
+                        {count} {isShipLayout ? "compartments" : "zones"}
+                      </span>
                     </button>
-                  </div>
-                  <p className="text-xs text-parchment/40 mb-2 leading-relaxed">
-                    Describe the setting, factions, and tone — or use the AI generator above to create one based on your layout, scale, and
-                    {isShipLayout ? " ship compartments." : mixedBiomes ? " mixed terrain." : ` ${BIOME_OPTIONS.find(b => b.value === primaryBiome)?.label} terrain.`}
-                    {" "}This context feeds into the AI map image generation.
-                  </p>
-                  <textarea
-                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm resize-none leading-relaxed"
-                    value={campaignNarrative}
-                    onChange={(e) => setCampaignNarrative(e.target.value)}
-                    placeholder={
-                      isShipLayout
-                        ? "e.g. The ancient void warship Implacable Wrath drifts cold and silent through the Ghoul Stars, its Plasma Reactors dark for three thousand years..."
-                        : "e.g. Three warbands converge on the remnants of a shattered halo ring — the Ashen King stirs beneath the Obsidian Fields..."
-                    }
-                    rows={5}
-                    disabled={loading || creating}
-                  />
-
-                  {/* Location names preview */}
-                  <div className="mt-2 rounded border border-brass/15 bg-black/20 p-2.5">
-                    <p className="text-xs text-parchment/35 uppercase tracking-wider mb-1.5">
-                      {isShipLayout ? "Compartments" : "Zone locations"} for this campaign
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {getZoneNamesForPrompt(selectedLayout, primaryBiome, zoneCount).map((name) => (
-                        <span key={name} className="px-2 py-0.5 rounded bg-brass/10 border border-brass/20 text-xs text-parchment/60">
-                          {name}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── 6. Optional rules ── */}
-                <div className="rounded border border-brass/25 bg-black/20 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-brass/80 mb-3">Optional Rules</p>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input type="checkbox"
-                        checked={!!rulesOverrides.economy?.enabled}
-                        onChange={(e) => setRulesOverrides(r => ({ ...r, economy: { ...(r.economy ?? {}), enabled: e.target.checked } }))}
-                      />
-                      <span className="text-sm">Economy (NIP/NCP)</span>
-                    </label>
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input type="checkbox"
-                        checked={!!rulesOverrides.fog?.enabled}
-                        onChange={(e) => setRulesOverrides(r => ({ ...r, fog: { ...(r.fog ?? {}), enabled: e.target.checked } }))}
-                      />
-                      <span className="text-sm">Fog of War</span>
-                    </label>
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input type="checkbox"
-                        checked={!!rulesOverrides.instability?.enabled}
-                        onChange={(e) => setRulesOverrides(r => ({ ...r, instability: { ...(r.instability ?? {}), enabled: e.target.checked } }))}
-                      />
-                      <span className="text-sm">Instability Events</span>
-                    </label>
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-xs text-parchment/60">Mission Selection</span>
-                      <select
-                        value={rulesOverrides.missions?.mode ?? "weighted_random_nip"}
-                        onChange={(e) => setRulesOverrides(r => ({ ...r, missions: { ...(r.missions ?? {}), mode: e.target.value } }))}
-                        className="rounded border border-brass/30 bg-black/30 px-3 py-1.5 text-sm"
-                      >
-                        <option value="random">Random</option>
-                        <option value="player_choice">Player Choice</option>
-                        <option value="player_choice_nip">Player Choice + NIP Influence</option>
-                        <option value="weighted_random_nip">Weighted Random + NIP Influence</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── 7. Invite emails ── */}
-                <div>
-                  <p className="text-sm text-parchment/70 mb-1">Invite Emails (optional, comma-separated)</p>
-                  <input
-                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
-                    value={emails}
-                    onChange={(e) => setEmails(e.target.value)}
-                    placeholder="commander@warzone.com, sergeant@forge.world"
-                    disabled={loading || creating}
-                  />
-                  <p className="mt-1 text-xs text-parchment/40">
-                    Players auto-join when they sign in. More invites available from Lead Controls.
-                  </p>
-                </div>
-
-                {/* ── Generate button ── */}
-                <button
-                  className="w-full px-4 py-3 rounded bg-brass/20 border border-brass/50 hover:bg-brass/30 text-brass font-semibold tracking-wider uppercase text-sm transition-colors disabled:opacity-40"
-                  onClick={generatePreview}
-                  disabled={creating || loading || !templates.length}
-                >
-                  {creating ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <span className="w-4 h-4 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
-                      Forging campaign...
-                    </span>
-                  ) : "Generate Map Preview"}
-                </button>
-
-                {!loading && !templates.length && (
-                  <p className="text-xs text-blood/80 text-center">No templates found — campaign creation is disabled.</p>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-xs text-parchment/35">
+                {zoneCount} {isShipLayout ? "compartments" : "zones"} for this configuration
+                {isShipLayout && selectedSize === "large" && (
+                  <span className="text-blood/60"> -- void warship maximum</span>
                 )}
-              </div>
-            </Card>
-          </>
-        )}
-
-        {/* ══ STEP 2: Map Preview ══════════════════════════════════════════ */}
-        {wizardStep === "previewing" && previewCampaignId && (
-          <Card title="Map Preview — Review Your Warzone">
-            <div className="space-y-4">
-              <div>
-                <p className="text-sm text-parchment/60 leading-relaxed">
-                  Your warzone is being rendered by the Adeptus Mechanicus. Regenerate until satisfied,
-                  then confirm to take command.
-                </p>
-                <p className="mt-1 text-xs text-parchment/35 leading-relaxed">
-                  Layout: <span className="font-mono text-brass/60 uppercase">{selectedLayout}</span>
-                  &nbsp;&middot;&nbsp;
-                  Scale: <span className="font-mono text-brass/60 uppercase">{selectedSize}</span>
-                  &nbsp;&middot;&nbsp;
-                  {zoneCount} {isShipLayout ? "compartments" : "zones"}
-                  {!isShipLayout && !mixedBiomes && (
-                    <>&nbsp;&middot;&nbsp;{BIOME_OPTIONS.find(b => b.value === primaryBiome)?.label}</>
-                  )}
-                  {!isShipLayout && mixedBiomes && <>&nbsp;&middot;&nbsp;Mixed biomes</>}
-                </p>
-              </div>
-
-              {previewMapId ? (
-                <MapImageDisplay
-                  mapId={previewMapId}
-                  campaignId={previewCampaignId}
-                  isLead={true}
-                  className="rounded"
-                />
-              ) : (
-                <div className="flex items-center justify-center h-32 text-parchment/40 text-sm animate-pulse">
-                  Awaiting map generation...
-                </div>
-              )}
-
-              <div className="grid grid-cols-3 gap-3 pt-1">
-                <button onClick={cancelPreview} disabled={cancelling}
-                  className="px-4 py-2.5 rounded border border-blood/30 bg-blood/5 hover:bg-blood/15 text-blood/80 hover:text-blood text-sm transition-colors disabled:opacity-40">
-                  {cancelling ? (
-                    <span className="flex items-center justify-center gap-1.5">
-                      <span className="w-3.5 h-3.5 border-2 border-blood/30 border-t-blood rounded-full animate-spin" />
-                      Cancelling...
-                    </span>
-                  ) : "Cancel"}
-                </button>
-
-                <button onClick={regenerateMap} disabled={regenerating}
-                  className="px-4 py-2.5 rounded border border-brass/40 bg-void hover:bg-brass/10 text-brass text-sm font-semibold transition-colors disabled:opacity-40">
-                  {regenerating ? (
-                    <span className="flex items-center justify-center gap-1.5">
-                      <span className="w-3.5 h-3.5 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
-                      Regenerating...
-                    </span>
-                  ) : "Regenerate Map"}
-                </button>
-
-                <button onClick={confirmCampaign}
-                  className="px-4 py-2.5 rounded bg-brass/25 border border-brass/60 hover:bg-brass/40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
-                  Confirm Campaign
-                </button>
-              </div>
-
-              <p className="text-xs text-parchment/25 text-center italic">
-                Cancelling will permanently delete this campaign and its map artwork.
               </p>
             </div>
-          </Card>
-        )}
+
+            {/* -- 2. Map Layout -- */}
+            <div>
+              <p className="text-sm text-parchment/70 mb-2">Map Layout</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {LAYOUT_OPTIONS.map((opt) => {
+                  const sel = selectedLayout === opt.key;
+                  return (
+                    <button key={opt.key} onClick={() => setSelectedLayout(opt.key)}
+                      disabled={loading || creating}
+                      className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded border transition-colors text-center disabled:opacity-40
+                        ${sel ? "border-brass bg-brass/15 text-brass" : "border-brass/25 bg-void hover:border-brass/50 hover:bg-brass/5 text-parchment/60 hover:text-parchment/90"}`}
+                    >
+                      <span className={`text-2xl leading-none font-mono ${sel ? "text-brass" : "text-parchment/40"}`}>{opt.icon}</span>
+                      <span className="text-xs font-semibold uppercase tracking-wider leading-tight">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-xs text-parchment/50 italic leading-relaxed">{currentLayout.description}</p>
+            </div>
+
+            {/* -- 3. Terrain Biome (non-ship only) -- */}
+            {!isShipLayout && (
+              <div>
+                <p className="text-sm text-parchment/70 mb-2">Terrain Biome</p>
+                <div className="mb-3">
+                  <ToggleSwitch
+                    checked={mixedBiomes}
+                    onChange={setMixedBiomes}
+                    disabled={loading || creating}
+                    labelLeft="Single Biome"
+                    labelRight="Mixed Biomes"
+                  />
+                  <p className="mt-1.5 text-xs text-parchment/35 leading-relaxed">
+                    {mixedBiomes
+                      ? "Each zone will receive a different terrain type."
+                      : "All zones share a single terrain type -- cohesive visual theme."}
+                  </p>
+                </div>
+                {!mixedBiomes && (
+                  <select
+                    value={primaryBiome}
+                    onChange={(e) => setPrimaryBiome(e.target.value)}
+                    disabled={loading || creating}
+                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
+                  >
+                    {BIOME_OPTIONS.map(b => (
+                      <option key={b.value} value={b.value}>{b.label}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+
+            {/* -- 4. Campaign Name -- */}
+            <div>
+              <p className="text-sm text-parchment/70 mb-1">Campaign Name</p>
+              <input
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
+                value={campaignName}
+                onChange={(e) => setCampaignName(e.target.value)}
+                placeholder="e.g. Embers of the Shattered Halo (Season 1)"
+                disabled={loading || creating}
+              />
+            </div>
+
+            {/* -- 5. Campaign Narrative + AI generator -- */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm text-parchment/70">Campaign Narrative</p>
+                <button
+                  onClick={generateNarrative}
+                  disabled={generatingNarrative || creating || loading}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded border border-brass/30 bg-brass/10 hover:bg-brass/20 text-xs text-brass disabled:opacity-40 transition-colors"
+                >
+                  {generatingNarrative ? (
+                    <>
+                      <span className="w-3 h-3 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>&#10022; Generate with AI</>
+                  )}
+                </button>
+              </div>
+              <p className="text-xs text-parchment/40 mb-2 leading-relaxed">
+                Describe the setting, factions, and tone -- or use the AI generator above.
+                This narrative feeds into the AI map image generation on the lead page.
+              </p>
+              <textarea
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm resize-none leading-relaxed"
+                value={campaignNarrative}
+                onChange={(e) => setCampaignNarrative(e.target.value)}
+                placeholder={
+                  isShipLayout
+                    ? "e.g. The ancient void warship Implacable Wrath drifts cold and silent through the Ghoul Stars..."
+                    : "e.g. Three warbands converge on the remnants of a shattered halo ring..."
+                }
+                rows={5}
+                disabled={loading || creating}
+              />
+              {/* Zone names preview */}
+              {campaignNarrative && (
+                <div className="mt-2">
+                  <p className="text-xs text-parchment/35 mb-1.5">
+                    {isShipLayout ? "Compartments" : "Locations"} ({zoneCount}):
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {getZoneNamesForPrompt(selectedLayout, primaryBiome, zoneCount).map((name, i) => (
+                      <span key={i} className="px-2 py-0.5 rounded bg-brass/10 border border-brass/20 text-xs text-brass/70">
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* -- 6. Rules configuration -- */}
+            <div>
+              <p className="text-sm text-parchment/70 mb-2">Rules Configuration</p>
+              <div className="space-y-2.5 text-parchment/70">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox"
+                    checked={!!rulesOverrides.economy?.enabled}
+                    onChange={(e) => setRulesOverrides(r => ({ ...r, economy: { ...(r.economy ?? {}), enabled: e.target.checked } }))}
+                  />
+                  <span className="text-sm">Economy (NIP/NCP)</span>
+                </label>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox"
+                    checked={!!rulesOverrides.fog?.enabled}
+                    onChange={(e) => setRulesOverrides(r => ({ ...r, fog: { ...(r.fog ?? {}), enabled: e.target.checked } }))}
+                  />
+                  <span className="text-sm">Fog of War</span>
+                </label>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox"
+                    checked={!!rulesOverrides.instability?.enabled}
+                    onChange={(e) => setRulesOverrides(r => ({ ...r, instability: { ...(r.instability ?? {}), enabled: e.target.checked } }))}
+                  />
+                  <span className="text-sm">Instability Events</span>
+                </label>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs text-parchment/60">Mission Selection</span>
+                  <select
+                    value={rulesOverrides.missions?.mode ?? "weighted_random_nip"}
+                    onChange={(e) => setRulesOverrides(r => ({ ...r, missions: { ...(r.missions ?? {}), mode: e.target.value } }))}
+                    className="rounded border border-brass/30 bg-black/30 px-3 py-1.5 text-sm"
+                  >
+                    <option value="random">Random</option>
+                    <option value="player_choice">Player Choice</option>
+                    <option value="player_choice_nip">Player Choice + NIP Influence</option>
+                    <option value="weighted_random_nip">Weighted Random + NIP Influence</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* -- 7. Invite emails -- */}
+            <div>
+              <p className="text-sm text-parchment/70 mb-1">Invite Emails (optional, comma-separated)</p>
+              <input
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
+                value={emails}
+                onChange={(e) => setEmails(e.target.value)}
+                placeholder="commander@warzone.com, sergeant@forge.world"
+                disabled={loading || creating}
+              />
+              <p className="mt-1 text-xs text-parchment/40">
+                Players auto-join when they sign in. More invites available from Lead Controls.
+              </p>
+            </div>
+
+            {/* -- Create Campaign button -- */}
+            <button
+              className="w-full px-4 py-3 rounded bg-brass/20 border border-brass/50 hover:bg-brass/30 text-brass font-semibold tracking-wider uppercase text-sm transition-colors disabled:opacity-40"
+              onClick={createCampaign}
+              disabled={creating || loading || !templates.length}
+            >
+              {creating ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
+                  Creating campaign...
+                </span>
+              ) : "Create Campaign"}
+            </button>
+
+            {!loading && !templates.length && (
+              <p className="text-xs text-blood/80 text-center">No templates found -- campaign creation is disabled.</p>
+            )}
+
+          </div>
+        </Card>
 
       </div>
 
