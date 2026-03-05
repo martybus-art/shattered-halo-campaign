@@ -461,15 +461,12 @@ export default function LeadControls() {
       title: "Confirm Action",
       tone: "blood",
       confirmText: "Proceed",
-      message:
-        "Assign Missions to all conflicts?
+      message: `Assign Missions to all conflicts?
 
-" +
-        "Missions will be assigned based on NIP influence settings.
-" +
-        "Make sure all players have submitted their NIP spending choices before proceeding.
+Missions will be assigned based on NIP influence settings.
+Make sure all players have submitted their NIP spending choices before proceeding.
 
-Proceed?",
+Proceed?`,
     });
     if (go) callFn("assign-missions");
   };
@@ -479,18 +476,14 @@ Proceed?",
       title: "Confirm Action",
       tone: "blood",
       confirmText: "Proceed",
-      message:
-        "Apply Halo Instability?
+      message: `Apply Halo Instability?
 
-" +
-        "This increments the Instability counter by 1 and rolls an event from the d10 table.
-" +
-        "A public bulletin will be posted automatically.
+This increments the Instability counter by 1 and rolls an event from the d10 table.
+A public bulletin will be posted automatically.
 
-" +
-        "Make sure all conflict results have been recorded before proceeding.
+Make sure all conflict results have been recorded before proceeding.
 
-Proceed?",
+Proceed?`,
     });
     if (go) callFn("apply-instability");
   };
@@ -500,15 +493,12 @@ Proceed?",
       title: "Confirm Action",
       tone: "blood",
       confirmText: "Proceed",
-      message:
-        "Offer Catchup Choice to Underdog?
+      message: `Offer Catchup Choice to Underdog?
 
-" +
-        "This will automatically identify the player with the fewest sectors and post
-" +
-        "a catch-up offer to their dashboard. They will choose a bonus to apply.
+This will automatically identify the player with the fewest sectors and post
+a catch-up offer to their dashboard. They will choose a bonus to apply.
 
-Proceed?",
+Proceed?`,
     });
     if (!go) return;
     const token = await getToken();
@@ -547,13 +537,11 @@ Proceed?",
       tone: "blood",
       confirmText: "Delete",
       cancelText: "Cancel",
-      message:
-        `Delete campaign "${campaign?.name ?? campaignId}"?
+      message: `Delete campaign "${campaign?.name ?? campaignId}"?
 
-` +
-        "This permanently deletes all campaign data: sectors, rounds, player state, posts, and map artwork.
+This permanently deletes all campaign data: sectors, rounds, player state, posts, and map artwork.
 
-This cannot be undone.",
+This cannot be undone.`,
     });
     if (!go) return;
     setDeleting(true);
