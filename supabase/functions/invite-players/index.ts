@@ -15,6 +15,28 @@ serve(async (req) => {
     const admin = adminClient();
 
     const body = await req.json().catch(() => ({}));
+    const mode: string = body?.mode ?? "invite";
+
+    // ── LIST USERS ────────────────────────────────────────────────────────────
+    // Returns all registered users (except the caller) for the quick-add UI.
+    // Any authenticated user can call this — no campaign_id required.
+    if (mode === "list_users") {
+      const { data: usersData, error: usersErr } = await admin.auth.admin.listUsers({ perPage: 500 });
+      if (usersErr) return json(500, { ok: false, error: usersErr.message });
+
+      const users = (usersData?.users ?? [])
+        .filter((u) => u.id !== user.id && u.email)
+        .map((u) => ({
+          id: u.id,
+          email: u.email!,
+          display_name: (u.user_metadata?.display_name as string | null) ?? null,
+        }))
+        .sort((a, b) => (a.display_name ?? a.email).localeCompare(b.display_name ?? b.email));
+
+      return json(200, { ok: true, users });
+    }
+
+    // ── INVITE (default) ──────────────────────────────────────────────────────
     const campaign_id: string | undefined = body?.campaign_id;
     const player_emails: string[] = Array.isArray(body?.player_emails)
       ? body.player_emails

@@ -46,6 +46,8 @@ type Member = {
   faction_name:   string | null;
 };
 
+type KnownUser = { id: string; email: string; display_name: string | null };
+
 // campaignId is read from the URL query param on first render so nav links
 // are always populated even before async load completes.
 function getQueryCampaign(): string {
@@ -355,8 +357,11 @@ export default function LeadControls() {
   const [round, setRound]               = useState<{ stage: string } | null>(null);
   const [role, setRole]                 = useState<string>("player");
   const [members, setMembers]           = useState<Member[]>([]);
-  const [inviteEmails, setInviteEmails] = useState<string>("");
-  const [inviteStatus, setInviteStatus] = useState<string>("");
+  const [inviteEmails, setInviteEmails]   = useState<string>("");
+  const [inviteStatus, setInviteStatus]   = useState<string>("");
+  const [knownUsers, setKnownUsers]       = useState<KnownUser[]>([]);
+  const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
+  const [userSearch, setUserSearch]       = useState<string>("");
   const [startStatus, setStartStatus]   = useState<string>("");
   const [mapModalOpen, setMapModalOpen] = useState(false);
   const [deleting, setDeleting]         = useState(false);
@@ -411,6 +416,21 @@ export default function LeadControls() {
       .eq("campaign_id", cid).eq("round_number", c.round_number)
       .maybeSingle();
     setRound(r);
+
+    // Load registered users for the quick-add invite picker (non-fatal)
+    try {
+      const { data: { session: invSess } } = await supabase.auth.getSession();
+      const invToken = invSess?.access_token;
+      if (invToken) {
+        const { data: usersResp } = await supabase.functions.invoke("invite-players", {
+          body: { mode: "list_users" },
+          headers: { Authorization: `Bearer ${invToken}` },
+        });
+        if (usersResp?.ok && Array.isArray(usersResp.users)) {
+          setKnownUsers(usersResp.users as KnownUser[]);
+        }
+      }
+    } catch { /* non-fatal */ }
   };
 
   useEffect(() => { if (campaignId) load(campaignId); }, []); // eslint-disable-line
@@ -516,19 +536,51 @@ Proceed?`,
       message: `Catchup offer sent to: ${data.commander_name ?? data.underdog_id}\nThey currently hold ${data.sector_count} sector(s).`,
     });
   };
-  // Invite players. If campaign already started, late-allocate each via
-  // start-campaign (mode: late) once they accept the invite and sign in --
-  // the accept-invites edge function handles this automatically on login.
+  // Invite players. Calls invite-players edge function which:
+  // - inserts pending_invites rows
+  // - sends magic-link email to new users via inviteUserByEmail
+  // - sends OTP login email to existing registered users
+  const allInviteEmails = (): string[] => {
+    const typed = inviteEmails.split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    return Array.from(new Set([...Array.from(selectedEmails), ...typed]));
+  };
+
+  const toggleInviteUser = (email: string) => {
+    setSelectedEmails(prev => {
+      const next = new Set(prev);
+      if (next.has(email)) next.delete(email);
+      else next.add(email);
+      return next;
+    });
+  };
+
+  const filteredKnownUsers = knownUsers.filter(u => {
+    const q = userSearch.toLowerCase();
+    return u.email.toLowerCase().includes(q) || (u.display_name?.toLowerCase() ?? "").includes(q);
+  });
+
   const invitePlayers = async () => {
-    const emails = inviteEmails.split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    const emails = allInviteEmails();
     if (!emails.length) return;
     setInviteStatus("Sending invites...");
-    const { error } = await supabase
-      .from("pending_invites")
-      .insert(emails.map(email => ({ campaign_id: campaignId, email })));
+    const token = await getToken();
+    if (!token) return;
+    const { data, error } = await supabase.functions.invoke("invite-players", {
+      body: { campaign_id: campaignId, player_emails: emails },
+      headers: { Authorization: `Bearer ${token}` },
+    });
     if (error) { setInviteStatus(`Error: ${error.message}`); return; }
-    setInviteStatus(`Invited: ${emails.join(", ")}`);
+    if (!data?.ok) { setInviteStatus(`Error: ${data?.error ?? "Failed"}`); return; }
+    const sent = data.sent ?? 0;
+    const total = data.invited ?? emails.length;
+    setInviteStatus(
+      sent > 0
+        ? `✓ ${sent} of ${total} email${total !== 1 ? "s" : ""} sent.`
+        : `✓ Invites saved — players will see this on next login.`
+    );
     setInviteEmails("");
+    setSelectedEmails(new Set());
+    setUserSearch("");
   };
 
   const deleteCampaign = async () => {
@@ -761,6 +813,63 @@ This cannot be undone.`,
                 {/* Invite form */}
                 <div className="border-t border-brass/10 pt-3 space-y-2">
                   <p className="text-xs text-parchment/50 font-semibold">Invite Players</p>
+
+                  {/* Quick-add: selected chips */}
+                  {selectedEmails.size > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {Array.from(selectedEmails).map(email => {
+                        const u = knownUsers.find(x => x.email === email);
+                        return (
+                          <button
+                            key={email}
+                            onClick={() => toggleInviteUser(email)}
+                            className="flex items-center gap-1 px-2 py-1 rounded bg-brass/20 border border-brass/50 text-brass text-xs hover:bg-brass/30 transition-colors"
+                          >
+                            {u?.display_name ?? email}
+                            <span className="opacity-60 ml-0.5">×</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Quick-add: registered user picker */}
+                  {knownUsers.length > 0 && (
+                    <>
+                      <input
+                        className="w-full px-3 py-1.5 rounded bg-void border border-brass/20 focus:outline-none focus:border-brass/40 text-xs text-parchment/70"
+                        value={userSearch}
+                        onChange={(e) => setUserSearch(e.target.value)}
+                        placeholder="Search registered players…"
+                        disabled={slotsRemaining === 0}
+                      />
+                      <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                        {filteredKnownUsers.map(u => {
+                          const sel = selectedEmails.has(u.email);
+                          return (
+                            <button
+                              key={u.id}
+                              onClick={() => toggleInviteUser(u.email)}
+                              disabled={slotsRemaining === 0}
+                              title={u.email}
+                              className={`px-2 py-1 rounded border text-xs transition-colors disabled:opacity-40
+                                ${sel
+                                  ? "border-brass/50 bg-brass/15 text-brass/50 line-through"
+                                  : "border-brass/20 bg-void hover:border-brass/45 hover:bg-brass/10 text-parchment/65"
+                                }`}
+                            >
+                              {u.display_name ?? u.email}
+                            </button>
+                          );
+                        })}
+                        {filteredKnownUsers.length === 0 && (
+                          <p className="text-xs text-parchment/25 italic">No matching players</p>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {/* New email addresses */}
                   <input
                     className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm"
                     value={inviteEmails}
@@ -770,7 +879,7 @@ This cannot be undone.`,
                   />
                   <button
                     onClick={invitePlayers}
-                    disabled={!inviteEmails.trim() || slotsRemaining === 0}
+                    disabled={allInviteEmails().length === 0 || slotsRemaining === 0}
                     className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40 text-sm transition-colors"
                   >
                     Send Invites

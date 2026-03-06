@@ -10,6 +10,9 @@
 //                 to /lead?campaign=xxx. Map params saved in rules_overrides
 //                 for the lead page generate-map modal to use.
 //   2026-03-04 -- Cancel redirects to / (home page).
+//   2026-03-06 -- After create-campaign succeeds, call invite-players edge
+//                 function to actually send emails. Previously only pending_invites
+//                 rows were inserted; no emails were dispatched.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -398,6 +401,17 @@ export default function CampaignsPage() {
         throw error;
       }
       if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
+
+      // Send invite emails via edge function (non-fatal -- pending_invites rows already inserted)
+      const inviteEmails = emails.split(",").map((e: string) => e.trim()).filter(Boolean);
+      if (inviteEmails.length) {
+        try {
+          await supabase.functions.invoke("invite-players", {
+            body: { campaign_id: data.campaign_id, player_emails: inviteEmails },
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+        } catch { /* non-fatal: pending_invites rows exist, players see invite on next login */ }
+      }
 
       // Redirect to lead page -- map generation happens there
       window.location.href = `/lead?campaign=${data.campaign_id}`;
