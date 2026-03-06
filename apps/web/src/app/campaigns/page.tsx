@@ -636,7 +636,7 @@ export default function CampaignsPage() {
             )}
 
           </div>
-
+        </Card>
 
         <Card title="Invite Players">
           <div className="space-y-4">
