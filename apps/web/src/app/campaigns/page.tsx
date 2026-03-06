@@ -174,6 +174,35 @@ function ToggleSwitch({
   );
 }
 
+
+function RuleToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-lg border border-brass/15 bg-black/20 px-3 py-3">
+      <div className="min-w-0">
+        <p className="text-sm text-parchment/80">{label}</p>
+        {description && (
+          <p className="mt-1 text-xs text-parchment/40 leading-relaxed">{description}</p>
+        )}
+      </div>
+      <div className="shrink-0 pt-0.5">
+        <ToggleSwitch checked={checked} onChange={onChange} disabled={disabled} />
+      </div>
+    </div>
+  );
+}
+
 // -- Component --------------------------------------------------------------
 
 export default function CampaignsPage() {
@@ -357,7 +386,19 @@ export default function CampaignsPage() {
         <Card title="Create Campaign">
           <div className="space-y-6">
 
-            {/* -- 1. Campaign Scale -- */}
+            {/* -- 1. Campaign Name -- */}
+            <div>
+              <p className="text-sm text-parchment/70 mb-1">Campaign Name</p>
+              <input
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
+                value={campaignName}
+                onChange={(e) => setCampaignName(e.target.value)}
+                placeholder="e.g. Embers of the Shattered Halo (Season 1)"
+                disabled={loading || creating}
+              />
+            </div>
+
+            {/* -- 2. Campaign Scale -- */}
             <div>
               <p className="text-sm text-parchment/70 mb-1.5">Campaign Scale</p>
               <div className="grid grid-cols-3 gap-2">
@@ -388,7 +429,7 @@ export default function CampaignsPage() {
               </p>
             </div>
 
-            {/* -- 2. Map Layout -- */}
+            {/* -- 3. Map Layout -- */}
             <div>
               <p className="text-sm text-parchment/70 mb-2">Map Layout</p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -409,130 +450,137 @@ export default function CampaignsPage() {
               <p className="mt-2 text-xs text-parchment/50 italic leading-relaxed">{currentLayout.description}</p>
             </div>
 
-            {/* -- 3. Terrain Biome (non-ship only) -- */}
-            {!isShipLayout && (
-              <div>
-                <p className="text-sm text-parchment/70 mb-2">Terrain Biome</p>
-                <div className="mb-3">
-                  <ToggleSwitch
-                    checked={mixedBiomes}
-                    onChange={setMixedBiomes}
-                    disabled={loading || creating}
-                    labelLeft="Single Biome"
-                    labelRight="Mixed Biomes"
-                  />
-                  <p className="mt-1.5 text-xs text-parchment/35 leading-relaxed">
-                    {mixedBiomes
-                      ? "Each zone will receive a different terrain type."
-                      : "All zones share a single terrain type -- cohesive visual theme."}
+            {/* -- 4. Narrative + world/rules configuration -- */}
+            <div className="grid gap-6 lg:grid-cols-2 items-start">
+              <div className="rounded-lg border border-brass/20 bg-black/10 p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm text-parchment/70">Campaign Narrative</p>
+                  <button
+                    onClick={generateNarrative}
+                    disabled={generatingNarrative || creating || loading}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded border border-brass/30 bg-brass/10 hover:bg-brass/20 text-xs text-brass disabled:opacity-40 transition-colors"
+                  >
+                    {generatingNarrative ? (
+                      <>
+                        <span className="w-3 h-3 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>&#10022; Generate with AI</>
+                    )}
+                  </button>
+                </div>
+                <p className="text-xs text-parchment/40 mb-2 leading-relaxed">
+                  Describe the setting, factions, and tone -- or use the AI generator above.
+                  This narrative feeds into the AI map image generation on the lead page.
+                </p>
+                <textarea
+                  className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm resize-none leading-relaxed"
+                  value={campaignNarrative}
+                  onChange={(e) => setCampaignNarrative(e.target.value)}
+                  placeholder={
+                    isShipLayout
+                      ? "e.g. The ancient void warship Implacable Wrath drifts cold and silent through the Ghoul Stars..."
+                      : "e.g. Three warbands converge on the remnants of a shattered halo ring..."
+                  }
+                  rows={12}
+                  disabled={loading || creating}
+                />
+              </div>
+
+              <div className="rounded-lg border border-brass/20 bg-black/10 p-4 space-y-5">
+                <div>
+                  <p className="text-sm text-parchment/70">World & Rules</p>
+                  <p className="mt-1 text-xs text-parchment/40 leading-relaxed">
+                    Set the biome theme and switch core campaign systems on or off.
                   </p>
                 </div>
-                {!mixedBiomes && (
-                  <select
-                    value={primaryBiome}
-                    onChange={(e) => setPrimaryBiome(e.target.value)}
-                    disabled={loading || creating}
-                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
-                  >
-                    {BIOME_OPTIONS.map(b => (
-                      <option key={b.value} value={b.value}>{b.label}</option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            )}
 
-            {/* -- 4. Campaign Name -- */}
-            <div>
-              <p className="text-sm text-parchment/70 mb-1">Campaign Name</p>
-              <input
-                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
-                value={campaignName}
-                onChange={(e) => setCampaignName(e.target.value)}
-                placeholder="e.g. Embers of the Shattered Halo (Season 1)"
-                disabled={loading || creating}
-              />
-            </div>
+                <div className="space-y-3">
+                  <p className="text-xs uppercase tracking-widest text-parchment/45">Terrain Biome</p>
 
-            {/* -- 5. Campaign Narrative + AI generator -- */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <p className="text-sm text-parchment/70">Campaign Narrative</p>
-                <button
-                  onClick={generateNarrative}
-                  disabled={generatingNarrative || creating || loading}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded border border-brass/30 bg-brass/10 hover:bg-brass/20 text-xs text-brass disabled:opacity-40 transition-colors"
-                >
-                  {generatingNarrative ? (
+                  {!isShipLayout ? (
                     <>
-                      <span className="w-3 h-3 border-2 border-brass/30 border-t-brass rounded-full animate-spin" />
-                      Generating...
+                      <ToggleSwitch
+                        checked={mixedBiomes}
+                        onChange={setMixedBiomes}
+                        disabled={loading || creating}
+                        labelLeft="Single Biome"
+                        labelRight="Mixed Biomes"
+                      />
+                      <p className="text-xs text-parchment/35 leading-relaxed">
+                        {mixedBiomes
+                          ? "Each zone will receive a different terrain type."
+                          : "All zones share a single terrain type -- cohesive visual theme."}
+                      </p>
+                      {!mixedBiomes && (
+                        <select
+                          value={primaryBiome}
+                          onChange={(e) => setPrimaryBiome(e.target.value)}
+                          disabled={loading || creating}
+                          className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm focus:outline-none focus:border-brass/60"
+                        >
+                          {BIOME_OPTIONS.map(b => (
+                            <option key={b.value} value={b.value}>{b.label}</option>
+                          ))}
+                        </select>
+                      )}
                     </>
                   ) : (
-                    <>&#10022; Generate with AI</>
+                    <div className="rounded-lg border border-brass/15 bg-void/40 px-3 py-3">
+                      <p className="text-sm text-parchment/65">
+                        Void warship campaigns use compartment themes instead of planet biomes.
+                      </p>
+                    </div>
                   )}
-                </button>
-              </div>
-              <p className="text-xs text-parchment/40 mb-2 leading-relaxed">
-                Describe the setting, factions, and tone -- or use the AI generator above.
-                This narrative feeds into the AI map image generation on the lead page.
-              </p>
-              <textarea
-                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm resize-none leading-relaxed"
-                value={campaignNarrative}
-                onChange={(e) => setCampaignNarrative(e.target.value)}
-                placeholder={
-                  isShipLayout
-                    ? "e.g. The ancient void warship Implacable Wrath drifts cold and silent through the Ghoul Stars..."
-                    : "e.g. Three warbands converge on the remnants of a shattered halo ring..."
-                }
-                rows={5}
-                disabled={loading || creating}
-              />
-            </div>
+                </div>
 
-            {/* -- 6. Rules configuration -- */}
-            <div>
-              <p className="text-sm text-parchment/70 mb-2">Rules Configuration</p>
-              <div className="space-y-2.5 text-parchment/70">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input type="checkbox"
+                <div className="space-y-3">
+                  <p className="text-xs uppercase tracking-widest text-parchment/45">Rules Configuration</p>
+
+                  <RuleToggleRow
+                    label="Economy (NIP/NCP)"
+                    description="Enable strategic economy systems, including NIP-based mission influence."
                     checked={!!rulesOverrides.economy?.enabled}
-                    onChange={(e) => setRulesOverrides(r => ({ ...r, economy: { ...(r.economy ?? {}), enabled: e.target.checked } }))}
+                    onChange={(v) => setRulesOverrides(r => ({ ...r, economy: { ...(r.economy ?? {}), enabled: v } }))}
+                    disabled={loading || creating}
                   />
-                  <span className="text-sm">Economy (NIP/NCP)</span>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input type="checkbox"
+
+                  <RuleToggleRow
+                    label="Fog of War"
+                    description="Keep zones hidden until they are revealed through play."
                     checked={!!rulesOverrides.fog?.enabled}
-                    onChange={(e) => setRulesOverrides(r => ({ ...r, fog: { ...(r.fog ?? {}), enabled: e.target.checked } }))}
+                    onChange={(v) => setRulesOverrides(r => ({ ...r, fog: { ...(r.fog ?? {}), enabled: v } }))}
+                    disabled={loading || creating}
                   />
-                  <span className="text-sm">Fog of War</span>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input type="checkbox"
+
+                  <RuleToggleRow
+                    label="Instability Events"
+                    description="Allow escalating campaign events to alter the battlefield over time."
                     checked={!!rulesOverrides.instability?.enabled}
-                    onChange={(e) => setRulesOverrides(r => ({ ...r, instability: { ...(r.instability ?? {}), enabled: e.target.checked } }))}
+                    onChange={(v) => setRulesOverrides(r => ({ ...r, instability: { ...(r.instability ?? {}), enabled: v } }))}
+                    disabled={loading || creating}
                   />
-                  <span className="text-sm">Instability Events</span>
-                </label>
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs text-parchment/60">Mission Selection</span>
-                  <select
-                    value={rulesOverrides.missions?.mode ?? "weighted_random_nip"}
-                    onChange={(e) => setRulesOverrides(r => ({ ...r, missions: { ...(r.missions ?? {}), mode: e.target.value } }))}
-                    className="rounded border border-brass/30 bg-black/30 px-3 py-1.5 text-sm"
-                  >
-                    <option value="random">Random</option>
-                    <option value="player_choice">Player Choice</option>
-                    <option value="player_choice_nip">Player Choice + NIP Influence</option>
-                    <option value="weighted_random_nip">Weighted Random + NIP Influence</option>
-                  </select>
+
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs text-parchment/60">Mission Selection</span>
+                    <select
+                      value={rulesOverrides.missions?.mode ?? "weighted_random_nip"}
+                      onChange={(e) => setRulesOverrides(r => ({ ...r, missions: { ...(r.missions ?? {}), mode: e.target.value } }))}
+                      className="rounded border border-brass/30 bg-black/30 px-3 py-1.5 text-sm focus:outline-none focus:border-brass/60"
+                      disabled={loading || creating}
+                    >
+                      <option value="random">Random</option>
+                      <option value="player_choice">Player Choice</option>
+                      <option value="player_choice_nip">Player Choice + NIP Influence</option>
+                      <option value="weighted_random_nip">Weighted Random + NIP Influence</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* -- 7. Invite emails -- */}
+            {/* -- 5. Invite emails -- */}
             <div>
               <p className="text-sm text-parchment/70 mb-1">Invite Emails (optional, comma-separated)</p>
               <input
