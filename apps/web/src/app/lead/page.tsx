@@ -361,7 +361,7 @@ export default function LeadControls() {
   const [inviteStatus, setInviteStatus]   = useState<string>("");
   const [knownUsers, setKnownUsers]       = useState<KnownUser[]>([]);
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
-  const [userSearch, setUserSearch]       = useState<string>("");
+  const [playerPickerOpen, setPlayerPickerOpen] = useState(false);
   const [startStatus, setStartStatus]   = useState<string>("");
   const [mapModalOpen, setMapModalOpen] = useState(false);
   const [deleting, setDeleting]         = useState(false);
@@ -545,19 +545,18 @@ Proceed?`,
     return Array.from(new Set([...Array.from(selectedEmails), ...typed]));
   };
 
-  const toggleInviteUser = (email: string) => {
+  const toggleInviteUser = (email: string, checked: boolean) => {
     setSelectedEmails(prev => {
       const next = new Set(prev);
-      if (next.has(email)) next.delete(email);
-      else next.add(email);
+      if (checked) next.add(email.toLowerCase());
+      else {
+        for (const item of Array.from(next)) {
+          if (item.toLowerCase() === email.toLowerCase()) next.delete(item);
+        }
+      }
       return next;
     });
   };
-
-  const filteredKnownUsers = knownUsers.filter(u => {
-    const q = userSearch.toLowerCase();
-    return u.email.toLowerCase().includes(q) || (u.display_name?.toLowerCase() ?? "").includes(q);
-  });
 
   const invitePlayers = async () => {
     const emails = allInviteEmails();
@@ -814,60 +813,63 @@ This cannot be undone.`,
                 <div className="border-t border-brass/10 pt-3 space-y-2">
                   <p className="text-xs text-parchment/50 font-semibold">Invite Players</p>
 
-                  {/* Quick-add: selected chips */}
-                  {selectedEmails.size > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {Array.from(selectedEmails).map(email => {
-                        const u = knownUsers.find(x => x.email === email);
-                        return (
-                          <button
-                            key={email}
-                            onClick={() => toggleInviteUser(email)}
-                            className="flex items-center gap-1 px-2 py-1 rounded bg-brass/20 border border-brass/50 text-brass text-xs hover:bg-brass/30 transition-colors"
-                          >
-                            {u?.display_name ?? email}
-                            <span className="opacity-60 ml-0.5">×</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                  {/* Registered player picker -- collapsible with checkboxes */}
+                  <div className="rounded-lg border border-brass/20 bg-black/10">
+                    <button
+                      type="button"
+                      onClick={() => setPlayerPickerOpen(v => !v)}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+                      disabled={slotsRemaining === 0}
+                    >
+                      <div>
+                        <p className="text-sm text-parchment/75">Registered Player Accounts</p>
+                        <p className="mt-0.5 text-xs text-parchment/40">
+                          Quick-add players by ticking their account.
+                        </p>
+                      </div>
+                      <span className="text-xs uppercase tracking-widest text-brass/70 shrink-0">
+                        {playerPickerOpen ? "Hide" : "Show"}
+                      </span>
+                    </button>
 
-                  {/* Quick-add: registered user picker */}
-                  {knownUsers.length > 0 && (
-                    <>
-                      <input
-                        className="w-full px-3 py-1.5 rounded bg-void border border-brass/20 focus:outline-none focus:border-brass/40 text-xs text-parchment/70"
-                        value={userSearch}
-                        onChange={(e) => setUserSearch(e.target.value)}
-                        placeholder="Search registered players…"
-                        disabled={slotsRemaining === 0}
-                      />
-                      <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                        {filteredKnownUsers.map(u => {
-                          const sel = selectedEmails.has(u.email);
-                          return (
-                            <button
-                              key={u.id}
-                              onClick={() => toggleInviteUser(u.email)}
-                              disabled={slotsRemaining === 0}
-                              title={u.email}
-                              className={`px-2 py-1 rounded border text-xs transition-colors disabled:opacity-40
-                                ${sel
-                                  ? "border-brass/50 bg-brass/15 text-brass/50 line-through"
-                                  : "border-brass/20 bg-void hover:border-brass/45 hover:bg-brass/10 text-parchment/65"
-                                }`}
-                            >
-                              {u.display_name ?? u.email}
-                            </button>
-                          );
-                        })}
-                        {filteredKnownUsers.length === 0 && (
-                          <p className="text-xs text-parchment/25 italic">No matching players</p>
+                    {playerPickerOpen && (
+                      <div className="border-t border-brass/15 px-4 py-3">
+                        {knownUsers.length ? (
+                          <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                            {knownUsers.map((u) => {
+                              const checked = selectedEmails.has(u.email.toLowerCase());
+                              return (
+                                <label
+                                  key={u.id}
+                                  className="flex items-start gap-3 rounded-lg border border-brass/10 bg-black/20 px-3 py-2 cursor-pointer hover:border-brass/25 transition-colors"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) => toggleInviteUser(u.email, e.target.checked)}
+                                    disabled={slotsRemaining === 0}
+                                    className="mt-0.5"
+                                  />
+                                  <span className="min-w-0">
+                                    <span className="block text-sm text-parchment/80">
+                                      {u.display_name?.trim() || u.email}
+                                    </span>
+                                    <span className="block text-xs text-parchment/45 break-all">
+                                      {u.email}
+                                    </span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-parchment/40 leading-relaxed">
+                            No other registered player accounts found.
+                          </p>
                         )}
                       </div>
-                    </>
-                  )}
+                    )}
+                  </div>
 
                   {/* New email addresses */}
                   <input

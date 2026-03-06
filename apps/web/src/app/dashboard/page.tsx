@@ -244,7 +244,7 @@ export default function Dashboard() {
 
   const purchaseCart = async () => {
     if (!cartItems.length || !campaign || !playerState) return;
-    if (cartTotal > playerState.nip) return alert("Not enough NIP.");
+    if (cartTotal > playerState.nip) return addToast("error","Error","Not enough NIP.");
     setPurchasing(true);
     try {
       // Insert spend records
@@ -268,7 +268,7 @@ export default function Dashboard() {
       setCart({});
       await load();
     } catch (e: any) {
-      alert(`Purchase failed: ${e?.message ?? String(e)}`);
+      addToast("error","Error",`Purchase failed: ${e?.message ?? String(e)}`);
     } finally {
       setPurchasing(false);
     }
@@ -319,7 +319,7 @@ export default function Dashboard() {
       setUnderdogChoice(null);
       await load();
     } catch (e: any) {
-      alert(`Failed to accept: ${e?.message ?? String(e)}`);
+      addToast("error","Error",`Failed to accept: ${e?.message ?? String(e)}`);
     } finally {
       setAccepting(false);
     }

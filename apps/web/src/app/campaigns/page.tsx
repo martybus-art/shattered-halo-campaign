@@ -13,6 +13,8 @@
 //   2026-03-06 -- After create-campaign succeeds, call invite-players edge
 //                 function to actually send emails. Previously only pending_invites
 //                 rows were inserted; no emails were dispatched.
+//   2026-03-06 -- Replaced profiles table query (table does not exist) with
+//                 invite-players list_users edge function call. Same data shape.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -280,17 +282,22 @@ export default function CampaignsPage() {
         .eq("is_active", true).order("created_at", { ascending: false });
       if (!selectedRuleset && rs?.length) setSelectedRuleset(rs[0].id);
 
-      const { data: profileRows, error: profileErr } = await supabase
-        .from("profiles")
-        .select("id,email,display_name")
-        .order("display_name", { ascending: true });
-
-      if (!profileErr && profileRows) {
-        const cleaned = (profileRows as ExistingPlayer[])
-          .filter((p) => !!p.email)
-          .filter((p, i, arr) => arr.findIndex((x) => x.email.toLowerCase() === p.email.toLowerCase()) === i);
-        setExistingPlayers(cleaned);
-      } else {
+      // Load registered users for the player picker via edge function
+      // (profiles table does not exist -- auth user list is the source of truth)
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          const { data: usersResp } = await supabase.functions.invoke("invite-players", {
+            body: { mode: "list_users" },
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (usersResp?.ok && Array.isArray(usersResp.users)) {
+            setExistingPlayers(usersResp.users as ExistingPlayer[]);
+          } else {
+            setExistingPlayers([]);
+          }
+        }
+      } catch {
         setExistingPlayers([]);
       }
     } catch (e: any) {
