@@ -3,6 +3,11 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-06 -- Added inline ToastContainer + addToast (consistent with
+//                 campaigns/page.tsx and lead/page.tsx patterns). Replaced all
+//                 alert() calls and bare addToast references with the proper
+//                 toast hook. Fixed TS compile error: "Cannot find name
+//                 'addToast'" at line 247.
 //   2026-03-05 -- Removed My Campaigns card (campaignId from URL param).
 //                 Removed Catch-up Choice card (now a conditional card driven
 //                 by lead offer). Status (top-left) + War Bulletin (top-right).
@@ -15,7 +20,7 @@
 //                 campaignId and role props so all nav links render correctly.
 //                 Theatre Map image is now a link to /map page.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
@@ -44,6 +49,54 @@ const CATCHUP_OPTIONS = [
   "Free Recon",
   "Safe Passage (1 move cannot be intercepted)",
 ] as const;
+
+// -- Toast system (consistent with campaigns/page.tsx + lead/page.tsx) ------
+
+type ToastType = "success" | "error" | "info";
+interface Toast { id: number; type: ToastType; title: string; body?: string }
+let _toastId = 0;
+
+function ToastContainer({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
+  if (!toasts.length) return null;
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto rounded border px-4 py-3 shadow-2xl shadow-black/60 backdrop-blur-sm
+            ${t.type === "success" ? "bg-void border-brass/60" : ""}
+            ${t.type === "error"   ? "bg-void border-blood/60" : ""}
+            ${t.type === "info"    ? "bg-void border-brass/30" : ""}
+          `}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className={`text-sm font-semibold uppercase tracking-widest
+                ${t.type === "success" ? "text-brass"    : ""}
+                ${t.type === "error"   ? "text-blood"    : ""}
+                ${t.type === "info"    ? "text-brass/70" : ""}
+              `}>
+                {t.type === "success" && "⚙ "}
+                {t.type === "error"   && "☠ "}
+                {t.type === "info"    && "✦ "}
+                {t.title}
+              </p>
+              {t.body && (
+                <p className="mt-1 text-xs text-parchment/60 leading-relaxed">{t.body}</p>
+              )}
+            </div>
+            <button
+              onClick={() => dismiss(t.id)}
+              className="text-parchment/30 hover:text-parchment/70 text-lg leading-none mt-0.5 shrink-0"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // -- Types ------------------------------------------------------------------
 
@@ -122,6 +175,19 @@ export default function Dashboard() {
   const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
   const [accepting,       setAccepting]       = useState(false);
   const [uid,             setUid]             = useState<string>("");
+
+  // -- Toast state ----------------------------------------------------------
+  const [toasts,    setToasts]    = useState<Toast[]>([]);
+
+  const addToast = useCallback((type: ToastType, title: string, body?: string) => {
+    const id = ++_toastId;
+    setToasts((prev) => [...prev, { id, type, title, body }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   // -- Accept invites on load -----------------------------------------------
   const acceptInvites = async (token: string) => {
@@ -238,13 +304,16 @@ export default function Dashboard() {
     setCart((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
   };
 
-  const cartItems   = SHOP_ITEMS.filter((i) => cart[i.id]);
-  const cartTotal   = cartItems.reduce((sum, i) => sum + i.nip, 0);
+  const cartItems     = SHOP_ITEMS.filter((i) => cart[i.id]);
+  const cartTotal     = cartItems.reduce((sum, i) => sum + i.nip, 0);
   const alreadyBought = new Set(spends.map((s) => s.spend_type));
 
   const purchaseCart = async () => {
     if (!cartItems.length || !campaign || !playerState) return;
-    if (cartTotal > playerState.nip) return addToast("error","Error","Not enough NIP.");
+    if (cartTotal > playerState.nip) {
+      addToast("error", "Insufficient NIP", "Not enough NIP to complete this purchase.");
+      return;
+    }
     setPurchasing(true);
     try {
       // Insert spend records
@@ -266,9 +335,10 @@ export default function Dashboard() {
         .eq("user_id", uid);
       if (nipErr) throw nipErr;
       setCart({});
+      addToast("success", "Purchase complete", `${cartItems.length} ability${cartItems.length !== 1 ? "s" : ""} activated for this round.`);
       await load();
     } catch (e: any) {
-      addToast("error","Error",`Purchase failed: ${e?.message ?? String(e)}`);
+      addToast("error", "Purchase failed", e?.message ?? String(e));
     } finally {
       setPurchasing(false);
     }
@@ -317,9 +387,10 @@ export default function Dashboard() {
       // "+1 NCP next battle" is recorded in the choice and applied by lead manually.
 
       setUnderdogChoice(null);
+      addToast("success", "Bonus accepted", `${catchupOption} has been applied to your faction.`);
       await load();
     } catch (e: any) {
-      addToast("error","Error",`Failed to accept: ${e?.message ?? String(e)}`);
+      addToast("error", "Failed to accept", e?.message ?? String(e));
     } finally {
       setAccepting(false);
     }
@@ -588,7 +659,7 @@ export default function Dashboard() {
                           <span className="text-parchment/40 text-xs font-mono w-32 shrink-0 pt-0.5">{fmtKey(zoneKey)}</span>
                           <div className="flex flex-wrap gap-1">
                             {Array.from(owners.entries()).map(([ownerId, count]) => {
-                              const m = memberById.get(ownerId);
+                              const m      = memberById.get(ownerId);
                               const colour = memberColour.get(ownerId) ?? PLAYER_COLOURS[0];
                               return (
                                 <span key={ownerId}
@@ -659,8 +730,11 @@ export default function Dashboard() {
           </Card>
         )}
 
-
       </div>
+
+      {/* ── Toast notifications ─────────────────────────────────────────── */}
+      <ToastContainer toasts={toasts} dismiss={dismissToast} />
+
     </Frame>
   );
 }
