@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
+import { PLANET_ZONE_NAMES, SHIP_ZONE_NAMES } from "@/lib/zoneNames";
 
 // -- Types ------------------------------------------------------------------
 
@@ -122,31 +123,6 @@ const BIOME_OPTIONS = [
   { value: "halo_spire",              label: "Halo Spire"              },
 ];
 
-// -- Zone names per biome (12 each, used for AI narrative prompt) -----------
-
-const ZONE_NAMES_BY_BIOME: Record<string, string[]> = {
-  gothic_ruins:            ["Shattered Nave", "The Ossuary Vaults", "Collapsed Bell Tower", "Iron Reliquary", "The Penitent Quarter", "Archway of Screams", "The Burning Transept", "Catacombs Below", "The Blessed Ruin", "Sanctum of Dust", "The Fallen Spire", "Gate of the Damned"],
-  ash_wastes:              ["Cinder Flats", "The Smouldering Reach", "Ashen Maw", "Dust Shelf Primus", "Toxic Plume Ridge", "The Grey Expanse", "Slag Heap Delta", "Ember Dunes", "Acid Rain Basin", "Soot Columns", "The Choking Fields", "Ruin of Hive Tertius"],
-  xenos_forest:            ["The Amber Canopy", "Bioluminescent Hollow", "Spore Cloud Thicket", "The Grasping Root-Web", "Glowing Mire", "Xenos Nest Site Alpha", "Pheromone Ridge", "The Sap Rivers", "Hive-Organism Scar", "Crystal Fungus Grove", "Alien Spawning Pools", "The Deep Verdance"],
-  industrial_manufactorum: ["Forge Deck Alpha", "Smelting Basin", "Conveyor Line Seven", "The Cooling Towers", "Cogitator Hive", "Plasma Conduit Junction", "Iron Foundry", "The Slag Yards", "Machine Spirit Shrine", "Manufactory Floor Sigma", "Promethium Storage", "The Great Press"],
-  warp_scar:               ["The First Tear", "Daemon Bridge", "Reality Inversion Point", "Screaming Void Rift", "Corruption Epicentre", "The Bleeding Ground", "Warp-Crystal Formation", "Inverted Spire", "The Maddening Corridor", "Chaos Incursion Site", "Eye of the Wound", "Abyssal Threshold"],
-  obsidian_fields:         ["The Mirror Plain", "Black Glass Plateau", "Obsidian Razor Ridge", "The Shard Forest", "Volcanic Vent Cluster", "Geode Caverns", "Reflective Salt Flats", "The Glass Labyrinth", "Magma Blister Fields", "Obsidian Spire", "The Black Shore", "Vitrified Ruins"],
-  signal_crater:           ["Impact Zone Alpha", "The Antenna Array", "Anomaly Site Seven", "Signal Processing Core", "The Crater Lip", "Debris Field Omega", "Interference Zone", "The Transmission Bunker", "Electromagnetic Null Zone", "Seismic Fracture Line", "The Buried Signal", "Crater Lake Secundus"],
-  ghost_harbor:            ["The Sunken Fleet", "Fog Bank Crossing", "Rusted Iron Docks", "The Drowned Quarter", "Silted Shipping Lane", "Spectral Lighthouse", "Hab-Block Ruins", "The Black Water", "Tidal Surge Basin", "Wreck of the Iron Faith", "The Murky Shallows", "Harbor Gate Ruins"],
-  blighted_reach:          ["Nurgle's Garden", "The Plague Pools", "Rotting Arbour", "Infected Hive Sump", "Bloat Fly Nesting Ground", "The Festering Mire", "Corruption Bloom", "Diseased Hab Ring", "The Pox Fields", "Bile River Delta", "Blighted Croplands", "Gangrene Reach"],
-  null_fields:             ["The Dead Plain", "Null Obelisk Field", "Iron Monolith Circle", "The Silent Reach", "Psychic Void Zone", "Blank Expanse Alpha", "The Oppression Fields", "Emptied Hab Ruins", "Anti-Warp Boundary", "The Soulless Ground", "Null Shrine", "The Featureless Dark"],
-  iron_sanctum:            ["The Outer Ramparts", "Gate House Alpha", "The Inner Courtyard", "Siege Artillery Mount", "The Barracks", "Trophy Hall", "Armoury Vault", "The Great Keep", "Chapel of the Skull", "The Undercroft", "Outer Gatehouse", "The Command Bastion"],
-  halo_spire:              ["The Viewing Gallery", "Cogitator Pylon Array", "Void-Glass Walkway", "The Spire Summit", "Gravitational Lock Chamber", "Ancient Data-Core", "The Crystalline Shaft", "Service Conduit Level", "The Observation Deck", "Long Range Sensor Array", "Power Relay Hub", "The Outer Spire"],
-};
-
-// -- Void warship compartments (10 max) ------------------------------------
-
-const VOID_WARSHIP_COMPARTMENTS = [
-  "Gothic Superstructure", "Adamantium-Reinforced Prow", "Torpedo Tubes", "Launch Bays",
-  "Macro-Cannon Decks", "Lance Batteries", "Void Shield Generators", "Nova Cannon",
-  "Warp Drive", "Plasma Reactors",
-];
-
 // -- Helpers ----------------------------------------------------------------
 
 const LAYOUT_LABELS: Record<LayoutKey, string> = {
@@ -156,10 +132,11 @@ const LAYOUT_LABELS: Record<LayoutKey, string> = {
   ship_line: "Void Warship",
 };
 
-function getZoneNamesForPrompt(layout: LayoutKey, biome: string, count: number): string[] {
-  if (layout === "ship_line") return VOID_WARSHIP_COMPARTMENTS.slice(0, count);
-  const names = ZONE_NAMES_BY_BIOME[biome] ?? ZONE_NAMES_BY_BIOME["ash_wastes"];
-  return names.slice(0, count);
+function getZoneNamesForPrompt(layout: LayoutKey, count: number): string[] {
+  const pool = layout === "ship_line"
+    ? SHIP_ZONE_NAMES
+    : PLANET_ZONE_NAMES;
+  return pool.slice(0, count);
 }
 
 // -- Toggle switch ----------------------------------------------------------
@@ -512,21 +489,6 @@ export default function CampaignsPage() {
                 rows={5}
                 disabled={loading || creating}
               />
-              {/* Zone names preview */}
-              {campaignNarrative && (
-                <div className="mt-2">
-                  <p className="text-xs text-parchment/35 mb-1.5">
-                    {isShipLayout ? "Compartments" : "Locations"} ({zoneCount}):
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {getZoneNamesForPrompt(selectedLayout, primaryBiome, zoneCount).map((name, i) => (
-                      <span key={i} className="px-2 py-0.5 rounded bg-brass/10 border border-brass/20 text-xs text-brass/70">
-                        {name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* -- 6. Rules configuration -- */}

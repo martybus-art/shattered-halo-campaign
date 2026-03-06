@@ -28,6 +28,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { PLANET_ZONE_NAMES, SHIP_ZONE_NAMES } from "@/lib/zoneNames";
+
+
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,38 +72,6 @@ export interface MapImageDisplayProps {
   /** Called when user clicks a zone label */
   onZoneClick?: (zone: ZonePoint) => void;
 }
-
-// ── Zone name & key pools ─────────────────────────────────────────────────────
-
-const PLANET_ZONE_NAMES = [
-  "Vault Ruins",
-  "Ash Wastes",
-  "Halo Spire",
-  "Sunken Manufactorum",
-  "Warp Scar Basin",
-  "Obsidian Fields",
-  "Signal Crater",
-  "Xenos Forest",
-  "Blighted Reach",
-  "Iron Sanctum",
-  "Null Fields",
-  "Ghost Harbor",
-];
-
-const SHIP_ZONE_NAMES = [
-  "Command Sanctum",
-  "Macro-Battery Deck",
-  "Gellar Chapel",
-  "Reactor Reliquary",
-  "Hangar Crypts",
-  "Munitorum Vaults",
-  "Vox Spire",
-  "Apothecarion",
-  "Shrine of Oaths",
-  "Plasma Conduits",
-  "Enginseer Bay",
-  "Breach Corridor",
-];
 
 function nameToKey(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
