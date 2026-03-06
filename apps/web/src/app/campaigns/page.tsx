@@ -20,6 +20,7 @@ import { PLANET_ZONE_NAMES, SHIP_ZONE_NAMES } from "@/lib/zoneNames";
 // -- Types ------------------------------------------------------------------
 
 type Template    = { id: string; name: string; description: string | null };
+type ExistingPlayer = { id: string; email: string; display_name: string | null };
 type LayoutKey   = "ring" | "continent" | "radial" | "ship_line";
 type ZoneSizeKey = "small" | "medium" | "large";
 
@@ -217,6 +218,8 @@ export default function CampaignsPage() {
   const [campaignName, setCampaignName]           = useState("");
   const [campaignNarrative, setCampaignNarrative] = useState("");
   const [emails, setEmails]                       = useState("");
+  const [existingPlayers, setExistingPlayers]     = useState<ExistingPlayer[]>([]);
+  const [playerPickerOpen, setPlayerPickerOpen]   = useState(false);
   const [selectedLayout, setSelectedLayout]       = useState<LayoutKey>("ring");
   const [selectedSize, setSelectedSize]           = useState<ZoneSizeKey>("medium");
   const [mixedBiomes, setMixedBiomes]             = useState(false);
@@ -246,6 +249,14 @@ export default function CampaignsPage() {
   const isShipLayout  = selectedLayout === "ship_line";
   const zoneCount     = getZoneCount(selectedLayout, selectedSize);
   const currentLayout = LAYOUT_OPTIONS.find(l => l.key === selectedLayout)!;
+  const selectedInviteEmails = useMemo(
+    () => emails.split(",").map(e => e.trim()).filter(Boolean),
+    [emails]
+  );
+  const selectedInviteEmailSet = useMemo(
+    () => new Set(selectedInviteEmails.map(e => e.toLowerCase())),
+    [selectedInviteEmails]
+  );
 
   // -- Load ------------------------------------------------------------------
 
@@ -265,6 +276,20 @@ export default function CampaignsPage() {
       const { data: rs } = await supabase.from("rulesets").select("id,key,name,description")
         .eq("is_active", true).order("created_at", { ascending: false });
       if (!selectedRuleset && rs?.length) setSelectedRuleset(rs[0].id);
+
+      const { data: profileRows, error: profileErr } = await supabase
+        .from("profiles")
+        .select("id,email,display_name")
+        .order("display_name", { ascending: true });
+
+      if (!profileErr && profileRows) {
+        const cleaned = (profileRows as ExistingPlayer[])
+          .filter((p) => !!p.email)
+          .filter((p, i, arr) => arr.findIndex((x) => x.email.toLowerCase() === p.email.toLowerCase()) === i);
+        setExistingPlayers(cleaned);
+      } else {
+        setExistingPlayers([]);
+      }
     } catch (e: any) {
       addToast("error", "Load failed", e?.message ?? String(e));
     } finally {
@@ -330,6 +355,18 @@ export default function CampaignsPage() {
   // -- Create Campaign -------------------------------------------------------
   // Creates the campaign record with map params saved in rules_overrides,
   // then redirects to /lead?campaign=xxx where the user can generate the map.
+
+
+  const toggleExistingPlayerEmail = (email: string, checked: boolean) => {
+    const next = new Set(selectedInviteEmails);
+    if (checked) next.add(email);
+    else {
+      for (const item of Array.from(next)) {
+        if (item.toLowerCase() === email.toLowerCase()) next.delete(item);
+      }
+    }
+    setEmails(Array.from(next).join(", "));
+  };
 
   const createCampaign = async () => {
     if (!selectedTemplate) { addToast("error", "No template", "Ensure the templates table has at least one row."); return; }
@@ -451,8 +488,8 @@ export default function CampaignsPage() {
             </div>
 
             {/* -- 4. Narrative + world/rules configuration -- */}
-            <div className="grid gap-6 lg:grid-cols-2 items-start">
-              <div className="rounded-lg border border-brass/20 bg-black/10 p-4">
+            <div className="grid gap-6 lg:grid-cols-2 items-stretch">
+              <div className="rounded-lg border border-brass/20 bg-black/10 p-4 h-full flex flex-col">
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-sm text-parchment/70">Campaign Narrative</p>
                   <button
@@ -475,7 +512,7 @@ export default function CampaignsPage() {
                   This narrative feeds into the AI map image generation on the lead page.
                 </p>
                 <textarea
-                  className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm resize-none leading-relaxed"
+                  className="w-full flex-1 min-h-[280px] px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm resize-none leading-relaxed"
                   value={campaignNarrative}
                   onChange={(e) => setCampaignNarrative(e.target.value)}
                   placeholder={
@@ -483,12 +520,12 @@ export default function CampaignsPage() {
                       ? "e.g. The ancient void warship Implacable Wrath drifts cold and silent through the Ghoul Stars..."
                       : "e.g. Three warbands converge on the remnants of a shattered halo ring..."
                   }
-                  rows={12}
+                  rows={9}
                   disabled={loading || creating}
                 />
               </div>
 
-              <div className="rounded-lg border border-brass/20 bg-black/10 p-4 space-y-5">
+              <div className="rounded-lg border border-brass/20 bg-black/10 p-4 space-y-5 h-full">
                 <div>
                   <p className="text-sm text-parchment/70">World & Rules</p>
                   <p className="mt-1 text-xs text-parchment/40 leading-relaxed">
@@ -580,21 +617,6 @@ export default function CampaignsPage() {
               </div>
             </div>
 
-            {/* -- 5. Invite emails -- */}
-            <div>
-              <p className="text-sm text-parchment/70 mb-1">Invite Emails (optional, comma-separated)</p>
-              <input
-                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
-                value={emails}
-                onChange={(e) => setEmails(e.target.value)}
-                placeholder="commander@warzone.com, sergeant@forge.world"
-                disabled={loading || creating}
-              />
-              <p className="mt-1 text-xs text-parchment/40">
-                Players auto-join when they sign in. More invites available from Lead Controls.
-              </p>
-            </div>
-
             {/* -- Create Campaign button -- */}
             <button
               className="w-full px-4 py-3 rounded bg-brass/20 border border-brass/50 hover:bg-brass/30 text-brass font-semibold tracking-wider uppercase text-sm transition-colors disabled:opacity-40"
@@ -613,6 +635,81 @@ export default function CampaignsPage() {
               <p className="text-xs text-blood/80 text-center">No templates found -- campaign creation is disabled.</p>
             )}
 
+          </div>
+
+
+        <Card title="Invite Players">
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm text-parchment/70 mb-1">Invite Emails</p>
+              <input
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60"
+                value={emails}
+                onChange={(e) => setEmails(e.target.value)}
+                placeholder="commander@warzone.com, sergeant@forge.world"
+                disabled={loading || creating}
+              />
+              <p className="mt-1 text-xs text-parchment/40">
+                Selected existing players are added here automatically. Players auto-join when they sign in.
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-brass/20 bg-black/10">
+              <button
+                type="button"
+                onClick={() => setPlayerPickerOpen((v) => !v)}
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+                disabled={loading || creating}
+              >
+                <div>
+                  <p className="text-sm text-parchment/75">Existing Player Accounts</p>
+                  <p className="mt-1 text-xs text-parchment/40">
+                    Quick-add players by ticking their account email.
+                  </p>
+                </div>
+                <span className="text-xs uppercase tracking-widest text-brass/70">
+                  {playerPickerOpen ? "Hide" : "Show"}
+                </span>
+              </button>
+
+              {playerPickerOpen && (
+                <div className="border-t border-brass/15 px-4 py-3">
+                  {existingPlayers.length ? (
+                    <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                      {existingPlayers.map((player) => {
+                        const checked = selectedInviteEmailSet.has(player.email.toLowerCase());
+                        return (
+                          <label
+                            key={player.id}
+                            className="flex items-start gap-3 rounded-lg border border-brass/10 bg-black/20 px-3 py-2 cursor-pointer hover:border-brass/25 transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => toggleExistingPlayerEmail(player.email, e.target.checked)}
+                              disabled={loading || creating}
+                              className="mt-0.5"
+                            />
+                            <span className="min-w-0">
+                              <span className="block text-sm text-parchment/80">
+                                {player.display_name?.trim() || player.email}
+                              </span>
+                              <span className="block text-xs text-parchment/45 break-all">
+                                {player.email}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-parchment/40 leading-relaxed">
+                      No existing player accounts were found in the profiles table.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </Card>
 
