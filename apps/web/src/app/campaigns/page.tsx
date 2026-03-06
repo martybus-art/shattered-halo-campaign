@@ -251,7 +251,7 @@ export default function CampaignsPage() {
     setGeneratingNarrative(true);
     setCampaignNarrative("");
 
-    const zoneNames = getZoneNamesForPrompt(selectedLayout, primaryBiome, zoneCount);
+    const zoneNames = getZoneNamesForPrompt(selectedLayout, zoneCount);
     const layoutLabel = LAYOUT_LABELS[selectedLayout];
     const biomeLabel = BIOME_OPTIONS.find(b => b.value === primaryBiome)?.label ?? primaryBiome;
     const terrainDescription = isShipLayout
