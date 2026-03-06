@@ -816,6 +816,11 @@ This cannot be undone.`,
         onClose={() => setResultModal({ open: false })}
       />
       
+      <ConfirmModal
+        state={confirmModal}
+        onCancel={() => closeConfirm(false)}
+        onConfirm={() => closeConfirm(true)}
+      />
 
     </Frame>
   );
