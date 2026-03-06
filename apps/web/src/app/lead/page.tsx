@@ -579,7 +579,6 @@ Proceed?`,
     );
     setInviteEmails("");
     setSelectedEmails(new Set());
-    setUserSearch("");
   };
 
   const deleteCampaign = async () => {
