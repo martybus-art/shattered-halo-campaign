@@ -5,6 +5,10 @@
 // campaign, redirect to /lead for map generation.
 //
 // changelog:
+//   2026-03-07 -- Added economy sub-settings panel (income tiers, NIP decay,
+//                 underdog bonus). These map 1:1 to distribute-income edge
+//                 function constants and are stored in rules_overrides JSONB.
+//                 Panel is collapsible and only visible when Economy is enabled.
 //   2026-03-03 -- Initial implementation with AI narrative generator.
 //   2026-03-04 -- Removed map preview step; create campaign redirects directly
 //                 to /lead?campaign=xxx. Map params saved in rules_overrides
@@ -209,6 +213,108 @@ function RuleToggleRow({
   );
 }
 
+// -- Economy sub-settings panel --------------------------------------------
+// Collapsible panel shown under the Economy toggle when economy is enabled.
+// These values feed directly into the distribute-income edge function which
+// reads them from campaign.rules_overrides at runtime.
+
+function EconomySubPanel({
+  economy,
+  onChange,
+  disabled,
+}: {
+  economy: {
+    income_tier_1?: number; income_tier_2?: number;
+    income_tier_3?: number; income_tier_4?: number;
+    decay_threshold?: number; decay_percent?: number;
+    underdog_bonus?: number;
+  };
+  onChange: (patch: Partial<typeof economy>) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+
+  const num = (val: number | undefined, fallback: number) =>
+    val !== undefined ? val : fallback;
+
+  const field = (
+    label: string,
+    hint: string,
+    key: keyof typeof economy,
+    fallback: number,
+    min = 0,
+    max = 99,
+  ) => (
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-xs text-parchment/70">{label}</p>
+        <p className="text-xs text-parchment/35 leading-tight">{hint}</p>
+      </div>
+      <input
+        type="number" min={min} max={max} step={1}
+        value={num(economy[key] as number | undefined, fallback)}
+        onChange={(e) => onChange({ [key]: Math.max(min, parseInt(e.target.value) || fallback) })}
+        disabled={disabled}
+        className="w-16 px-2 py-1 rounded bg-void border border-brass/25 text-sm text-center text-parchment/80 focus:outline-none focus:border-brass/50 disabled:opacity-40"
+      />
+    </div>
+  );
+
+  return (
+    <div className="rounded-lg border border-brass/15 bg-black/10 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        disabled={disabled}
+        className="w-full flex items-center justify-between px-3 py-2 text-left"
+      >
+        <span className="text-xs text-parchment/50 uppercase tracking-widest">
+          Economy Settings
+        </span>
+        <span className="text-xs text-brass/60">{open ? "▲ Hide" : "▼ Show"}</span>
+      </button>
+
+      {open && (
+        <div className="border-t border-brass/10 px-3 py-3 space-y-4">
+
+          {/* Income Tiers */}
+          <div className="space-y-2">
+            <p className="text-xs text-parchment/45 uppercase tracking-widest">
+              Income Tiers (NIP per round)
+            </p>
+            {field("1–3 Sectors",  "+NIP for holding 1–3 sectors",  "income_tier_1", 2, 0, 20)}
+            {field("4–6 Sectors",  "+NIP for holding 4–6 sectors",  "income_tier_2", 3, 0, 20)}
+            {field("7–9 Sectors",  "+NIP for holding 7–9 sectors",  "income_tier_3", 4, 0, 20)}
+            {field("10+ Sectors",  "+NIP cap — prevents snowball",  "income_tier_4", 5, 0, 20)}
+          </div>
+
+          {/* Underdog Bonus */}
+          <div className="space-y-2">
+            <p className="text-xs text-parchment/45 uppercase tracking-widest">
+              Underdog Bonus
+            </p>
+            {field("Underdog Bonus", "Extra NIP for the player with the fewest sectors", "underdog_bonus", 1, 0, 10)}
+          </div>
+
+          {/* NIP Decay */}
+          <div className="space-y-2">
+            <p className="text-xs text-parchment/45 uppercase tracking-widest">
+              NIP Decay (hoarding penalty)
+            </p>
+            {field("Decay Threshold", "Unspent NIP above this amount decays", "decay_threshold", 10, 1, 50)}
+            {field("Decay %",         "% of excess NIP lost per round (rounded down)", "decay_percent", 10, 0, 100)}
+          </div>
+
+          <p className="text-xs text-parchment/25 leading-relaxed italic pt-1 border-t border-brass/10">
+            Decay example: 12 NIP with threshold 10 → 2 excess → 10% of 2 = 0 NIP lost (rounds down).
+            At threshold 10, decay only bites meaningfully when NIP exceeds ~20.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // -- Component --------------------------------------------------------------
 
 export default function CampaignsPage() {
@@ -230,7 +336,20 @@ export default function CampaignsPage() {
   const [mixedBiomes, setMixedBiomes]             = useState(false);
   const [primaryBiome, setPrimaryBiome]           = useState("ash_wastes");
   const [rulesOverrides, setRulesOverrides]       = useState({
-    economy:     { enabled: true,  catchup: { enabled: true, bonus: 1 } },
+    economy: {
+      enabled:         true,
+      catchup:         { enabled: true, bonus: 1 },
+      // Income tiers: NIP granted per bracket of sectors held
+      income_tier_1:   2,   // 1–3 sectors
+      income_tier_2:   3,   // 4–6 sectors
+      income_tier_3:   4,   // 7–9 sectors
+      income_tier_4:   5,   // 10+ sectors (cap)
+      // NIP decay: discourages hoarding
+      decay_threshold: 10,  // unspent NIP above this threshold decays
+      decay_percent:   10,  // % of excess NIP lost per round (rounded down)
+      // Underdog bonus applied by distribute-income automatically
+      underdog_bonus:  1,
+    },
     fog:         { enabled: true  },
     instability: { enabled: true  },
     missions:    { enabled: true,  mode: "weighted_random_nip" },
@@ -603,6 +722,20 @@ export default function CampaignsPage() {
                     onChange={(v) => setRulesOverrides(r => ({ ...r, economy: { ...(r.economy ?? {}), enabled: v } }))}
                     disabled={loading || creating}
                   />
+
+                  {/* Economy sub-settings — only shown when economy is enabled */}
+                  {rulesOverrides.economy?.enabled && (
+                    <EconomySubPanel
+                      economy={rulesOverrides.economy}
+                      onChange={(patch) =>
+                        setRulesOverrides(r => ({
+                          ...r,
+                          economy: { ...r.economy, ...patch },
+                        }))
+                      }
+                      disabled={loading || creating}
+                    />
+                  )}
 
                   <RuleToggleRow
                     label="Fog of War"

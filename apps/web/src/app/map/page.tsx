@@ -2,6 +2,10 @@
 // Tactical Hololith -- campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-07 -- Reads rules_overrides.fog.enabled from campaign. When fog is
+//                 disabled all sectors are shown as visible regardless of
+//                 revealed_public, and the "?" unknown label is replaced with
+//                 the actual ownership info. Fog status shown in token row.
 //   2026-03-05 -- Added movement orders panel: unit selection, destination
 //                 picker with adjacency enforcement, deep strike and recon
 //                 phase support. Added unit deployment (spend NIP).
@@ -81,18 +85,83 @@ function fmtKey(key: string): string {
 
 // Ring adjacency: each zone adjacent to next/prev in array + itself.
 // Returns a Map<zone_key, Set<adjacent_zone_key>>.
-function buildAdjacency(zones: MapZone[]): Map<string, Set<string>> {
+// layout values:
+//   "ring"                 -- Halo Ring: each zone connects to prev + next, wrapping
+//   "spoke"                -- Spoke: zones[0] is centre hub, all outer connect to hub
+//                             + to their immediate ring neighbours
+//   "void_ship" / "line"   -- Linear line: each zone connects only to immediate
+//                             neighbours, no wrap (end zones have 1 connection only)
+//   "fractured_continents" -- Clusters of ~3 zones fully ring-connected internally,
+//                             each cluster bridged to the next via one connection
+function buildAdjacency(zones: MapZone[], layout: string = "ring"): Map<string, Set<string>> {
   const adj = new Map<string, Set<string>>();
   const n   = zones.length;
-  for (let i = 0; i < n; i++) {
-    const key = zones[i].key;
-    if (!adj.has(key)) adj.set(key, new Set());
-    adj.get(key)!.add(key); // same zone always adjacent to itself
-    if (n > 1) {
-      adj.get(key)!.add(zones[(i - 1 + n) % n].key);
-      adj.get(key)!.add(zones[(i + 1) % n].key);
+
+  // Initialise every zone with self-adjacency (staying in place is always valid)
+  for (const z of zones) adj.set(z.key, new Set([z.key]));
+  if (n <= 1) return adj;
+
+  const addEdge = (a: string, b: string) => {
+    adj.get(a)!.add(b);
+    adj.get(b)!.add(a);
+  };
+
+  switch (layout) {
+
+    case "spoke": {
+      // zones[0] = central hub, connects to every outer zone.
+      // Outer zones (1..n-1) also form a ring among themselves.
+      const hub = zones[0].key;
+      for (let i = 1; i < n; i++) {
+        addEdge(hub, zones[i].key);               // hub <-> outer
+        const prev = zones[i === 1 ? n - 1 : i - 1].key;
+        addEdge(zones[i].key, prev);               // outer ring
+      }
+      break;
+    }
+
+    case "void_ship":
+    case "line": {
+      // Straight line: zone[i] only connects to zone[i-1] and zone[i+1].
+      // No wrap — end zones have exactly one outbound connection.
+      for (let i = 0; i < n - 1; i++) {
+        addEdge(zones[i].key, zones[i + 1].key);
+      }
+      break;
+    }
+
+    case "fractured_continents": {
+      // Divide zones into clusters of roughly 3. Within each cluster the zones
+      // form a ring. The LAST zone of each cluster bridges to the FIRST zone of
+      // the next cluster, creating strategic chokepoints between continents.
+      const clusterSize = Math.max(2, Math.round(n / Math.ceil(n / 3)));
+      const numClusters = Math.ceil(n / clusterSize);
+      for (let c = 0; c < numClusters; c++) {
+        const start = c * clusterSize;
+        const end   = Math.min(start + clusterSize, n);
+        const cluster = zones.slice(start, end);
+        // Ring within cluster
+        for (let i = 0; i < cluster.length; i++) {
+          addEdge(cluster[i].key, cluster[(i + 1) % cluster.length].key);
+        }
+        // Bridge: last of this cluster -> first of next cluster
+        if (c < numClusters - 1) {
+          addEdge(cluster[cluster.length - 1].key, zones[end].key);
+        }
+      }
+      break;
+    }
+
+    case "ring":
+    default: {
+      // Standard Halo Ring: each zone connects to prev and next, wrapping.
+      for (let i = 0; i < n; i++) {
+        addEdge(zones[i].key, zones[(i + 1) % n].key);
+      }
+      break;
     }
   }
+
   return adj;
 }
 
@@ -117,6 +186,10 @@ export default function MapPage() {
   const [myNip,        setMyNip]        = useState<number>(0);
   const [hasDeepStrike,setHasDeepStrike]= useState(false);
   const [hasRecon,     setHasRecon]     = useState(false);
+  // Fog of war: read from rules_overrides.fog.enabled (default true)
+  const [fogEnabled,   setFogEnabled]   = useState<boolean>(true);
+  // Map layout: controls adjacency pattern (ring | spoke | void_ship | fractured_continents)
+  const [mapLayout,    setMapLayout]    = useState<string>("ring");
 
   const [pageError,    setPageError]    = useState<string | null>(null);
   const [loading,      setLoading]      = useState(false);
@@ -154,14 +227,21 @@ export default function MapPage() {
         setRole(mem?.role ?? "player");
       }
 
-      // Campaign
+      // Campaign -- includes rules_overrides so we can read fog setting
       const { data: c, error: ce } = await supabase
-        .from("campaigns").select("map_id, round_number")
+        .from("campaigns").select("map_id, round_number, rules_overrides")
         .eq("id", campaignId).single();
       if (ce) throw new Error(ce.message);
       setMapId((c as any)?.map_id ?? null);
       const rn = (c as any)?.round_number ?? 1;
       setRoundNumber(rn);
+
+      // Fog of war rule -- defaults to true (fog on) when not configured
+      const rulesOverrides = ((c as any)?.rules_overrides ?? {}) as Record<string, any>;
+      const fogRule = rulesOverrides.fog as Record<string, any> | undefined;
+      setFogEnabled(fogRule?.enabled !== false); // false only when explicitly disabled
+      // Map layout rule -- defaults to "ring" (Halo Ring pattern)
+      setMapLayout((rulesOverrides.map_layout as string | undefined) ?? "ring");
 
       // Current stage
       const { data: rnd } = await supabase
@@ -229,7 +309,28 @@ export default function MapPage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const adj         = useMemo(() => buildAdjacency(zones), [zones]);
+  // effectiveZones: use map_json zones when available; fall back to the unique
+  // zone_keys present in the sectors table.  This ensures adjacency is always
+  // computable even when map_json was never set or doesn't carry a zones array.
+  const effectiveZones = useMemo<MapZone[]>(() => {
+    if (zones.length > 0) return zones;
+    // Build stub MapZone objects from sectors, preserving a stable order.
+    const seen = new Set<string>();
+    const stubs: MapZone[] = [];
+    for (const s of sectors) {
+      if (!seen.has(s.zone_key)) {
+        seen.add(s.zone_key);
+        stubs.push({ key: s.zone_key, name: fmtKey(s.zone_key) });
+      }
+    }
+    return stubs;
+  }, [zones, sectors]);
+
+  const adj         = useMemo(
+    () => buildAdjacency(effectiveZones, mapLayout),
+    [effectiveZones, mapLayout]
+  );
+
   const memberById  = useMemo(() => {
     const m = new Map<string, Member>();
     members.forEach((mem) => m.set(mem.user_id, mem));
@@ -244,14 +345,25 @@ export default function MapPage() {
   // Available destination zones for selected unit
   const validZones = useMemo(() => {
     if (!selectedUnit) return new Set<string>();
-    if (hasDeepStrike) return new Set(zones.map((z) => z.key));
+    // Deep Strike bypasses adjacency -- all known zones are valid destinations
+    if (hasDeepStrike) return new Set(effectiveZones.map((z) => z.key));
     return adj.get(selectedUnit.zone_key) ?? new Set<string>();
-  }, [selectedUnit, hasDeepStrike, adj, zones]);
+  }, [selectedUnit, hasDeepStrike, adj, effectiveZones]);
 
   const inMovementPhase = stage === "movement";
   const inReconPhase    = stage === "recon";
   const canMove         = inMovementPhase || (inReconPhase && hasRecon);
   const inSpendPhase    = stage === "spend";
+
+  // Whether a sector is visible to this player.
+  // When fog is disabled: all sectors are visible.
+  // When fog is enabled: only sectors flagged revealed_public are visible
+  // (the player's own sectors are always revealed server-side).
+  const isSectorVisible = (s: Sector | undefined): boolean => {
+    if (!s) return false;
+    if (!fogEnabled) return true;
+    return s.revealed_public;
+  };
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -448,7 +560,7 @@ export default function MapPage() {
               })}
             </div>
 
-            {/* Token status */}
+            {/* Token + fog status row */}
             <div className="mt-3 pt-3 border-t border-parchment/10 flex gap-3 flex-wrap">
               <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasDeepStrike ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/10 text-parchment/25"}`}>
                 {hasDeepStrike ? "✓ Deep Strike" : "No Deep Strike"}
@@ -456,6 +568,12 @@ export default function MapPage() {
               <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasRecon ? "bg-blue-500/15 border-blue-400/40 text-blue-300" : "bg-void border-parchment/10 text-parchment/25"}`}>
                 {hasRecon ? "✓ Recon Token" : "No Recon Token"}
               </span>
+              {/* Fog status -- only shown when fog is disabled to avoid confusion */}
+              {!fogEnabled && (
+                <span className="text-xs px-2 py-0.5 rounded border font-mono bg-parchment/10 border-parchment/30 text-parchment/50">
+                  Fog Off
+                </span>
+              )}
               <span className="text-xs px-2 py-0.5 rounded border border-parchment/10 text-parchment/35 font-mono ml-auto">
                 {myNip} NIP
               </span>
@@ -488,7 +606,7 @@ export default function MapPage() {
                     value={toZone}
                     onChange={(e) => { setToZone(e.target.value); setToSector(""); }}>
                     <option value="">-- select zone --</option>
-                    {zones.map((z) => {
+                    {effectiveZones.map((z) => {
                       const valid = validZones.has(z.key);
                       return (
                         <option key={z.key} value={z.key} disabled={!valid}>
@@ -697,14 +815,15 @@ export default function MapPage() {
         )}
 
         {/* ── Sector ownership grid ── */}
-        {zones.length > 0 && sectors.length > 0 && (
+        {effectiveZones.length > 0 && sectors.length > 0 && (
           <div className="grid md:grid-cols-2 gap-6">
-            {zones.map((z) => (
+            {effectiveZones.map((z) => (
               <Card key={z.key} title={z.name}>
                 <div className="grid grid-cols-4 gap-1.5">
                   {SECTOR_KEYS.map((sk) => {
-                    const s     = sectorAt(z.key, sk);
-                    const owner = ownerLabel(s?.owner_user_id ?? null);
+                    const s       = sectorAt(z.key, sk);
+                    const visible = isSectorVisible(s);
+                    const owner   = ownerLabel(s?.owner_user_id ?? null);
                     const unitHere = myUnits.filter(
                       (u) => u.zone_key === z.key && u.sector_key === sk
                     );
@@ -714,14 +833,14 @@ export default function MapPage() {
                           owner?.mine ? "border-brass/40" : "border-brass/20"
                         }`}>
                         <span className="font-mono text-xs text-brass/80">{sk.toUpperCase()}</span>
-                        {s?.fortified && <span className="text-xs text-blood leading-none">FORT</span>}
+                        {s?.fortified && visible && <span className="text-xs text-blood leading-none">FORT</span>}
                         <span className={`text-xs leading-tight text-center ${
-                          !s?.revealed_public ? "text-parchment/25 italic" :
-                          owner?.mine          ? "text-brass/80 font-semibold" :
-                          owner               ? "text-blood/70" :
-                                                "text-parchment/50"
+                          !visible          ? "text-parchment/25 italic" :
+                          owner?.mine       ? "text-brass/80 font-semibold" :
+                          owner             ? "text-blood/70" :
+                                             "text-parchment/50"
                         }`}>
-                          {!s?.revealed_public ? "?" : owner ? owner.label : "Open"}
+                          {!visible ? "?" : owner ? owner.label : "Open"}
                         </span>
                         {unitHere.length > 0 && (
                           <div className="flex gap-0.5 mt-0.5 flex-wrap justify-center">
@@ -738,9 +857,11 @@ export default function MapPage() {
                     );
                   })}
                 </div>
-                <p className="mt-2 text-xs text-parchment/30 italic">
-                  Fog of war — unrevealed sectors shown as unknown.
-                </p>
+                {fogEnabled && (
+                  <p className="mt-2 text-xs text-parchment/30 italic">
+                    Fog of war — unrevealed sectors shown as unknown.
+                  </p>
+                )}
               </Card>
             ))}
           </div>
@@ -755,20 +876,21 @@ export default function MapPage() {
                 <Card key={zk} title={fmtKey(zk)}>
                   <div className="grid grid-cols-4 gap-1.5">
                     {SECTOR_KEYS.map((sk) => {
-                      const s     = sectorAt(zk, sk);
-                      const owner = ownerLabel(s?.owner_user_id ?? null);
+                      const s       = sectorAt(zk, sk);
+                      const visible = isSectorVisible(s);
+                      const owner   = ownerLabel(s?.owner_user_id ?? null);
                       return (
                         <div key={sk}
                           className="rounded border border-brass/20 bg-void/60 px-2 py-2 flex flex-col items-center gap-0.5">
                           <span className="font-mono text-xs text-brass/80">{sk.toUpperCase()}</span>
-                          {s?.fortified && <span className="text-xs text-blood leading-none">FORT</span>}
+                          {s?.fortified && visible && <span className="text-xs text-blood leading-none">FORT</span>}
                           <span className={`text-xs ${
-                            !s?.revealed_public ? "text-parchment/25 italic" :
-                            owner?.mine          ? "text-brass/80" :
-                            owner               ? "text-blood/70" :
-                                                  "text-parchment/50"
+                            !visible     ? "text-parchment/25 italic" :
+                            owner?.mine  ? "text-brass/80" :
+                            owner        ? "text-blood/70" :
+                                           "text-parchment/50"
                           }`}>
-                            {!s?.revealed_public ? "?" : owner ? owner.label : "Open"}
+                            {!visible ? "?" : owner ? owner.label : "Open"}
                           </span>
                         </div>
                       );

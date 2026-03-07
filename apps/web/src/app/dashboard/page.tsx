@@ -177,6 +177,7 @@ export default function Dashboard() {
   const [underdogChoice,  setUnderdogChoice]  = useState<UnderdogChoice | null>(null);
   const [cart,            setCart]            = useState<Record<string, boolean>>({});
   const [secretLocation,  setSecretLocation]  = useState<string | null>(null);
+  const [myUnits,         setMyUnits]         = useState<{ id: string; unit_type: string; zone_key: string; sector_key: string }[]>([]);
   const [purchasing,      setPurchasing]      = useState(false);
   const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
   const [accepting,       setAccepting]       = useState(false);
@@ -302,6 +303,12 @@ export default function Dashboard() {
       .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "pending")
       .maybeSingle();
     setUnderdogChoice(udChoice ?? null);
+
+    // 11. My active units (for Current Troop Locations display)
+    const { data: unitRows } = await supabase
+      .from("units").select("id,unit_type,zone_key,sector_key")
+      .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "active");
+    setMyUnits(unitRows ?? []);
   };
 
   useEffect(() => {
@@ -469,10 +476,34 @@ export default function Dashboard() {
 
                 <div className="grid grid-cols-2 gap-2 pt-1 border-t border-brass/10 text-sm">
                   <div>
-                    <p className="text-parchment/40 text-xs">Location</p>
-                    {(() => {
-                      // Use current_zone_key once movement has happened (not "unknown").
-                      // Fall back to secret_location (zone:sector) which is set at campaign start.
+                    <p className="text-parchment/40 text-xs">Status</p>
+                    <p className="text-parchment/80 capitalize">{playerState.status}</p>
+                    <p className="text-parchment/40 text-xs">{mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held</p>
+                  </div>
+                </div>
+
+                {/* Current Troop Locations */}
+                <div className="pt-2 border-t border-brass/10">
+                  <p className="text-xs text-parchment/40 mb-2">Current Troop Locations</p>
+                  {myUnits.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {myUnits.map((u) => (
+                        <div key={u.id} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded bg-void border border-brass/10">
+                          <span className={`text-xs px-1.5 py-0.5 rounded border font-mono uppercase shrink-0 ${
+                            u.unit_type === "scout"
+                              ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
+                              : "bg-brass/15 border-brass/40 text-brass"
+                          }`}>
+                            {u.unit_type === "scout" ? "◈ Scout" : "⬡ Occ."}
+                          </span>
+                          <span className="text-parchment/80 text-sm">{fmtKey(u.zone_key)}</span>
+                          <span className="text-parchment/40 text-xs font-mono">/ {u.sector_key.toUpperCase()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    (() => {
+                      // No active units yet — show starting location from secret_location or player_state
                       const useSecret =
                         (!playerState.current_zone_key || playerState.current_zone_key === "unknown") &&
                         !!secretLocation;
@@ -480,18 +511,14 @@ export default function Dashboard() {
                         ? secretLocation!.split(":")
                         : [playerState.current_zone_key, playerState.current_sector_key];
                       return (
-                        <>
-                          <p className="text-parchment/80">{fmtKey(dispZone ?? "unknown")}</p>
-                          <p className="text-parchment/40 text-xs font-mono">{dispSector ?? "—"}</p>
-                        </>
+                        <div className="px-2.5 py-1.5 rounded bg-void border border-brass/10">
+                          <p className="text-parchment/40 text-xs mb-0.5">Starting Position</p>
+                          <span className="text-parchment/70 text-sm">{fmtKey(dispZone ?? "unknown")}</span>
+                          <span className="text-parchment/40 text-xs font-mono ml-2">/ {(dispSector ?? "—").toUpperCase()}</span>
+                        </div>
                       );
-                    })()}
-                  </div>
-                  <div>
-                    <p className="text-parchment/40 text-xs">Status</p>
-                    <p className="text-parchment/80 capitalize">{playerState.status}</p>
-                    <p className="text-parchment/40 text-xs">{mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held</p>
-                  </div>
+                    })()
+                  )}
                 </div>
 
                 {/* Stage strip */}

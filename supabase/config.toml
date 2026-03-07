@@ -439,3 +439,6 @@ verify_jwt = false
 
 [functions.deploy-unit]
 verify_jwt = false
+
+[functions.distribute-income]
+verify_jwt = false
