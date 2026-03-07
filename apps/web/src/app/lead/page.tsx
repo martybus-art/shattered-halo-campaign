@@ -636,12 +636,17 @@ export default function LeadControls() {
       }
     } catch { /* non-fatal */ }
 
-    // Load available maps (any map with a generated image, for reuse picker)
+    // Load available maps for reuse picker -- filtered to same layout as this
+    // campaign so leads can only reuse maps that match their campaign type.
+    // rules_overrides.map_layout and maps.layout now use identical keys:
+    //   ring | spoke | void_ship | continent
     try {
+      const campaignLayout: string = (c as any)?.rules_overrides?.map_layout ?? "ring";
       const { data: mapRows } = await supabase
         .from("maps")
         .select("id,name,layout,zone_count,bg_image_path,generation_status")
         .not("bg_image_path", "is", null)
+        .eq("layout", campaignLayout)
         .order("created_at", { ascending: false });
       setAvailableMaps((mapRows ?? []) as AvailableMap[]);
     } catch { /* non-fatal */ }

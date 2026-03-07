@@ -91,7 +91,7 @@ function fmtKey(key: string): string {
 //                             + to their immediate ring neighbours
 //   "void_ship" / "line"   -- Linear line: each zone connects only to immediate
 //                             neighbours, no wrap (end zones have 1 connection only)
-//   "fractured_continents" -- Clusters of ~3 zones fully ring-connected internally,
+//   "continent"             -- Clusters of ~3 zones fully ring-connected internally,
 //                             each cluster bridged to the next via one connection
 function buildAdjacency(zones: MapZone[], layout: string = "ring"): Map<string, Set<string>> {
   const adj = new Map<string, Set<string>>();
@@ -130,7 +130,7 @@ function buildAdjacency(zones: MapZone[], layout: string = "ring"): Map<string, 
       break;
     }
 
-    case "fractured_continents": {
+    case "continent": {
       // Divide zones into clusters of roughly 3. Within each cluster the zones
       // form a ring. The LAST zone of each cluster bridges to the FIRST zone of
       // the next cluster, creating strategic chokepoints between continents.
@@ -188,7 +188,7 @@ export default function MapPage() {
   const [hasRecon,     setHasRecon]     = useState(false);
   // Fog of war: read from rules_overrides.fog.enabled (default true)
   const [fogEnabled,   setFogEnabled]   = useState<boolean>(true);
-  // Map layout: controls adjacency pattern (ring | spoke | void_ship | fractured_continents)
+  // Map layout: controls adjacency pattern (ring | spoke | void_ship | continent)
   const [mapLayout,    setMapLayout]    = useState<string>("ring");
 
   const [pageError,    setPageError]    = useState<string | null>(null);
@@ -309,22 +309,30 @@ export default function MapPage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  // effectiveZones: use map_json zones when available; fall back to the unique
-  // zone_keys present in the sectors table.  This ensures adjacency is always
-  // computable even when map_json was never set or doesn't carry a zones array.
+  // effectiveZones: use map_json zones when available, then fall back in order:
+  //   1. Unique zone_keys from the sectors table (captured territory)
+  //   2. Unique zone_keys from myUnits (covers fresh campaigns where no sectors
+  //      have been captured yet -- sectors table is empty until submit-move runs)
   const effectiveZones = useMemo<MapZone[]>(() => {
     if (zones.length > 0) return zones;
-    // Build stub MapZone objects from sectors, preserving a stable order.
     const seen = new Set<string>();
     const stubs: MapZone[] = [];
+    // From sectors first (captured territory, stable order)
     for (const s of sectors) {
       if (!seen.has(s.zone_key)) {
         seen.add(s.zone_key);
         stubs.push({ key: s.zone_key, name: fmtKey(s.zone_key) });
       }
     }
+    // From myUnits -- starting position known before first capture
+    for (const u of myUnits) {
+      if (!seen.has(u.zone_key)) {
+        seen.add(u.zone_key);
+        stubs.push({ key: u.zone_key, name: fmtKey(u.zone_key) });
+      }
+    }
     return stubs;
-  }, [zones, sectors]);
+  }, [zones, sectors, myUnits]);
 
   const adj         = useMemo(
     () => buildAdjacency(effectiveZones, mapLayout),

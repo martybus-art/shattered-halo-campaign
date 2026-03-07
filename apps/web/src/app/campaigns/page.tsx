@@ -30,7 +30,7 @@ import { PLANET_ZONE_NAMES, SHIP_ZONE_NAMES } from "@/lib/zoneNames";
 
 type Template    = { id: string; name: string; description: string | null };
 type ExistingPlayer = { id: string; email: string; display_name: string | null };
-type LayoutKey   = "ring" | "continent" | "radial" | "ship_line";
+type LayoutKey   = "ring" | "continent" | "spoke" | "void_ship";
 type ZoneSizeKey = "small" | "medium" | "large";
 
 // -- Toast ------------------------------------------------------------------
@@ -87,13 +87,13 @@ const LAYOUT_OPTIONS: { key: LayoutKey; label: string; icon: string; description
     description: "A shattered landmass of irregular plate-like regions divided by chasms, lava flows, and collapsed terrain.",
   },
   {
-    key: "radial",
+    key: "spoke",
     label: "Radial Spokes",
     icon: "+",
     description: "Zones radiating out from a central objective point. Forces conflict at the hub early; outer zones are safer but yield less.",
   },
   {
-    key: "ship_line",
+    key: "void_ship",
     label: "Void Warship",
     icon: ">",
     description: "An ancient warship viewed top-down -- compartments arranged bow to stern. Tight corridors and strategic chokepoints. Maximum 10 players.",
@@ -112,7 +112,7 @@ const BASE_ZONE_COUNT: Record<ZoneSizeKey, number> = { small: 4, medium: 8, larg
 
 function getZoneCount(layout: LayoutKey, size: ZoneSizeKey): number {
   const base = BASE_ZONE_COUNT[size];
-  if (layout === "ship_line") return Math.min(base, 10);
+  if (layout === "void_ship") return Math.min(base, 10);
   return base;
 }
 
@@ -138,12 +138,12 @@ const BIOME_OPTIONS = [
 const LAYOUT_LABELS: Record<LayoutKey, string> = {
   ring:      "Halo Ring megastructure",
   continent: "Fractured Continent",
-  radial:    "Radial Spoke warzone",
-  ship_line: "Void Warship",
+  spoke:     "Radial Spoke warzone",
+  void_ship: "Void Warship",
 };
 
 function getZoneNamesForPrompt(layout: LayoutKey, count: number): string[] {
-  const pool = layout === "ship_line"
+  const pool = layout === "void_ship"
     ? SHIP_ZONE_NAMES
     : PLANET_ZONE_NAMES;
   return pool.slice(0, count);
@@ -370,7 +370,7 @@ export default function CampaignsPage() {
 
   // -- Derived ---------------------------------------------------------------
 
-  const isShipLayout  = selectedLayout === "ship_line";
+  const isShipLayout  = selectedLayout === "void_ship";
   const zoneCount     = getZoneCount(selectedLayout, selectedSize);
   const currentLayout = LAYOUT_OPTIONS.find(l => l.key === selectedLayout)!;
   const selectedInviteEmails = useMemo(
