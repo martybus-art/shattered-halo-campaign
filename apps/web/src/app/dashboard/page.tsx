@@ -445,6 +445,25 @@ export default function Dashboard() {
 
   const mySectorCount = sectors.filter((s) => s.owner_user_id === uid).length;
 
+  // Zone control: player with strictly more sectors than any other controls the zone.
+  // Rule: majority wins; if tied at the top (e.g. 2v2 in a 4-sector zone) = contested.
+  const zoneController = useMemo(() => {
+    const result = new Map<string, string | null>(); // zone_key -> uid or null (contested)
+    for (const [zoneKey, owners] of territoryByZone.entries()) {
+      const ranked = Array.from(owners.entries()).sort((a, b) => b[1] - a[1]);
+      if (ranked.length === 0) {
+        result.set(zoneKey, null);
+      } else if (ranked.length === 1 || ranked[0][1] > ranked[1][1]) {
+        result.set(zoneKey, ranked[0][0]); // strict winner
+      } else {
+        result.set(zoneKey, null); // tied — contested
+      }
+    }
+    return result;
+  }, [territoryByZone]);
+
+  const myZoneCount = Array.from(zoneController.values()).filter((uid_) => uid_ === uid).length;
+
   const memberById = useMemo(() => {
     const m = new Map<string, Member>();
     members.forEach((mem) => m.set(mem.user_id, mem));
@@ -478,7 +497,12 @@ export default function Dashboard() {
                   <div>
                     <p className="text-parchment/40 text-xs">Status</p>
                     <p className="text-parchment/80 capitalize">{playerState.status}</p>
-                    <p className="text-parchment/40 text-xs">{mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held</p>
+                    <p className="text-parchment/40 text-xs">
+                      {mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held
+                      {myZoneCount > 0 && (
+                        <span className="ml-1.5 text-brass">· {myZoneCount} zone{myZoneCount !== 1 ? "s" : ""} controlled</span>
+                      )}
+                    </p>
                   </div>
                 </div>
 
@@ -709,23 +733,38 @@ export default function Dashboard() {
                   <div>
                     <p className="text-xs text-parchment/35 mb-2 uppercase tracking-widest">Visible Territory</p>
                     <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {Array.from(territoryByZone.entries()).map(([zoneKey, owners]) => (
-                        <div key={zoneKey} className="flex items-start gap-2">
-                          <span className="text-parchment/40 text-xs font-mono w-32 shrink-0 pt-0.5">{fmtKey(zoneKey)}</span>
-                          <div className="flex flex-wrap gap-1">
-                            {Array.from(owners.entries()).map(([ownerId, count]) => {
-                              const m      = memberById.get(ownerId);
-                              const colour = memberColour.get(ownerId) ?? PLAYER_COLOURS[0];
-                              return (
-                                <span key={ownerId}
-                                  className={`px-1.5 py-0.5 rounded border text-xs font-mono ${colour}`}>
-                                  {m?.commander_name ?? "Unknown"} ×{count}
+                      {Array.from(territoryByZone.entries()).map(([zoneKey, owners]) => {
+                        const controller = zoneController.get(zoneKey) ?? null;
+                        const contested  = Array.from(owners.values()).filter(c => c > 0).length > 1
+                          && controller === null;
+                        return (
+                          <div key={zoneKey} className="flex items-start gap-2">
+                            <div className="w-32 shrink-0 pt-0.5">
+                              <span className="text-parchment/40 text-xs font-mono">{fmtKey(zoneKey)}</span>
+                              {controller !== null && (
+                                <span className={`block text-xs font-mono ${controller === uid ? "text-brass" : "text-parchment/30"}`}>
+                                  {controller === uid ? "⚑ Controlled" : "⚑ Enemy held"}
                                 </span>
-                              );
-                            })}
+                              )}
+                              {contested && (
+                                <span className="block text-xs font-mono text-orange-400/70">⚔ Contested</span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {Array.from(owners.entries()).map(([ownerId, count]) => {
+                                const m      = memberById.get(ownerId);
+                                const colour = memberColour.get(ownerId) ?? PLAYER_COLOURS[0];
+                                return (
+                                  <span key={ownerId}
+                                    className={`px-1.5 py-0.5 rounded border text-xs font-mono ${colour}`}>
+                                    {m?.commander_name ?? "Unknown"} ×{count}
+                                  </span>
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     <p className="text-parchment/20 text-xs mt-2 italic">
                       Fog of war — only your sectors and publicly revealed sectors are shown.
