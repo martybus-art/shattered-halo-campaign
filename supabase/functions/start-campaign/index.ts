@@ -3,6 +3,13 @@
 // initial scout and occupation units.
 //
 // changelog:
+//   2026-03-07 -- FIX: After creating rounds row, now also updates
+//                 campaigns.round_number = 1 so the frontend query
+//                 (rounds WHERE round_number = campaign.round_number)
+//                 can find the row. Campaigns created with round_number=0
+//                 were silently passing allocation but never showing as
+//                 Active because the rounds row and campaign round_number
+//                 were out of sync.
 //   2026-03-05 -- Added unit creation: after each player's starting location
 //                 is allocated, insert 1 scout + 1 occupation unit at that
 //                 sector. Late mode also creates units for the late player.
@@ -96,7 +103,8 @@ serve(async (req) => {
 
     if (campErr) return json(500, { ok: false, error: campErr.message });
 
-    const roundNumber = (camp as any)?.round_number ?? 1;
+    // round_number from campaigns table (may be 0 if create-campaign sets it that way)
+    const roundNumber = (camp as any)?.round_number;
 
     if (camp?.map_id) {
       const { data: mapRow, error: mapErr } = await admin
@@ -267,7 +275,7 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, allocatedLoc);
-      await createInitialUnits(uid, allocatedLoc, roundNumber);
+      await createInitialUnits(uid, allocatedLoc, roundNumber ?? 1);
       return json(200, { ok: true, allocated: 1 });
     }
 
@@ -291,18 +299,35 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, loc);
-      await createInitialUnits(uid, loc, roundNumber);
+      await createInitialUnits(uid, loc, 1);
 
       usedSectors.add(loc);
       usedZones.add(parseLocation(loc).zone_key);
       allocated++;
     }
 
-    // Open Round 1 at the Spend phase
-    await admin.from("rounds").upsert(
+    // Open Round 1 / Spend phase in the rounds table
+    const { error: roundErr } = await admin.from("rounds").upsert(
       { campaign_id, round_number: 1, stage: "spend" },
       { onConflict: "campaign_id,round_number" }
     );
+    if (roundErr) {
+      console.error("[start-campaign] rounds upsert error:", roundErr.message);
+      return json(500, { ok: false, error: `Failed to create round: ${roundErr.message}` });
+    }
+
+    // Sync campaigns.round_number = 1 so the frontend query
+    // (rounds WHERE round_number = campaign.round_number) finds the row.
+    // This is the root fix: campaigns created with round_number=0 would
+    // otherwise never show as Active.
+    const { error: campUpdateErr } = await admin
+      .from("campaigns")
+      .update({ round_number: 1 })
+      .eq("id", campaign_id);
+    if (campUpdateErr) {
+      console.error("[start-campaign] campaigns round_number update error:", campUpdateErr.message);
+      // Non-fatal: round row exists, log but don't fail the response
+    }
 
     return json(200, { ok: true, allocated });
 

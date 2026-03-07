@@ -3,6 +3,10 @@
 // Lead Player Dashboard -- campaign controls for lead/admin role.
 //
 // changelog:
+//   2026-03-07 -- AdminPanel component integrated below the main cards (lead/admin only).
+//                 Requires AdminPanel.tsx in lead/components/ and migration
+//                 008_admin_adjustments.sql deployed. Edge functions needed:
+//                 admin-adjust-resources, admin-override-sector, admin-trigger-instability.
 //   2026-03-05 -- Fixed nav to match dashboard pattern; campaignId initialised
 //                 from URL query param so nav links are always populated.
 //                 Campaign Card and Invite Players Card side-by-side (md:grid-cols-2).
@@ -19,6 +23,7 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { Frame } from "@/components/Frame";
+import AdminPanel from "@/app/lead/components/AdminPanel";
 import { Card } from "@/components/Card";
 
 // -- Stage order (from advance-round edge function) -------------------------
@@ -898,6 +903,11 @@ This cannot be undone.`,
           )}
 
         </div>
+
+        {/* ── Admin Panel (lead/admin only) ─────────────────────────── */}
+        {allowed && campaign && (
+          <AdminPanel campaignId={campaignId} />
+        )}
 
       </div>
 
