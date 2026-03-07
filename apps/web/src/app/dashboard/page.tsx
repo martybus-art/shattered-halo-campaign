@@ -3,6 +3,11 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-07 -- FIX: Dashboard now also queries player_state_secret for
+//                 secret_location. Location card shows the player's real
+//                 starting location (zone:sector from secret_location) when
+//                 current_zone_key is still "unknown". Once movement begins
+//                 and submit-move updates current_zone_key, that takes over.
 //   2026-03-06 -- Added inline ToastContainer + addToast (consistent with
 //                 campaigns/page.tsx and lead/page.tsx patterns). Replaced all
 //                 alert() calls and bare addToast references with the proper
@@ -171,6 +176,7 @@ export default function Dashboard() {
   const [members,         setMembers]         = useState<Member[]>([]);
   const [underdogChoice,  setUnderdogChoice]  = useState<UnderdogChoice | null>(null);
   const [cart,            setCart]            = useState<Record<string, boolean>>({});
+  const [secretLocation,  setSecretLocation]  = useState<string | null>(null);
   const [purchasing,      setPurchasing]      = useState(false);
   const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
   const [accepting,       setAccepting]       = useState(false);
@@ -237,6 +243,14 @@ export default function Dashboard() {
       .from("player_state").select("nip,ncp,status,current_zone_key,current_sector_key")
       .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
     setPlayerState(ps ?? null);
+
+    // 3b. My secret location (real starting/current position, fog-of-war safe)
+    // current_zone_key in player_state is "unknown" until submit-move runs.
+    // secret_location is the authoritative source for the player's own position.
+    const { data: pss } = await supabase
+      .from("player_state_secret").select("secret_location")
+      .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
+    setSecretLocation(pss?.secret_location ?? null);
 
     // 4. Current round / stage
     const { data: r } = await supabase
@@ -456,8 +470,22 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 gap-2 pt-1 border-t border-brass/10 text-sm">
                   <div>
                     <p className="text-parchment/40 text-xs">Location</p>
-                    <p className="text-parchment/80">{fmtKey(playerState.current_zone_key)}</p>
-                    <p className="text-parchment/40 text-xs font-mono">{playerState.current_sector_key}</p>
+                    {(() => {
+                      // Use current_zone_key once movement has happened (not "unknown").
+                      // Fall back to secret_location (zone:sector) which is set at campaign start.
+                      const useSecret =
+                        (!playerState.current_zone_key || playerState.current_zone_key === "unknown") &&
+                        !!secretLocation;
+                      const [dispZone, dispSector] = useSecret
+                        ? secretLocation!.split(":")
+                        : [playerState.current_zone_key, playerState.current_sector_key];
+                      return (
+                        <>
+                          <p className="text-parchment/80">{fmtKey(dispZone ?? "unknown")}</p>
+                          <p className="text-parchment/40 text-xs font-mono">{dispSector ?? "—"}</p>
+                        </>
+                      );
+                    })()}
                   </div>
                   <div>
                     <p className="text-parchment/40 text-xs">Status</p>
