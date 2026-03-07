@@ -55,6 +55,11 @@ export default function Home() {
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [processingInviteId, setProcessingInviteId] = useState<string>("");
 
+  // Inline feedback (replaces alert() calls)
+  const [loginMsg, setLoginMsg]   = useState<{ text: string; ok: boolean } | null>(null);
+  const [nameMsg, setNameMsg]     = useState<{ text: string; ok: boolean } | null>(null);
+  const [inviteError, setInviteError] = useState<string>("");
+
   // Derived — role for the selected campaign
   const selectedMembership = memberships.find((m) => m.campaign_id === selectedCampaignId);
   const selectedRole = selectedMembership?.role ?? "player";
@@ -143,10 +148,11 @@ export default function Home() {
 
   // ── Actions ───────────────────────────────────────────────
   const sendMagicLink = async () => {
-    if (!email.trim()) return alert("Enter your email address.");
+    if (!email.trim()) { setLoginMsg({ text: "Enter your email address.", ok: false }); return; }
+    setLoginMsg(null);
     const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) alert(error.message);
-    else alert("Check your email for the login link.");
+    if (error) setLoginMsg({ text: error.message, ok: false });
+    else setLoginMsg({ text: "Check your email for the login link.", ok: true });
   };
 
   const signOut = async () => {
@@ -155,17 +161,18 @@ export default function Home() {
   };
 
   const saveDisplayName = async () => {
-    if (!displayName.trim()) return alert("Enter a name.");
+    if (!displayName.trim()) { setNameMsg({ text: "Enter a name.", ok: false }); return; }
     setSavingName(true);
+    setNameMsg(null);
     try {
       const { error } = await supabase.auth.updateUser({
         data: { display_name: displayName.trim() },
       });
       if (error) throw error;
       setSavedName(displayName.trim());
-      alert("Name saved.");
+      setNameMsg({ text: "Name saved.", ok: true });
     } catch (e: any) {
-      alert(e?.message ?? "Failed to save name.");
+      setNameMsg({ text: e?.message ?? "Failed to save name.", ok: false });
     } finally {
       setSavingName(false);
     }
@@ -173,9 +180,10 @@ export default function Home() {
 
   const handleInvite = async (inviteId: string, mode: "accept" | "decline") => {
     setProcessingInviteId(inviteId);
+    setInviteError("");
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) { alert("Session expired. Refresh and try again."); return; }
+      if (!session?.access_token) { setInviteError("Session expired. Refresh and try again."); return; }
 
       const { data, error } = await supabase.functions.invoke("accept-invites", {
         body: { mode, invite_id: inviteId },
@@ -193,7 +201,7 @@ export default function Home() {
         await loadCampaigns(userId);
       }
     } catch (e: any) {
-      alert(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
+      setInviteError(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
     } finally {
       setProcessingInviteId("");
     }
@@ -272,6 +280,11 @@ export default function Home() {
               >
                 Send login link
               </button>
+              {loginMsg && (
+                <p className={`text-sm mt-1 ${loginMsg.ok ? "text-brass" : "text-blood"}`}>
+                  {loginMsg.text}
+                </p>
+              )}
             </div>
           </Card>
 
@@ -323,6 +336,11 @@ export default function Home() {
                   Current: <span className="text-brass">{savedName}</span>
                 </p>
               )}
+              {nameMsg && (
+                <p className={`text-xs mt-1 ${nameMsg.ok ? "text-brass" : "text-blood"}`}>
+                  {nameMsg.text}
+                </p>
+              )}
             </div>
 
             <button
@@ -353,7 +371,6 @@ export default function Home() {
                         {invite.invite_message}
                       </p>
                     )}
-                    <div className="text-xs text-parchment/30 font-mono mt-1">{invite.campaign_id}</div>
                   </div>
                   <div className="flex gap-2 shrink-0">
                     <button
@@ -374,6 +391,9 @@ export default function Home() {
                 </div>
               ))}
             </div>
+            {inviteError && (
+              <p className="mt-2 text-sm text-blood">{inviteError}</p>
+            )}
           </Card>
         )}
 
@@ -410,7 +430,7 @@ export default function Home() {
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold text-parchment truncate">
-                            {camp?.name ?? m.campaign_id}
+                            {camp?.name ?? "Unknown Campaign"}
                           </div>
                           {camp && (
                             <div className="text-xs text-parchment/50 mt-0.5">
