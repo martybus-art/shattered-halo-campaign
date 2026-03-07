@@ -9,6 +9,8 @@
 //                added background call to generate-map edge function so the
 //                map image starts generating immediately after campaign creation;
 //                returns map_id in response so frontend can poll MapImageDisplay.
+//   2026-03-07 — populate commander_name on lead member insert from auth
+//                user_metadata.display_name so Players card shows a real name.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json, requireUser, adminClient } from "../_shared/utils.ts";
@@ -88,11 +90,21 @@ Deno.serve(async (req) => {
   }
 
   // ── Add creator as lead ───────────────────────────────────────────────────
+  // Resolve display_name from auth metadata so commander_name is pre-populated
+  // and the Players card shows a real name instead of "Unnamed Commander".
+
+  let commanderName: string | null = null;
+  try {
+    const { data: authUser } = await admin.auth.admin.getUserById(user.id);
+    const meta = authUser?.user?.user_metadata ?? {};
+    commanderName = (meta.display_name as string | null) ?? (meta.full_name as string | null) ?? null;
+  } catch { /* non-fatal — member row still inserted without name */ }
 
   const { error: memErr } = await admin.from("campaign_members").insert({
-    campaign_id: campaign.id,
-    user_id:     user.id,
-    role:        "lead",
+    campaign_id:    campaign.id,
+    user_id:        user.id,
+    role:           "lead",
+    commander_name: commanderName,
   });
   if (memErr) {
     return json(500, { ok: false, error: "Lead membership insert failed", details: memErr.message });

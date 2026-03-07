@@ -899,15 +899,6 @@ This cannot be undone.`,
 
         </div>
 
-        {/* ── What's Next ───────────────────────────────────────────────── */}
-        <Card title="What's next">
-          <ul className="list-disc pl-5 space-y-2 text-parchment/75">
-            <li>Add "Process Movement" + "Detect Conflicts" functions to fully remove admin work.</li>
-            <li>Add "Resolve Recon" and "Apply Underdog Choices" functions.</li>
-            <li>Add "Publish Bulletin" helper that writes a public post scaffold.</li>
-          </ul>
-        </Card>
-
       </div>
 
       {/* Generate Map Modal */}
