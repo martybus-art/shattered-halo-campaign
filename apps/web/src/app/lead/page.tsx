@@ -3,6 +3,12 @@
 // Lead Player Dashboard -- campaign controls for lead/admin role.
 //
 // changelog:
+//   2026-03-07 -- Added Distribute Income panel (results stage, economy-gated).
+//                 Shows dry-run preview table (commander, sectors, base income,
+//                 underdog bonus, decay, NIP before/after) before committing.
+//                 On confirm calls distribute-income edge function which writes
+//                 player_state NIP, admin_adjustments audit rows, and a public
+//                 War Bulletin post. Panel hidden when economy rule is disabled.
 //   2026-03-07 -- AdminPanel component integrated below the main cards (lead/admin only).
 //                 Requires AdminPanel.tsx in lead/components/ and migration
 //                 008_admin_adjustments.sql deployed. Edge functions needed:
@@ -52,6 +58,29 @@ type Member = {
 };
 
 type KnownUser = { id: string; email: string; display_name: string | null };
+
+type AvailableMap = {
+  id:             string;
+  name:           string;
+  layout:         string | null;
+  zone_count:     number | null;
+  bg_image_path:  string | null;
+  generation_status: string | null;
+};
+
+// Shape returned by distribute-income for each player (dry-run and live)
+type PlayerIncomeResult = {
+  userId:        string;
+  factionName:   string | null;
+  commanderName: string | null;
+  sectorCount:   number;
+  baseIncome:    number;
+  underdogBonus: number;
+  decayAmount:   number;
+  nipBefore:     number;
+  nipAfter:      number;
+  isUnderdog:    boolean;
+};
 
 // campaignId is read from the URL query param on first render so nav links
 // are always populated even before async load completes.
@@ -207,7 +236,170 @@ function GenerateMapModal({ open, campaignId, campaign, onClose, onConfirmed }: 
     </div>
   );
 }
-// Start Campaign Notification Modal
+
+// -- Distribute Income Panel ------------------------------------------------
+// Self-contained sub-component. Holds its own preview/loading state.
+// Shown inside the Campaign Card only during the results stage when the
+// economy rule is enabled.
+
+interface IncomePanelProps {
+  campaignId:    string;
+  roundNumber:   number;
+  onDistributed: () => void;
+  onError:       (msg: string) => void;
+}
+
+function IncomePanel({ campaignId, roundNumber, onDistributed, onError }: IncomePanelProps) {
+  const supabase = useMemo(() => supabaseBrowser(), []);
+
+  const [preview,     setPreview]     = useState<PlayerIncomeResult[] | null>(null);
+  const [previewing,  setPreviewing]  = useState(false);
+  const [confirming,  setConfirming]  = useState(false);
+  const [distributed, setDistributed] = useState(false);
+
+  const getToken = async (): Promise<string | null> => {
+    const { data: sess } = await supabase.auth.getSession();
+    return sess.session?.access_token ?? null;
+  };
+
+  const handlePreview = async () => {
+    setPreviewing(true);
+    setPreview(null);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Session expired -- please refresh.");
+      const { data, error } = await supabase.functions.invoke("distribute-income", {
+        body: { campaignId, roundNumber, dryRun: true },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Preview failed");
+      setPreview(data.preview as PlayerIncomeResult[]);
+    } catch (e: any) {
+      onError(e?.message ?? String(e));
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const handleConfirm = async () => {
+    setConfirming(true);
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Session expired -- please refresh.");
+      const { data, error } = await supabase.functions.invoke("distribute-income", {
+        body: { campaignId, roundNumber, dryRun: false },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Distribution failed");
+      setDistributed(true);
+      onDistributed();
+    } catch (e: any) {
+      onError(e?.message ?? String(e));
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  if (distributed) {
+    return (
+      <div className="px-3 py-2.5 rounded border border-brass/30 bg-brass/10 text-brass/80 text-sm">
+        ✓ Income distributed for Round {roundNumber}. War Bulletin updated.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Preview trigger -- shown when no preview yet */}
+      {!preview && (
+        <button
+          onClick={handlePreview}
+          disabled={previewing}
+          className="w-full px-4 py-2.5 rounded bg-brass/15 border border-brass/40 hover:bg-brass/25 text-brass text-sm font-semibold transition-colors disabled:opacity-40"
+        >
+          {previewing
+            ? <Spinner colour="brass" label="Calculating..." />
+            : "Preview Income Distribution"}
+        </button>
+      )}
+
+      {/* Preview table */}
+      {preview && (
+        <div className="space-y-3">
+          <div className="rounded border border-brass/20 overflow-hidden">
+            {/* Header */}
+            <div className="grid grid-cols-7 gap-1 px-2.5 py-1.5 bg-brass/10 border-b border-brass/20">
+              {["Commander", "Sectors", "Base", "+Bonus", "-Decay", "Before", "After"].map((h) => (
+                <span key={h} className="text-xs text-brass/70 font-semibold uppercase tracking-wide truncate">
+                  {h}
+                </span>
+              ))}
+            </div>
+            {/* Rows */}
+            {preview.map((r) => (
+              <div
+                key={r.userId}
+                className={`grid grid-cols-7 gap-1 px-2.5 py-2 border-b border-parchment/5 last:border-0 ${
+                  r.isUnderdog ? "bg-parchment/5" : ""
+                }`}
+              >
+                <span className="text-xs text-parchment/80 truncate">
+                  {r.commanderName ?? r.factionName ?? "—"}
+                  {r.isUnderdog && (
+                    <span className="ml-1 text-parchment/40 text-xs" title="Underdog bonus applied">⬇</span>
+                  )}
+                </span>
+                <span className="text-xs text-parchment/60 font-mono">{r.sectorCount}</span>
+                <span className="text-xs text-brass/70 font-mono">+{r.baseIncome}</span>
+                <span className={`text-xs font-mono ${r.underdogBonus > 0 ? "text-brass" : "text-parchment/25"}`}>
+                  {r.underdogBonus > 0 ? `+${r.underdogBonus}` : "—"}
+                </span>
+                <span className={`text-xs font-mono ${r.decayAmount > 0 ? "text-blood/70" : "text-parchment/25"}`}>
+                  {r.decayAmount > 0 ? `-${r.decayAmount}` : "—"}
+                </span>
+                <span className="text-xs text-parchment/50 font-mono">{r.nipBefore}</span>
+                <span className={`text-xs font-mono font-semibold ${
+                  r.nipAfter > r.nipBefore ? "text-brass"
+                  : r.nipAfter < r.nipBefore ? "text-blood/70"
+                  : "text-parchment/50"
+                }`}>
+                  {r.nipAfter}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-xs text-parchment/35 italic">
+            ⬇ denotes underdog bonus recipient. Decay applies when unspent NIP exceeds the configured
+            threshold. Confirming updates all balances and posts a public War Bulletin entry.
+          </p>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => setPreview(null)}
+              disabled={confirming}
+              className="px-4 py-2 rounded border border-parchment/20 hover:border-parchment/35 text-parchment/50 text-sm transition-colors disabled:opacity-40"
+            >
+              Recalculate
+            </button>
+            <button
+              onClick={handleConfirm}
+              disabled={confirming}
+              className="flex-1 px-4 py-2.5 rounded bg-brass/25 border border-brass/60 hover:bg-brass/40 text-brass font-bold text-sm uppercase tracking-wider transition-colors disabled:opacity-40"
+            >
+              {confirming
+                ? <Spinner colour="brass" label="Distributing..." />
+                : "Confirm & Distribute"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // -- Result Modal -----------------------------------------------------------
 
 type ResultModalState =
@@ -369,9 +561,12 @@ export default function LeadControls() {
   const [playerPickerOpen, setPlayerPickerOpen] = useState(false);
   const [startStatus, setStartStatus]   = useState<string>("");
   const [mapModalOpen, setMapModalOpen] = useState(false);
+  const [mapPickerOpen, setMapPickerOpen] = useState(false);
+  const [availableMaps, setAvailableMaps] = useState<AvailableMap[]>([]);
+  const [mapPickerUrls, setMapPickerUrls] = useState<Record<string, string>>({});
+  const [linkingMap, setLinkingMap] = useState(false);
   const [deleting, setDeleting]         = useState(false);
   const [resultModal, setResultModal]   = useState<ResultModalState>({ open: false });
-
 
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({ open: false });
   const confirmResolverRef = useRef<((v: boolean) => void) | null>(null);
@@ -391,6 +586,7 @@ export default function LeadControls() {
     setConfirmModal({ open: false });
     resolver?.(result);
   };
+
   const load = async (cid: string) => {
     const { data: userResp } = await supabase.auth.getUser();
     const uid = userResp.user?.id;
@@ -405,10 +601,14 @@ export default function LeadControls() {
       .from("campaigns")
       .select("id,name,phase,round_number,instability,map_id,rules_overrides,campaign_narrative")
       .eq("id", cid).single();
-    if (cErr || !c) { setResultModal({ open: true, tone: "blood", title: "Campaign Not Found", message: cErr?.message ?? "Campaign not found" }); setCampaign(null); setRound(null); return; }
+    if (cErr || !c) {
+      setResultModal({ open: true, tone: "blood", title: "Campaign Not Found", message: cErr?.message ?? "Campaign not found" });
+      setCampaign(null);
+      setRound(null);
+      return;
+    }
     setCampaign(c as Campaign);
 
-    // Load all members with their commander/faction names
     const { data: memberRows } = await supabase
       .from("campaign_members")
       .select("user_id,role,commander_name,faction_name")
@@ -422,7 +622,6 @@ export default function LeadControls() {
       .maybeSingle();
     setRound(r);
 
-    // Load registered users for the quick-add invite picker (non-fatal)
     try {
       const { data: { session: invSess } } = await supabase.auth.getSession();
       const invToken = invSess?.access_token;
@@ -436,6 +635,16 @@ export default function LeadControls() {
         }
       }
     } catch { /* non-fatal */ }
+
+    // Load available maps (any map with a generated image, for reuse picker)
+    try {
+      const { data: mapRows } = await supabase
+        .from("maps")
+        .select("id,name,layout,zone_count,bg_image_path,generation_status")
+        .not("bg_image_path", "is", null)
+        .order("created_at", { ascending: false });
+      setAvailableMaps((mapRows ?? []) as AvailableMap[]);
+    } catch { /* non-fatal */ }
   };
 
   useEffect(() => { if (campaignId) load(campaignId); }, []); // eslint-disable-line
@@ -443,8 +652,43 @@ export default function LeadControls() {
   const getToken = async (): Promise<string | null> => {
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
-    if (!token) { setResultModal({ open: true, tone: "blood", title: "Session Expired", message: "Session expired. Please refresh and try again." }); return null; }
+    if (!token) {
+      setResultModal({ open: true, tone: "blood", title: "Session Expired", message: "Session expired. Please refresh and try again." });
+      return null;
+    }
     return token;
+  };
+
+  // Link an existing map to this campaign (avoids re-generating at cost)
+  const linkMap = async (mapId: string) => {
+    setLinkingMap(true);
+    try {
+      const { error } = await supabase
+        .from("campaigns")
+        .update({ map_id: mapId })
+        .eq("id", campaignId);
+      if (error) throw error;
+      setMapPickerOpen(false);
+      await load(campaignId);
+    } catch (e: any) {
+      setResultModal({ open: true, tone: "blood", title: "Link Failed", message: e?.message ?? String(e) });
+    } finally {
+      setLinkingMap(false);
+    }
+  };
+
+  // Open the map picker and pre-fetch signed thumbnail URLs for maps with images
+  const openMapPicker = async () => {
+    setMapPickerOpen(true);
+    const urls: Record<string, string> = {};
+    for (const m of availableMaps) {
+      if (!m.bg_image_path) continue;
+      const { data } = await supabase.storage
+        .from("campaign-maps")
+        .createSignedUrl(m.bg_image_path, 3600);
+      if (data?.signedUrl) urls[m.id] = data.signedUrl;
+    }
+    setMapPickerUrls(urls);
   };
 
   const callFn = async (fn: string, extraBody?: Record<string, unknown>) => {
@@ -468,14 +712,15 @@ export default function LeadControls() {
       body: { campaign_id: campaignId, mode: "initial" },
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (error) { setStartStatus(`Error: ${error.message}`); setResultModal({ open: true, tone: "blood", title: "Start Failed", message: `Start failed: ${error.message}` }); return; }
+    if (error) {
+      setStartStatus(`Error: ${error.message}`);
+      setResultModal({ open: true, tone: "blood", title: "Start Failed", message: `Start failed: ${error.message}` });
+      return;
+    }
     const allocated = data?.allocated ?? 0;
     setStartStatus(`OK. Allocated: ${allocated}`);
-
     setResultModal({
-      open: true,
-      tone: "brass",
-      title: "Campaign Started",
+      open: true, tone: "brass", title: "Campaign Started",
       message: `Allocated ${allocated} starting location${allocated === 1 ? "" : "s"}.`,
     });
     await load(campaignId);
@@ -483,47 +728,24 @@ export default function LeadControls() {
 
   const handleAssignMissions = async () => {
     const go = await askConfirm({
-      title: "Confirm Action",
-      tone: "blood",
-      confirmText: "Proceed",
-      message: `Assign Missions to all conflicts?
-
-Missions will be assigned based on NIP influence settings.
-Make sure all players have submitted their NIP spending choices before proceeding.
-
-Proceed?`,
+      title: "Confirm Action", tone: "blood", confirmText: "Proceed",
+      message: `Assign Missions to all conflicts?\n\nMissions will be assigned based on NIP influence settings.\nMake sure all players have submitted their NIP spending choices before proceeding.\n\nProceed?`,
     });
     if (go) callFn("assign-missions");
   };
 
   const handleApplyInstability = async () => {
     const go = await askConfirm({
-      title: "Confirm Action",
-      tone: "blood",
-      confirmText: "Proceed",
-      message: `Apply Halo Instability?
-
-This increments the Instability counter by 1 and rolls an event from the d10 table.
-A public bulletin will be posted automatically.
-
-Make sure all conflict results have been recorded before proceeding.
-
-Proceed?`,
+      title: "Confirm Action", tone: "blood", confirmText: "Proceed",
+      message: `Apply Halo Instability?\n\nThis increments the Instability counter by 1 and rolls an event from the d10 table.\nA public bulletin will be posted automatically.\n\nMake sure all conflict results have been recorded before proceeding.\n\nProceed?`,
     });
     if (go) callFn("apply-instability");
   };
 
   const handleOfferCatchup = async () => {
     const go = await askConfirm({
-      title: "Confirm Action",
-      tone: "blood",
-      confirmText: "Proceed",
-      message: `Offer Catchup Choice to Underdog?
-
-This will automatically identify the player with the fewest sectors and post
-a catch-up offer to their dashboard. They will choose a bonus to apply.
-
-Proceed?`,
+      title: "Confirm Action", tone: "blood", confirmText: "Proceed",
+      message: `Offer Catchup Choice to Underdog?\n\nThis will automatically identify the player with the fewest sectors and post\na catch-up offer to their dashboard. They will choose a bonus to apply.\n\nProceed?`,
     });
     if (!go) return;
     const token = await getToken();
@@ -535,16 +757,11 @@ Proceed?`,
     if (error) { setResultModal({ open: true, tone: "blood", title: "Catchup Failed", message: `Failed: ${error.message}` }); return; }
     if (!data?.ok) { setResultModal({ open: true, tone: "blood", title: "Catchup Failed", message: data?.error ?? "Failed" }); return; }
     setResultModal({
-      open: true,
-      tone: "brass",
-      title: "Catchup Offered",
+      open: true, tone: "brass", title: "Catchup Offered",
       message: `Catchup offer sent to: ${data.commander_name ?? data.underdog_id}\nThey currently hold ${data.sector_count} sector(s).`,
     });
   };
-  // Invite players. Calls invite-players edge function which:
-  // - inserts pending_invites rows
-  // - sends magic-link email to new users via inviteUserByEmail
-  // - sends OTP login email to existing registered users
+
   const allInviteEmails = (): string[] => {
     const typed = inviteEmails.split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
     return Array.from(new Set([...Array.from(selectedEmails), ...typed]));
@@ -575,12 +792,12 @@ Proceed?`,
     });
     if (error) { setInviteStatus(`Error: ${error.message}`); return; }
     if (!data?.ok) { setInviteStatus(`Error: ${data?.error ?? "Failed"}`); return; }
-    const sent = data.sent ?? 0;
+    const sent  = data.sent  ?? 0;
     const total = data.invited ?? emails.length;
     setInviteStatus(
       sent > 0
         ? `✓ ${sent} of ${total} email${total !== 1 ? "s" : ""} sent.`
-        : `✓ Invites saved — players will see this on next login.`
+        : `✓ Invites saved -- players will see this on next login.`
     );
     setInviteEmails("");
     setSelectedEmails(new Set());
@@ -588,15 +805,8 @@ Proceed?`,
 
   const deleteCampaign = async () => {
     const go = await askConfirm({
-      title: "Delete Campaign",
-      tone: "blood",
-      confirmText: "Delete",
-      cancelText: "Cancel",
-      message: `Delete campaign "${campaign?.name ?? campaignId}"?
-
-This permanently deletes all campaign data: sectors, rounds, player state, posts, and map artwork.
-
-This cannot be undone.`,
+      title: "Delete Campaign", tone: "blood", confirmText: "Delete", cancelText: "Cancel",
+      message: `Delete campaign "${campaign?.name ?? campaignId}"?\n\nThis permanently deletes all campaign data: sectors, rounds, player state, posts, and map artwork.\n\nThis cannot be undone.`,
     });
     if (!go) return;
     setDeleting(true);
@@ -615,15 +825,18 @@ This cannot be undone.`,
 
   // -- Derived state --------------------------------------------------------
 
-  const allowed          = role === "lead" || role === "admin";
-  const campaignStarted  = round !== null;
-  const currentStage     = (round?.stage ?? null) as Stage | null;
-  const stageIndex       = currentStage ? STAGE_ORDER.indexOf(currentStage) : -1;
-  const maxPlayers       = campaign?.rules_overrides?.map_zone_count ?? 8;
-  const slotsRemaining   = Math.max(0, maxPlayers - members.length);
+  const allowed              = role === "lead" || role === "admin";
+  const campaignStarted      = round !== null;
+  const currentStage         = (round?.stage ?? null) as Stage | null;
+  const stageIndex           = currentStage ? STAGE_ORDER.indexOf(currentStage) : -1;
+  const maxPlayers           = campaign?.rules_overrides?.map_zone_count ?? 8;
+  const slotsRemaining       = Math.max(0, maxPlayers - members.length);
+  // Economy gate: distribute income only shows when the economy rule is toggled on
+  const economyEnabled       = !!(campaign?.rules_overrides?.economy?.enabled);
   const showAssignMissions   = campaignStarted && currentStage === "missions";
   const showApplyInstability = campaignStarted && currentStage === "results";
   const showOfferCatchup     = campaignStarted && currentStage === "results";
+  const showDistributeIncome = campaignStarted && currentStage === "results" && economyEnabled;
 
   const roleColour = (r: string) =>
     r === "lead" ? "text-brass" : r === "admin" ? "text-blood/80" : "text-parchment/50";
@@ -686,10 +899,24 @@ This cannot be undone.`,
                   <div className="space-y-2 pt-1 border-t border-brass/10">
 
                     {/* Generate / Regenerate Map */}
-                    <button onClick={() => setMapModalOpen(true)}
-                      className="w-full px-4 py-2.5 rounded bg-brass/15 border border-brass/40 hover:bg-brass/25 text-brass text-sm font-semibold uppercase tracking-wider transition-colors">
-                      {campaign.map_id ? "Regenerate Map" : "Generate Map"}
-                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={() => setMapModalOpen(true)}
+                        className="flex-1 px-4 py-2.5 rounded bg-brass/15 border border-brass/40 hover:bg-brass/25 text-brass text-sm font-semibold uppercase tracking-wider transition-colors">
+                        {campaign.map_id ? "Regenerate Map" : "Generate Map"}
+                      </button>
+                      {availableMaps.length > 0 && (
+                        <button onClick={openMapPicker}
+                          title="Link an existing map instead of generating a new one"
+                          className="px-3 py-2.5 rounded bg-parchment/5 border border-brass/20 hover:bg-brass/10 text-parchment/60 hover:text-brass text-sm transition-colors whitespace-nowrap">
+                          Use Existing
+                        </button>
+                      )}
+                    </div>
+                    {campaign.map_id && (
+                      <p className="text-xs text-parchment/30 -mt-1">
+                        Map linked. Use &quot;Use Existing&quot; to swap to a different map without generating a new one.
+                      </p>
+                    )}
 
                     {/* Start Campaign -- hidden once started */}
                     {!campaignStarted && (
@@ -755,6 +982,25 @@ This cannot be undone.`,
                       </div>
                     )}
 
+                    {/* Distribute Income -- results stage, economy enabled only */}
+                    {showDistributeIncome && (
+                      <div className="space-y-2 pt-2 border-t border-brass/10">
+                        <p className="text-xs text-parchment/60 font-semibold">Distribute Income</p>
+                        <p className="text-xs text-parchment/35">
+                          Preview the NIP income calculation before committing. Includes tiered sector
+                          income, underdog bonus, and decay on hoarded NIP.
+                        </p>
+                        <IncomePanel
+                          campaignId={campaignId}
+                          roundNumber={campaign.round_number}
+                          onDistributed={() => load(campaignId)}
+                          onError={(msg) =>
+                            setResultModal({ open: true, tone: "blood", title: "Income Error", message: msg })
+                          }
+                        />
+                      </div>
+                    )}
+
                     {/* Delete -- danger section */}
                     <div className="pt-2 border-t border-blood/15">
                       <button onClick={deleteCampaign} disabled={deleting}
@@ -817,7 +1063,7 @@ This cannot be undone.`,
                 <div className="border-t border-brass/10 pt-3 space-y-2">
                   <p className="text-xs text-parchment/50 font-semibold">Invite Players</p>
 
-                  {/* Registered player picker -- collapsible with checkboxes */}
+                  {/* Registered player picker */}
                   <div className="rounded-lg border border-brass/20 bg-black/10">
                     <button
                       type="button"
@@ -921,12 +1167,87 @@ This cannot be undone.`,
           onConfirmed={() => { setMapModalOpen(false); load(campaignId); }}
         />
       )}
-      
+
+      {/* Map Picker Modal -- link an existing map instead of generating */}
+      {mapPickerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-void border border-brass/30 rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-brass/20">
+              <div>
+                <h2 className="text-parchment font-semibold text-lg">Use Existing Map</h2>
+                <p className="text-parchment/40 text-xs mt-0.5">Select a previously generated map to link to this campaign. No generation cost.</p>
+              </div>
+              <button onClick={() => setMapPickerOpen(false)} className="text-parchment/40 hover:text-parchment text-xl leading-none">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4 space-y-3">
+              {availableMaps.length === 0 ? (
+                <p className="text-parchment/40 text-sm italic text-center py-8">No generated maps found.</p>
+              ) : (
+                availableMaps.map((m) => {
+                  const isActive = campaign?.map_id === m.id;
+                  const thumbUrl = mapPickerUrls[m.id];
+                  return (
+                    <div key={m.id}
+                      className={`flex gap-4 rounded-lg border p-3 transition-colors ${
+                        isActive
+                          ? "border-brass/60 bg-brass/10"
+                          : "border-brass/20 bg-void/60 hover:border-brass/40 hover:bg-brass/5"
+                      }`}>
+                      {/* Thumbnail */}
+                      <div className="w-24 h-16 rounded overflow-hidden shrink-0 bg-parchment/5 border border-brass/10 flex items-center justify-center">
+                        {thumbUrl
+                          ? <img src={thumbUrl} alt={m.name} className="w-full h-full object-cover" />
+                          : <span className="text-parchment/20 text-xs">No preview</span>
+                        }
+                      </div>
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-parchment font-semibold text-sm truncate">{m.name}</p>
+                        <div className="flex gap-2 mt-1 flex-wrap">
+                          {m.layout && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-parchment/10 text-parchment/50 font-mono capitalize">
+                              {m.layout}
+                            </span>
+                          )}
+                          {m.zone_count && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-parchment/10 text-parchment/50 font-mono">
+                              {m.zone_count} zones
+                            </span>
+                          )}
+                          {isActive && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-brass/20 text-brass font-mono">
+                              Currently linked
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {/* Action */}
+                      <div className="flex items-center shrink-0">
+                        {isActive ? (
+                          <span className="text-brass text-sm">✓</span>
+                        ) : (
+                          <button
+                            onClick={() => linkMap(m.id)}
+                            disabled={linkingMap}
+                            className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-xs font-semibold uppercase tracking-wider transition-colors disabled:opacity-40">
+                            {linkingMap ? "Linking..." : "Link"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <ResultModal
         state={resultModal}
         onClose={() => setResultModal({ open: false })}
       />
-      
+
       <ConfirmModal
         state={confirmModal}
         onCancel={() => closeConfirm(false)}

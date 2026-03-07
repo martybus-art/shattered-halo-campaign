@@ -1,8 +1,17 @@
 // supabase/functions/start-campaign/index.ts
-// Allocates secret starting locations for all players and creates their
-// initial scout and occupation units.
+// Allocates secret starting locations for all players, creates their
+// initial scout and occupation units, and seeds the sectors table.
 //
 // changelog:
+//   2026-03-08 -- Added createInitialSectors(): at campaign start, all sectors
+//                 in each player's starting zone are inserted into the sectors
+//                 table. The player's own starting sector is marked as owned
+//                 and revealed_public=true; the remaining sectors in the zone
+//                 are seeded as open (owner=null, revealed_public=false).
+//                 This ensures effectiveZones fallback on map/page.tsx works
+//                 from round 1 even when no map has been generated.
+//                 Upsert uses ignoreDuplicates so it is safe if two players
+//                 share a zone, and safe to re-run (idempotent).
 //   2026-03-07 -- FIX: After creating rounds row, now also updates
 //                 campaigns.round_number = 1 so the frontend query
 //                 (rounds WHERE round_number = campaign.round_number)
@@ -36,11 +45,12 @@ function fallbackMap(): MapDef {
     { key: "signal_crater",       name: "Signal Crater" },
     { key: "xenos_forest",        name: "Xenos Forest" },
   ];
-  const sectors = ["a", "b", "c", "d"];
+  const sectorLetters = ["a", "b", "c", "d"];
   return {
     zones: zones.map((z) => ({
       ...z,
-      sectors: sectors.map((s) => ({ key: `${z.key}:${s}` })),
+      // Sector keys in map_json are stored as "zone_key:sector_letter"
+      sectors: sectorLetters.map((s) => ({ key: `${z.key}:${s}` })),
     })),
   };
 }
@@ -103,7 +113,6 @@ serve(async (req) => {
 
     if (campErr) return json(500, { ok: false, error: campErr.message });
 
-    // round_number from campaigns table (may be 0 if create-campaign sets it that way)
     const roundNumber = (camp as any)?.round_number;
 
     if (camp?.map_id) {
@@ -191,13 +200,54 @@ serve(async (req) => {
       if (error) throw new Error(error.message);
     }
 
+    // Seeds the sectors table for the player's entire starting zone.
+    // The player's specific starting sector is marked owned + revealed.
+    // All other sectors in the zone are inserted as open (unowned, unrevealed).
+    // Uses ignoreDuplicates=true so it is safe when two players share a zone
+    // and safe to call multiple times (idempotent).
+    async function createInitialSectors(uid: string, loc: string, mapDef: MapDef) {
+      const { zone_key, sector_key } = parseLocation(loc);
+      if (!zone_key || !sector_key) return;
+
+      const zone = mapDef.zones.find((z) => z.key === zone_key);
+
+      if (!zone) {
+        // Zone not in map_json (unusual) -- insert just the starting sector
+        const { error } = await admin.from("sectors").upsert(
+          { campaign_id, zone_key, sector_key, owner_user_id: uid, revealed_public: true },
+          { onConflict: "campaign_id,zone_key,sector_key", ignoreDuplicates: true }
+        );
+        if (error) console.error(`[start-campaign] single sector insert error:`, error.message);
+        return;
+      }
+
+      // Build one row per sector in the zone.
+      // Sector keys in map_json may be "zone_key:sector_letter" or just "sector_letter".
+      const rows = zone.sectors.map((sec) => {
+        const sk = sec.key.includes(":") ? sec.key.split(":").pop()! : sec.key;
+        const isOwned = sk === sector_key;
+        return {
+          campaign_id,
+          zone_key,
+          sector_key:    sk,
+          owner_user_id: isOwned ? uid : null as string | null,
+          revealed_public: isOwned,
+        };
+      });
+
+      const { error } = await admin.from("sectors").upsert(rows, {
+        onConflict: "campaign_id,zone_key,sector_key",
+        ignoreDuplicates: true,
+      });
+      if (error) console.error(`[start-campaign] sector insert error for ${uid}:`, error.message);
+    }
+
     // Creates initial scout + occupation units at the player's starting sector.
     // Idempotent: skips creation if the player already has active units.
     async function createInitialUnits(uid: string, loc: string, roundNum: number) {
       const { zone_key, sector_key } = parseLocation(loc);
       if (!zone_key || !sector_key) return;
 
-      // Check if units already exist for this player (idempotent)
       const { data: existing } = await admin
         .from("units")
         .select("id")
@@ -275,6 +325,7 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, allocatedLoc);
+      await createInitialSectors(uid, allocatedLoc, map);
       await createInitialUnits(uid, allocatedLoc, roundNumber ?? 1);
       return json(200, { ok: true, allocated: 1 });
     }
@@ -299,6 +350,7 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, loc);
+      await createInitialSectors(uid, loc, map);
       await createInitialUnits(uid, loc, 1);
 
       usedSectors.add(loc);
@@ -318,15 +370,12 @@ serve(async (req) => {
 
     // Sync campaigns.round_number = 1 so the frontend query
     // (rounds WHERE round_number = campaign.round_number) finds the row.
-    // This is the root fix: campaigns created with round_number=0 would
-    // otherwise never show as Active.
     const { error: campUpdateErr } = await admin
       .from("campaigns")
       .update({ round_number: 1 })
       .eq("id", campaign_id);
     if (campUpdateErr) {
       console.error("[start-campaign] campaigns round_number update error:", campUpdateErr.message);
-      // Non-fatal: round row exists, log but don't fail the response
     }
 
     return json(200, { ok: true, allocated });
