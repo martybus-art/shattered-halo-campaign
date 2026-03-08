@@ -325,6 +325,7 @@ export default function CampaignsPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [selectedRuleset, setSelectedRuleset]   = useState<string>("");
   const [loading, setLoading]                   = useState(true);
+  const [authChecked, setAuthChecked]           = useState(false);
 
   // Form fields
   const [campaignName, setCampaignName]           = useState("");
@@ -389,7 +390,11 @@ export default function CampaignsPage() {
     setLoading(true);
     try {
       const { data: userResp } = await supabase.auth.getUser();
-      if (!userResp.user) return;
+      if (!userResp.user) {
+        window.location.href = "/";
+        return;
+      }
+      setAuthChecked(true);
 
       const { data: tpls, error: te } = await supabase
         .from("templates").select("id,name,description").order("created_at", { ascending: false });
@@ -551,6 +556,18 @@ export default function CampaignsPage() {
   };
 
   // -- Render ----------------------------------------------------------------
+
+  // Show spinner until auth is confirmed — prevents unauthenticated users
+  // from seeing the form before the redirect fires.
+  if (!authChecked) {
+    return (
+      <Frame title="Create Campaign" currentPage="campaigns">
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
+        </div>
+      </Frame>
+    );
+  }
 
   return (
     <Frame title="Create Campaign" currentPage="campaigns">
