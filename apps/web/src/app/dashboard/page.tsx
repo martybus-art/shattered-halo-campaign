@@ -3,6 +3,17 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-08 — SECURITY: authChecked state added. load() now redirects
+//                unauthenticated users to / immediately rather than silently
+//                rendering an empty page. Spinner shown while auth resolves.
+//   2026-03-08 — FEATURE: War Bulletin now shows the 5 most recent public posts
+//                rather than just the latest one. Posts tagged "chronicle" show
+//                a ✦ Chronicle badge; posts tagged "alliance" show a ⚜ Pact badge.
+//                Post type updated to include `tags` field.
+//   2026-03-08 — FEATURE: Realtime subscription on player_state for the current
+//                user. NIP and NCP balances in the Faction Resources card update
+//                live when resolve-conflict (or any other edge function) writes
+//                to player_state — no page refresh required.
 //   2026-03-07 -- FIX: Dashboard now also queries player_state_secret for
 //                 secret_location. Location card shows the player's real
 //                 starting location (zone:sector from secret_location) when
@@ -124,7 +135,17 @@ type PlayerState = {
 };
 
 type Round  = { stage: string };
-type Post   = { id: string; title: string; body: string; round_number: number; created_at: string };
+
+// tags is a jsonb array from the DB — typed as string[] for our purposes.
+type Post   = {
+  id:           string;
+  title:        string;
+  body:         string;
+  round_number: number;
+  created_at:   string;
+  tags:         string[];
+};
+
 type Spend  = { spend_type: string; nip_spent: number };
 type Member = { user_id: string; commander_name: string | null; faction_name: string | null; role: string };
 type Sector = { zone_key: string; sector_key: string; owner_user_id: string | null; revealed_public: boolean };
@@ -153,6 +174,25 @@ const PLAYER_COLOURS = [
   "bg-teal-500/25 border-teal-400/50 text-teal-300",
 ];
 
+// Post tag badge — visual indicator for chronicle vs alliance vs plain posts
+function PostTagBadge({ tags }: { tags: string[] }) {
+  if (tags.includes("alliance")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/30 bg-brass/10 text-brass/70 font-mono uppercase tracking-wider">
+        ⚜ Pact
+      </span>
+    );
+  }
+  if (tags.includes("chronicle")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
+        ✦ Chronicle
+      </span>
+    );
+  }
+  return null;
+}
+
 // -- Main Component ---------------------------------------------------------
 
 export default function Dashboard() {
@@ -161,12 +201,13 @@ export default function Dashboard() {
   // campaignId is read directly from URL so nav links are always populated
   const [campaignId] = useState<string>(() => bootstrapCampaignId());
 
-  const [authChecked, setAuthChecked]         = useState(false);
+  const [authChecked,     setAuthChecked]     = useState(false);
   const [campaign,        setCampaign]        = useState<Campaign | null>(null);
   const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
   const [round,           setRound]           = useState<Round | null>(null);
   const [role,            setRole]            = useState<string>("player");
-  const [bulletin,        setBulletin]        = useState<Post | null>(null);
+  // Bulletin now holds the 5 most recent public posts instead of just the latest
+  const [bulletinPosts,   setBulletinPosts]   = useState<Post[]>([]);
   const [spends,          setSpends]          = useState<Spend[]>([]);
   const [mapUrl,          setMapUrl]          = useState<string | null>(null);
   const [sectors,         setSectors]         = useState<Sector[]>([]);
@@ -257,12 +298,13 @@ export default function Dashboard() {
       .eq("campaign_id", cid).eq("round_number", c.round_number).maybeSingle();
     setRound(r ?? null);
 
-    // 5. War bulletin (latest public post)
-    const { data: post } = await supabase
-      .from("posts").select("id,title,body,round_number,created_at")
+    // 5. War bulletin — last 5 public posts, newest first.
+    //    Includes tags so the UI can render chronicle/alliance badges.
+    const { data: posts } = await supabase
+      .from("posts").select("id,title,body,round_number,created_at,tags")
       .eq("campaign_id", cid).eq("visibility", "public")
-      .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    setBulletin(post ?? null);
+      .order("created_at", { ascending: false }).limit(5);
+    setBulletinPosts((posts ?? []) as Post[]);
 
     // 6. My spends this round
     const { data: spendRows } = await supabase
@@ -316,6 +358,47 @@ export default function Dashboard() {
       await load();
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -- Realtime: player_state NIP/NCP live updates --------------------------
+  // Subscribes once uid is available (set inside load()). Updates the
+  // playerState balance in-place so the Faction Resources card reflects
+  // changes from resolve-conflict and any other edge function immediately,
+  // without needing a page refresh.
+  useEffect(() => {
+    if (!uid || !campaignId) return;
+
+    const channel = supabase
+      .channel(`player_state_live_${uid}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "player_state",
+          filter: `user_id=eq.${uid}`,
+        },
+        (payload) => {
+          const updated = payload.new as any;
+          // Only apply if this update is for our campaign
+          if (updated.campaign_id !== campaignId) return;
+          setPlayerState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  nip:    updated.nip    ?? prev.nip,
+                  ncp:    updated.ncp    ?? prev.ncp,
+                  status: updated.status ?? prev.status,
+                }
+              : null
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [uid, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // -- Purchase cart --------------------------------------------------------
 
@@ -472,6 +555,7 @@ export default function Dashboard() {
 
   const isLeadOrAdmin = role === "lead" || role === "admin";
 
+  // Auth loading gate — show spinner until getUser() resolves
   if (!authChecked) {
     return (
       <Frame title="Command Throne" currentPage="dashboard">
@@ -594,20 +678,38 @@ export default function Dashboard() {
             )}
           </Card>
 
-          {/* War Bulletin */}
+          {/* War Bulletin — last 5 public posts */}
           <Card title="War Bulletin">
-            {bulletin ? (
-              <div className="space-y-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-parchment font-semibold leading-snug">{bulletin.title}</p>
-                  <span className="shrink-0 text-xs text-parchment/30 font-mono">R{bulletin.round_number}</span>
-                </div>
-                <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
-                  {bulletin.body.length > 600 ? bulletin.body.slice(0, 600) + "..." : bulletin.body}
-                </p>
-                <p className="text-parchment/25 text-xs">
-                  {new Date(bulletin.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
-                </p>
+            {bulletinPosts.length > 0 ? (
+              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
+                {bulletinPosts.map((post, idx) => {
+                  const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
+                  return (
+                    <div
+                      key={post.id}
+                      className={idx > 0 ? "pt-4 border-t border-brass/10" : ""}
+                    >
+                      {/* Title row */}
+                      <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
+                        <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <PostTagBadge tags={tags} />
+                          <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
+                        </div>
+                      </div>
+                      {/* Body — truncated for older posts to keep the card scannable */}
+                      <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
+                        {idx === 0
+                          ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
+                          : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
+                        }
+                      </p>
+                      <p className="text-parchment/25 text-xs mt-1">
+                        {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
@@ -624,7 +726,7 @@ export default function Dashboard() {
             {playerState ? (
               <div className="space-y-4">
 
-                {/* NIP / NCP balances */}
+                {/* NIP / NCP balances — updated live via realtime subscription */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="px-3 py-2.5 rounded bg-brass/10 border border-brass/25 text-center">
                     <p className="text-xs text-parchment/40 uppercase tracking-widest">NIP</p>

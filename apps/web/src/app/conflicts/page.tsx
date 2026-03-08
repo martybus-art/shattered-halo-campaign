@@ -2,6 +2,20 @@
 // src/app/conflicts/page.tsx
 //
 // changelog:
+//   2026-03-08 — SECURITY: authChecked state added. load() now redirects
+//                unauthenticated users to / immediately rather than silently
+//                rendering an empty page. Spinner shown while auth resolves.
+//   2026-03-08 — FEATURE: Alliance / Ceasefire system. Involved players can
+//                now propose, withdraw, accept, or decline a ceasefire pact
+//                on any scheduled conflict. Accepting calls the form-alliance
+//                edge function which resolves the conflict as "allied" and
+//                posts a public announcement to the War Bulletin.
+//                Propose/withdraw/decline call the propose-alliance edge
+//                function (admin-side, no client-side conflict UPDATE needed).
+//   2026-03-08 — FEATURE: Battle Chronicle narratives are now also published
+//                to the War Bulletin (posts table) by the generate-narrative
+//                edge function. A "✓ Posted to War Bulletin" confirmation is
+//                shown after generation succeeds.
 //   2026-03-08 — SECURITY: replaced ?campaign=UUID URL pattern with
 //                bootstrapCampaignId() from campaignSession. Campaign ID is
 //                now stored in sessionStorage and wiped from the URL bar on
@@ -26,6 +40,7 @@ type Conflict = {
   mission_status: string;
   twist_tags: string[];
   status: string;
+  alliance_proposed_by: string | null;
 };
 
 type Mission = {
@@ -98,6 +113,11 @@ export default function ConflictsPage() {
   // Narrative
   const [generatingFor, setGeneratingFor]     = useState<string | null>(null);
   const [narratives, setNarratives]           = useState<Record<string, string>>({});
+  const [narrativePublished, setNarrativePublished] = useState<Record<string, boolean>>({});
+
+  // Alliance state
+  const [allianceWorking, setAllianceWorking] = useState<string | null>(null);
+  const [allianceStatus, setAllianceStatus]   = useState<Record<string, string>>({});
 
   // ── Load ────────────────────────────────────────────────────────────────────
   const load = async (cid: string) => {
@@ -163,13 +183,13 @@ export default function ConflictsPage() {
     if (campaignId) load(campaignId);
   }, [campaignId]);
 
-  // ── Session token helper ────────────────────────────────────────────────────
+  // ── Session token helper ─────────────────────────────────────────────────────
   const getToken = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token ?? null;
   };
 
-  // ── Mission influence ───────────────────────────────────────────────────────
+  // ── Mission influence ────────────────────────────────────────────────────────
   const submitInfluence = async (
     conflictId: string,
     type: "veto" | "choose" | "preference" | "twist",
@@ -192,7 +212,7 @@ export default function ConflictsPage() {
     setPickedMission("");
   };
 
-  // ── Report battle result ────────────────────────────────────────────────────
+  // ── Report battle result ─────────────────────────────────────────────────────
   const submitResult = async (conflict: Conflict) => {
     if (!uid || !winnerPick) return;
     setSubmittingResult(true);
@@ -264,10 +284,11 @@ export default function ConflictsPage() {
     }
   };
 
-  // ── Generate battle narrative ───────────────────────────────────────────────
+  // ── Generate battle narrative ────────────────────────────────────────────────
   const generateNarrative = async (conflict: Conflict) => {
     setGeneratingFor(conflict.id);
     setNarratives((prev) => ({ ...prev, [conflict.id]: "" }));
+    setNarrativePublished((prev) => ({ ...prev, [conflict.id]: false }));
     try {
       const token = await getToken();
       if (!token) { setGeneratingFor(null); return; }
@@ -301,13 +322,29 @@ export default function ConflictsPage() {
         "Flowing prose only — no markdown headers or bullet points.",
       ].filter(Boolean).join("\n");
 
+      // Chronicle title used for the War Bulletin post
+      const chronicle_title =
+        "Chronicle: " + titleCase(conflict.zone_key) + " — " +
+        conflict.sector_key.toUpperCase() + "  (Round " + conflict.round_number + ")";
+
       const { data, error } = await supabase.functions.invoke("generate-narrative", {
-        body: { prompt, max_tokens: 800 },
+        body: {
+          prompt,
+          max_tokens: 800,
+          // Pass context so the edge function can also publish to the War Bulletin
+          conflict_id: conflict.id,
+          campaign_id: conflict.campaign_id,
+          round_number: conflict.round_number,
+          chronicle_title,
+        },
         headers: { Authorization: "Bearer " + token },
       });
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error ?? "Generation failed");
+
       setNarratives((prev) => ({ ...prev, [conflict.id]: data.text ?? "" }));
+      setNarrativePublished((prev) => ({ ...prev, [conflict.id]: data.published === true }));
+
     } catch (e: any) {
       setNarratives((prev) => ({
         ...prev,
@@ -318,7 +355,50 @@ export default function ConflictsPage() {
     }
   };
 
-  // ── Result report form ──────────────────────────────────────────────────────
+  // ── Alliance actions ─────────────────────────────────────────────────────────
+  const allianceAction = async (
+    conflict: Conflict,
+    action: "propose" | "withdraw" | "decline" | "accept"
+  ) => {
+    if (!uid) return;
+    setAllianceWorking(conflict.id);
+    setAllianceStatus((prev) => ({ ...prev, [conflict.id]: "" }));
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Session expired — refresh.");
+
+      if (action === "accept") {
+        // Accept goes to form-alliance which also posts to the bulletin
+        const { data, error } = await supabase.functions.invoke("form-alliance", {
+          body: { conflict_id: conflict.id },
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (error) throw error;
+        if (!data?.ok) throw new Error(data?.error ?? "Alliance failed");
+        setAllianceStatus((prev) => ({ ...prev, [conflict.id]: data.message ?? "Ceasefire pact formed." }));
+      } else {
+        // Propose, withdraw, or decline go to propose-alliance
+        const { data, error } = await supabase.functions.invoke("propose-alliance", {
+          body: { conflict_id: conflict.id, action },
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (error) throw error;
+        if (!data?.ok) throw new Error(data?.error ?? "Action failed");
+        setAllianceStatus((prev) => ({ ...prev, [conflict.id]: data.message ?? "Done." }));
+      }
+
+      await load(campaignId);
+    } catch (e: any) {
+      setAllianceStatus((prev) => ({
+        ...prev,
+        [conflict.id]: "Error: " + (e?.message ?? "Unknown"),
+      }));
+    } finally {
+      setAllianceWorking(null);
+    }
+  };
+
+  // ── Result report form ───────────────────────────────────────────────────────
   const renderResultForm = (conflict: Conflict) => {
     const isConfirming = !!(results[conflict.id] && !results[conflict.id].confirmed && results[conflict.id].reported_by !== uid);
     return (
@@ -407,7 +487,113 @@ export default function ConflictsPage() {
     );
   };
 
-  // ── Render conflict card ────────────────────────────────────────────────────
+  // ── Render alliance section ───────────────────────────────────────────────────
+  // Shown inside each conflict card for involved players when the conflict is
+  // still scheduled (not yet resolved or allied).
+  const renderAllianceSection = (conflict: Conflict) => {
+    if (!uid) return null;
+    const isInvolved = uid === conflict.player_a || uid === conflict.player_b;
+    if (!isInvolved) return null;
+
+    // Allied — show a read-only banner
+    if (conflict.status === "allied") {
+      return (
+        <div className="border-t border-brass/15 pt-3">
+          <div className="rounded border border-brass/30 bg-brass/5 px-3 py-2 flex items-center gap-2">
+            <span className="text-brass text-base">⚜</span>
+            <span className="text-parchment/80 text-sm">Ceasefire Pact — no battle took place. Both factions stood down.</span>
+          </div>
+        </div>
+      );
+    }
+
+    // Only offer alliance options on scheduled, unresolved conflicts
+    if (conflict.status !== "scheduled") return null;
+
+    const proposedByMe       = conflict.alliance_proposed_by === uid;
+    const proposedByOpponent = conflict.alliance_proposed_by !== null && conflict.alliance_proposed_by !== uid;
+    const isWorking          = allianceWorking === conflict.id;
+    const statusMsg          = allianceStatus[conflict.id];
+    const opponentLabel      = uid === conflict.player_a
+      ? memberLabel(members, conflict.player_b)
+      : memberLabel(members, conflict.player_a);
+
+    return (
+      <div className="border-t border-brass/15 pt-3">
+        <div className="text-xs text-parchment/40 uppercase tracking-widest mb-2">Ceasefire Negotiation</div>
+
+        {/* No proposal active — offer to propose */}
+        {!proposedByMe && !proposedByOpponent && (
+          <div className="space-y-2">
+            <p className="text-xs text-parchment/50 leading-snug">
+              Rather than fight, your factions may agree to a ceasefire. No battle takes place
+              and the engagement is stood down. A public announcement will be posted to the War Bulletin.
+            </p>
+            <button
+              disabled={isWorking}
+              className="px-3 py-1.5 rounded bg-brass/10 border border-brass/25 hover:bg-brass/20 text-xs transition-colors disabled:opacity-40"
+              onClick={() => allianceAction(conflict, "propose")}
+            >
+              {isWorking ? "Sending…" : "⚜ Propose Ceasefire"}
+            </button>
+          </div>
+        )}
+
+        {/* Current player proposed — waiting for opponent */}
+        {proposedByMe && (
+          <div className="space-y-2">
+            <div className="rounded border border-brass/20 bg-void/60 px-3 py-2">
+              <p className="text-sm text-parchment/70">
+                <span className="text-brass">⚜</span> Ceasefire proposed — awaiting response from{" "}
+                <span className="text-brass">{opponentLabel}</span>.
+              </p>
+            </div>
+            <button
+              disabled={isWorking}
+              className="text-xs text-parchment/40 hover:text-parchment/60 underline transition-colors disabled:opacity-40"
+              onClick={() => allianceAction(conflict, "withdraw")}
+            >
+              {isWorking ? "Withdrawing…" : "Withdraw proposal"}
+            </button>
+          </div>
+        )}
+
+        {/* Opponent proposed — offer to accept or decline */}
+        {proposedByOpponent && (
+          <div className="rounded border border-brass/25 bg-void/60 px-3 py-2 space-y-2">
+            <p className="text-sm text-parchment/80">
+              <span className="text-brass">{opponentLabel}</span> has proposed a ceasefire.
+              Accepting will stand down the engagement and post a public announcement.
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                disabled={isWorking}
+                className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold disabled:opacity-40 transition-colors"
+                onClick={() => allianceAction(conflict, "accept")}
+              >
+                {isWorking ? "Forming pact…" : "⚜ Accept Ceasefire"}
+              </button>
+              <button
+                disabled={isWorking}
+                className="px-3 py-1.5 rounded bg-void border border-blood/25 hover:border-blood/50 text-sm text-parchment/60 disabled:opacity-40 transition-colors"
+                onClick={() => allianceAction(conflict, "decline")}
+              >
+                {isWorking ? "Declining…" : "Decline"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {statusMsg && (
+          <p className={"mt-2 text-xs " + (statusMsg.startsWith("Error") ? "text-blood/80" : "text-parchment/50")}>
+            {statusMsg}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  // ── Render conflict card ──────────────────────────────────────────────────────
   const renderConflict = (conflict: Conflict) => {
     const existing        = results[conflict.id];
     const isInvolved      = uid === conflict.player_a || uid === conflict.player_b;
@@ -415,6 +601,7 @@ export default function ConflictsPage() {
     const isChoosingMs    = choosingMissionFor === conflict.id;
     const narrative       = narratives[conflict.id];
     const isGenerating    = generatingFor === conflict.id;
+    const wasPublished    = narrativePublished[conflict.id] ?? false;
     const mission         = missions.find((m) => m.id === conflict.mission_id);
     const alreadyReported = existing?.reported_by === uid;
     const confirmed       = existing?.confirmed ?? false;
@@ -463,70 +650,76 @@ export default function ConflictsPage() {
             </div>
           </div>
 
-          {/* Battle result status */}
-          <div className="border-t border-brass/15 pt-3">
-            <div className="text-xs text-parchment/40 uppercase tracking-widest mb-2">Battle Result</div>
+          {/* Ceasefire section — before battle result so players see it first */}
+          {renderAllianceSection(conflict)}
 
-            {confirmed ? (
-              <div className="rounded border border-brass/30 bg-brass/5 px-3 py-2">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-brass text-base">✓</span>
-                  <span className="text-parchment/80">
-                    {(existing?.outcome_json as any)?.disputed
-                      ? "Result disputed — awaiting lead adjudication"
-                      : existing?.winner_user_id
-                        ? memberLabel(members, existing.winner_user_id) + " victorious"
-                        : "Drawn engagement"
-                    }
-                  </span>
+          {/* Battle result status — hidden if allied */}
+          {conflict.status !== "allied" && (
+            <div className="border-t border-brass/15 pt-3">
+              <div className="text-xs text-parchment/40 uppercase tracking-widest mb-2">Battle Result</div>
+
+              {confirmed ? (
+                <div className="rounded border border-brass/30 bg-brass/5 px-3 py-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-brass text-base">✓</span>
+                    <span className="text-parchment/80">
+                      {(existing?.outcome_json as any)?.disputed
+                        ? "Result disputed — awaiting lead adjudication"
+                        : existing?.winner_user_id
+                          ? memberLabel(members, existing.winner_user_id) + " victorious"
+                          : "Drawn engagement"
+                      }
+                    </span>
+                  </div>
+                  {(existing?.outcome_json as any)?.notes && (
+                    <p className="mt-1 text-xs text-parchment/40 italic">
+                      "{(existing.outcome_json as any).notes}"
+                    </p>
+                  )}
                 </div>
-                {(existing?.outcome_json as any)?.notes && (
-                  <p className="mt-1 text-xs text-parchment/40 italic">
-                    "{(existing.outcome_json as any).notes}"
-                  </p>
-                )}
-              </div>
-            ) : existing && alreadyReported ? (
-              <p className="text-sm text-parchment/50 italic">
-                Your result is submitted — awaiting confirmation from {opponentLabel}.
-              </p>
-            ) : canConfirm ? (
-              <div className="rounded border border-brass/25 bg-void/60 px-3 py-2 space-y-2">
-                <p className="text-sm text-parchment/80">
-                  <span className="text-brass">{opponentLabel}</span> has reported a result.
-                  Select your outcome to confirm or dispute:
+              ) : existing && alreadyReported ? (
+                <p className="text-sm text-parchment/50 italic">
+                  Your result is submitted — awaiting confirmation from {opponentLabel}.
                 </p>
-                {!isReporting ? (
-                  <button
-                    className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                    onClick={() => { setReportingFor(conflict.id); setWinnerPick(""); }}
-                  >
-                    Confirm / Dispute Result
-                  </button>
-                ) : (
-                  renderResultForm(conflict)
-                )}
-              </div>
-            ) : conflict.status === "resolved" ? null : isInvolved && !isReporting ? (
-              <button
-                className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
-                onClick={() => { setReportingFor(conflict.id); setWinnerPick(""); setResultNotes(""); setNipEarned(2); setNcpEarned(0); }}
-              >
-                Report Result
-              </button>
-            ) : isReporting ? (
-              renderResultForm(conflict)
-            ) : null}
+              ) : canConfirm ? (
+                <div className="rounded border border-brass/25 bg-void/60 px-3 py-2 space-y-2">
+                  <p className="text-sm text-parchment/80">
+                    <span className="text-brass">{opponentLabel}</span> has reported a result.
+                    Select your outcome to confirm or dispute:
+                  </p>
+                  {!isReporting ? (
+                    <button
+                      className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
+                      onClick={() => { setReportingFor(conflict.id); setWinnerPick(""); }}
+                    >
+                      Confirm / Dispute Result
+                    </button>
+                  ) : (
+                    renderResultForm(conflict)
+                  )}
+                </div>
+              ) : conflict.status === "resolved" ? null : isInvolved && !isReporting ? (
+                <button
+                  className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm"
+                  onClick={() => { setReportingFor(conflict.id); setWinnerPick(""); setResultNotes(""); setNipEarned(2); setNcpEarned(0); }}
+                >
+                  Report Result
+                </button>
+              ) : isReporting ? (
+                renderResultForm(conflict)
+              ) : null}
 
-            {resultStatus[conflict.id] && (
-              <p className={"mt-2 text-xs " + (resultStatus[conflict.id].startsWith("Error") ? "text-blood/80" : "text-parchment/50")}>
-                {resultStatus[conflict.id]}
-              </p>
-            )}
-          </div>
+              {resultStatus[conflict.id] && (
+                <p className={"mt-2 text-xs " + (resultStatus[conflict.id].startsWith("Error") ? "text-blood/80" : "text-parchment/50")}>
+                  {resultStatus[conflict.id]}
+                </p>
+              )}
+            </div>
+          )}
 
-          {/* Mission influence */}
-          {conflict.mission_status !== "assigned" && isInvolved && (
+          {/* Mission influence — hidden if allied or resolved */}
+          {conflict.mission_status !== "assigned" && isInvolved &&
+           conflict.status !== "allied" && conflict.status !== "resolved" && (
             <div className="border-t border-brass/15 pt-3">
               <div className="text-xs text-parchment/40 uppercase tracking-widest mb-2">Mission Influence</div>
               <div className="flex flex-wrap gap-2">
@@ -613,12 +806,19 @@ export default function ConflictsPage() {
             {narrative && !isGenerating && (
               <div className="mt-2 rounded border border-brass/20 bg-void/60 px-3 py-3">
                 <p className="text-sm text-parchment/80 leading-relaxed whitespace-pre-wrap">{narrative}</p>
-                <button
-                  className="mt-2 text-xs text-parchment/30 hover:text-parchment/60 underline"
-                  onClick={() => navigator.clipboard.writeText(narrative)}
-                >
-                  Copy
-                </button>
+                <div className="mt-2 flex items-center gap-3 flex-wrap">
+                  <button
+                    className="text-xs text-parchment/30 hover:text-parchment/60 underline"
+                    onClick={() => navigator.clipboard.writeText(narrative)}
+                  >
+                    Copy
+                  </button>
+                  {wasPublished && (
+                    <span className="text-xs text-brass/70 flex items-center gap-1">
+                      <span>✓</span> Posted to War Bulletin
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -628,8 +828,9 @@ export default function ConflictsPage() {
     );
   };
 
-  // ── Page render ─────────────────────────────────────────────────────────────
+  // ── Page render ──────────────────────────────────────────────────────────────
 
+  // Auth loading gate — show spinner until getUser() resolves
   if (!authChecked) {
     return (
       <Frame title="Engagements" currentPage="conflicts">

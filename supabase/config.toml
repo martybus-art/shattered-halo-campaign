@@ -442,3 +442,9 @@ verify_jwt = false
 
 [functions.distribute-income]
 verify_jwt = false
+
+[functions.propose-alliance]
+verify_jwt = false
+
+[functions.form-alliance]
+verify_jwt = false
