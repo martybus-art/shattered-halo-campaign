@@ -558,7 +558,7 @@ export default function Dashboard() {
   // Auth loading gate — show spinner until getUser() resolves
   if (!authChecked) {
     return (
-      <Frame title="Command Throne" currentPage="dashboard">
+      <Frame title="Command Throne" currentPage="dashboard" hideNewCampaign>
         <div className="flex items-center justify-center py-24">
           <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
         </div>
@@ -569,7 +569,7 @@ export default function Dashboard() {
   // No campaign in session (e.g. opened in a new tab without a ?campaign= link)
   if (!campaignId) {
     return (
-      <Frame title="Command Throne" currentPage="dashboard">
+      <Frame title="Command Throne" currentPage="dashboard" hideNewCampaign>
         <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
           <p className="text-parchment/50">No campaign selected.</p>
           <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">

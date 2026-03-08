@@ -597,6 +597,9 @@ export default function LeadControls() {
     if (!uid) { window.location.href = "/"; return; }
     setAuthChecked(true);
 
+    // No campaign in session — auth passed, show the no-campaign fallback
+    if (!cid) return;
+
     const { data: mem } = await supabase
       .from("campaign_members").select("role")
       .eq("campaign_id", cid).eq("user_id", uid).single();
@@ -657,7 +660,7 @@ export default function LeadControls() {
     } catch { /* non-fatal */ }
   };
 
-  useEffect(() => { if (campaignId) load(campaignId); }, []); // eslint-disable-line
+  useEffect(() => { load(campaignId); }, []); // eslint-disable-line
 
   const getToken = async (): Promise<string | null> => {
     const { data: sess } = await supabase.auth.getSession();
@@ -855,7 +858,7 @@ export default function LeadControls() {
 
   if (!authChecked) {
     return (
-      <Frame title="Lead Controls" currentPage="lead">
+      <Frame title="Lead Controls" currentPage="lead" hideNewCampaign>
         <div className="flex items-center justify-center py-24">
           <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
         </div>
@@ -865,7 +868,7 @@ export default function LeadControls() {
 
   if (!campaignId) {
     return (
-      <Frame title="Lead Controls" currentPage="lead">
+      <Frame title="Lead Controls" currentPage="lead" hideNewCampaign>
         <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
           <p className="text-parchment/50">No campaign selected.</p>
           <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">
