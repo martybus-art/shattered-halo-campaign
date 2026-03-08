@@ -997,7 +997,6 @@ export default function MapPage() {
           )}
 
         </div>
-        {/* end Hololith + Theatre Map grid */}
         )}
 
         {/* ── My Units ── */}
