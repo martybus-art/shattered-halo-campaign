@@ -3,6 +3,11 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-09 — LAYOUT: Restructured from 2 stacked rows to a single 2-column grid.
+//                LEFT col: Your Status + War Bulletin.
+//                RIGHT col: Faction Resources + Theatre Map (directly stacked, no gap).
+//              — UX: Removed "Fog of war" disclaimer text from the Theatre Map
+//                territory legend (both the visible-territory and no-territory variants).
 //   2026-03-08 — SECURITY: authChecked state added. load() now redirects
 //                unauthenticated users to / immediately rather than silently
 //                rendering an empty page. Spinner shown while auth resolves.
@@ -589,8 +594,12 @@ export default function Dashboard() {
     <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
       <div className="space-y-6">
 
-        {/* ── Row 1: Your Status (left) + Faction Resources (right) ─────────── */}
+
+        {/* ── Main 2-column layout ─────────────────────────────────────────── */}
         <div className="grid md:grid-cols-2 gap-6 items-start">
+
+          {/* ══ LEFT COLUMN: Your Status + War Bulletin ══ */}
+          <div className="space-y-6">
 
           {/* Your Status */}
           <Card title="Your Status">
@@ -682,6 +691,51 @@ export default function Dashboard() {
               <p className="text-parchment/40 text-sm italic">Loading status...</p>
             )}
           </Card>
+
+          {/* War Bulletin — last 5 public posts */}
+            {bulletinPosts.length > 0 ? (
+              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
+                {bulletinPosts.map((post, idx) => {
+                  const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
+                  return (
+                    <div
+                      key={post.id}
+                      className={idx > 0 ? "pt-4 border-t border-brass/10" : ""}
+                    >
+                      {/* Title row */}
+                      <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
+                        <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <PostTagBadge tags={tags} />
+                          <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
+                        </div>
+                      </div>
+                      {/* Body — truncated for older posts to keep the card scannable */}
+                      <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
+                        {idx === 0
+                          ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
+                          : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
+                        }
+                      </p>
+                      <p className="text-parchment/25 text-xs mt-1">
+                        {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
+            )}
+          </Card>
+
+
+
+          </div>
+          {/* end LEFT COLUMN */}
+
+          {/* ══ RIGHT COLUMN: Faction Resources + Theatre Map ══ */}
+          <div className="space-y-6">
 
           {/* Faction Resources */}
           <Card title="Faction Resources">
@@ -801,52 +855,6 @@ export default function Dashboard() {
             )}
           </Card>
 
-
-        </div>
-
-        {/* ── Row 2: War Bulletin (left) + Campaign Map (right) ───────────── */}
-        <div className="grid md:grid-cols-2 gap-6 items-start">
-
-          {/* War Bulletin — last 5 public posts */}
-          <Card title="War Bulletin">
-            {bulletinPosts.length > 0 ? (
-              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
-                {bulletinPosts.map((post, idx) => {
-                  const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
-                  return (
-                    <div
-                      key={post.id}
-                      className={idx > 0 ? "pt-4 border-t border-brass/10" : ""}
-                    >
-                      {/* Title row */}
-                      <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
-                        <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <PostTagBadge tags={tags} />
-                          <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
-                        </div>
-                      </div>
-                      {/* Body — truncated for older posts to keep the card scannable */}
-                      <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
-                        {idx === 0
-                          ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
-                          : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
-                        }
-                      </p>
-                      <p className="text-parchment/25 text-xs mt-1">
-                        {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
-            )}
-          </Card>
-
-
-          {/* Campaign Map */}
           <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
             {mapUrl ? (
               <div className="space-y-3">
@@ -897,17 +905,9 @@ export default function Dashboard() {
                         );
                       })}
                     </div>
-                    <p className="text-parchment/20 text-xs mt-2 italic">
-                      Fog of war — only your sectors and publicly revealed sectors are shown.
-                    </p>
                   </div>
                 )}
 
-                {territoryByZone.size === 0 && (
-                  <p className="text-parchment/30 text-xs italic">
-                    No territory data visible. Fog of war conceals all positions.
-                  </p>
-                )}
               </div>
             ) : campaign?.map_id ? (
               <p className="text-parchment/40 text-sm italic">Loading map...</p>
@@ -918,7 +918,11 @@ export default function Dashboard() {
             )}
           </Card>
 
+          </div>
+          {/* end RIGHT COLUMN */}
+
         </div>
+        {/* end main 2-column layout */}
 
         {/* ── Row 3: Catchup Offer (conditional — underdog only) ───────── */}
         {underdogChoice && (

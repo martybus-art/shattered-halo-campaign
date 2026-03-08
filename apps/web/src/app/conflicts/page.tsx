@@ -2,6 +2,12 @@
 // src/app/conflicts/page.tsx
 //
 // changelog:
+//   2026-03-09 — FIX: \u2026 in bare JSX text "Consulting the war records" rendered
+//                as literal \u2026 — changed to &hellip; HTML entity in both pre and
+//                post narrative loading states.
+//              — FEATURE: Pre-Battle Dispatch now has "Save to Private Bulletin"
+//                button. Inserts a visibility:'private' post (audience_user_id=uid)
+//                into the posts table. Confirmed with ✓ indicator once saved.
 //   2026-03-09 — LAYOUT: Pre-Battle Dispatch and Battle Result moved to LEFT column
 //                (before Ceasefire). RIGHT column now: Mission info → Battlefield SVG →
 //                Post-Battle Chronicle. JSX text \u2014 escape fixed to &mdash;.
@@ -416,6 +422,7 @@ export default function ConflictsPage() {
   // Pre-battle chronicle
   const [preNarratives, setPreNarratives]       = useState<Record<string, string>>({});
   const [generatingPreFor, setGeneratingPreFor] = useState<string | null>(null);
+  const [savedPreFor, setSavedPreFor]           = useState<Record<string, boolean>>({});
 
   // Post-battle chronicle
   const [postNarratives, setPostNarratives]        = useState<Record<string, string>>({});
@@ -724,6 +731,32 @@ export default function ConflictsPage() {
     }
   };
 
+  // ── Save Pre-Battle Dispatch to private War Bulletin ──────────────────────
+  // Inserts a visibility:'private' post readable only by the current player.
+
+  const savePreNarrativeToBulletin = async (conflict: Conflict, text: string) => {
+    try {
+      const supabase = supabaseBrowser();
+      const title = "Dispatch: " + titleCase(conflict.zone_key)
+        + " \u2014 Sector " + conflict.sector_key.toUpperCase()
+        + " (Round " + conflict.round_number + ")";
+      const { error } = await supabase.from("posts").insert({
+        campaign_id:      conflict.campaign_id,
+        round_number:     conflict.round_number,
+        visibility:       "private",
+        audience_user_id: uid,
+        title,
+        body:             text,
+        tags:             ["dispatch"],
+        created_by:       uid,
+      });
+      if (error) throw error;
+      setSavedPreFor((prev) => ({ ...prev, [conflict.id]: true }));
+    } catch (e: any) {
+      console.error("savePreNarrative:", e?.message);
+    }
+  };
+
   // ── Alliance actions ──────────────────────────────────────────────────────
 
   const allianceAction = async (
@@ -974,6 +1007,7 @@ export default function ConflictsPage() {
     const isGeneratingPre  = generatingPreFor  === conflict.id;
     const isGeneratingPost = generatingPostFor === conflict.id;
     const wasPublished     = postPublished[conflict.id] ?? false;
+    const wasSavedPre      = savedPreFor[conflict.id] ?? false;
     const mission          = missions.find((m) => m.id === conflict.mission_id);
     const alreadyReported  = existing?.reported_by === uid;
     const confirmed        = existing?.confirmed ?? false;
@@ -1127,7 +1161,7 @@ export default function ConflictsPage() {
                     <div className="h-2.5 rounded bg-brass/10 animate-pulse w-5/6" />
                     <div className="h-2.5 rounded bg-brass/10 animate-pulse w-4/5" />
                     <p className="text-xs text-parchment/25 italic mt-1">
-                      Consulting the war records\u2026
+                      Consulting the war records&hellip;
                     </p>
                   </div>
                 )}
@@ -1137,12 +1171,26 @@ export default function ConflictsPage() {
                     <p className="text-sm text-parchment/80 leading-relaxed whitespace-pre-wrap">
                       {preNarrative}
                     </p>
-                    <button
-                      className="mt-2 text-xs text-parchment/30 hover:text-parchment/60 underline"
-                      onClick={() => navigator.clipboard.writeText(preNarrative)}
-                    >
-                      Copy
-                    </button>
+                    <div className="mt-2 flex items-center gap-3 flex-wrap">
+                      <button
+                        className="text-xs text-parchment/30 hover:text-parchment/60 underline"
+                        onClick={() => navigator.clipboard.writeText(preNarrative)}
+                      >
+                        Copy
+                      </button>
+                      {wasSavedPre ? (
+                        <span className="text-xs text-brass/70 flex items-center gap-1">
+                          <span>&#10003;</span> Saved to Private Bulletin
+                        </span>
+                      ) : (
+                        <button
+                          className="text-xs text-parchment/40 hover:text-brass/70 border border-parchment/15 hover:border-brass/30 px-2 py-0.5 rounded transition-colors"
+                          onClick={() => savePreNarrativeToBulletin(conflict, preNarrative)}
+                        >
+                          &#128196; Save to Private Bulletin
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1291,7 +1339,7 @@ export default function ConflictsPage() {
                     <div className="h-2.5 rounded bg-brass/10 animate-pulse w-5/6" />
                     <div className="h-2.5 rounded bg-brass/10 animate-pulse w-4/5" />
                     <p className="text-xs text-parchment/25 italic mt-1">
-                      Consulting the war records\u2026
+                      Consulting the war records&hellip;
                     </p>
                   </div>
                 )}
