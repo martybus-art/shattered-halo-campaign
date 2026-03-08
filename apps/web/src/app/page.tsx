@@ -254,13 +254,15 @@ export default function Home() {
               </button>
             </div>
           </Card>
-          <Card title="What this is">
-            <ul className="list-disc pl-5 space-y-2 text-parchment/80">
-              <li>Secret movement + fog-of-war map reveals</li>
-              <li>NIP/NCP economies with audit ledger</li>
-              <li>Conflicts auto-detected, missions assigned with NIP influence</li>
-              <li>Instability clock drives escalation and endgame</li>
-            </ul>
+          <Card title="What is Shattered Halo?">
+            <p className="text-parchment/80 leading-relaxed">
+              Shattered Halo is a narrative campaign tool for Warhammer 40,000 skirmish play.
+              Rival factions battle across a range of theatre maps — ring worlds, void ships,
+              continental warzones and more — capturing sectors, moving forces in secret, and
+              clashing in tabletop battles that decide territory. Between rounds, commanders
+              spend Narrative Influence Points to shape missions, deploy units, and outmanoeuvre
+              rivals, while a rising Instability clock escalates the campaign toward a brutal endgame.
+            </p>
           </Card>
         </div>
       </Frame>
