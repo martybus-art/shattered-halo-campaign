@@ -21,6 +21,8 @@ type FrameProps = {
   role?: string;
   /** Current page key — used to highlight the active nav item */
   currentPage?: "home" | "dashboard" | "map" | "conflicts" | "lead" | "campaigns";
+  /** Hide the + New Campaign link (e.g. on the unauthenticated landing view) */
+  hideNewCampaign?: boolean;
 };
 
 // Campaign-specific nav items — paths only, no ?campaign= param
@@ -36,7 +38,7 @@ function navTo(path: string, campaignId: string) {
   window.location.href = path;
 }
 
-export function Frame({ title, children, right, campaignId, role, currentPage }: FrameProps) {
+export function Frame({ title, children, right, campaignId, role, currentPage, hideNewCampaign }: FrameProps) {
   const isLead = role === "lead" || role === "admin";
 
   const activeClass    = "bg-brass/30 text-brass border border-brass/50";
@@ -101,13 +103,15 @@ export function Frame({ title, children, right, campaignId, role, currentPage }:
             </button>
           )}
 
-          {/* + New Campaign — always visible, right-aligned */}
-          <a
-            href="/campaigns"
-            className={`${baseNavClass} ml-auto ${currentPage === "campaigns" ? activeClass : inactiveClass}`}
-          >
-            + New Campaign
-          </a>
+          {/* + New Campaign — hidden when not authenticated */}
+          {!hideNewCampaign && (
+            <a
+              href="/campaigns"
+              className={`${baseNavClass} ml-auto ${currentPage === "campaigns" ? activeClass : inactiveClass}`}
+            >
+              + New Campaign
+            </a>
+          )}
 
         </nav>
       </header>

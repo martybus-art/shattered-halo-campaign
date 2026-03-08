@@ -224,7 +224,7 @@ export default function Home() {
   // ── Not signed in ─────────────────────────────────────────
   if (authLoading) {
     return (
-      <Frame title="Access">
+      <Frame title="Access" hideNewCampaign>
         <div className="flex items-center justify-center py-24">
           <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
         </div>
@@ -234,7 +234,7 @@ export default function Home() {
 
   if (!userEmail) {
     return (
-      <Frame title="Access">
+      <Frame title="Access" hideNewCampaign>
         <div className="grid md:grid-cols-2 gap-6">
           <Card title="Enter the Halo">
             <div className="space-y-3">
