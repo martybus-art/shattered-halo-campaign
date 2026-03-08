@@ -172,6 +172,7 @@ export default function MapPage() {
   const [mapId,        setMapId]        = useState<string | null>(null);
   const [role,         setRole]         = useState<string>("player");
   const [uid,          setUid]          = useState<string>("");
+  const [authChecked,  setAuthChecked]  = useState(false);
   const [zones,        setZones]        = useState<MapZone[]>([]);
   const [sectors,      setSectors]      = useState<Sector[]>([]);
   const [myUnits,      setMyUnits]      = useState<Unit[]>([]);
@@ -212,8 +213,10 @@ export default function MapPage() {
     setPageError(null);
     try {
       const { data: userResp } = await supabase.auth.getUser();
-      const userId = userResp.user?.id ?? "";
+      if (!userResp.user) { window.location.href = "/"; return; }
+      const userId = userResp.user.id;
       setUid(userId);
+      setAuthChecked(true);
 
       // Role
       if (userId) {
@@ -471,6 +474,16 @@ export default function MapPage() {
     myMoves.find((m) => m.unit_id === unitId) ?? null;
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  if (!authChecked) {
+    return (
+      <Frame title="Tactical Hololith" currentPage="map">
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
+        </div>
+      </Frame>
+    );
+  }
 
   if (!campaignId) {
     return (

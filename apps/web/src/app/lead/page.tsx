@@ -556,6 +556,7 @@ export default function LeadControls() {
   const [campaign, setCampaign]         = useState<Campaign | null>(null);
   const [round, setRound]               = useState<{ stage: string } | null>(null);
   const [role, setRole]                 = useState<string>("player");
+  const [authChecked, setAuthChecked]   = useState(false);
   const [members, setMembers]           = useState<Member[]>([]);
   const [inviteEmails, setInviteEmails]   = useState<string>("");
   const [inviteStatus, setInviteStatus]   = useState<string>("");
@@ -593,7 +594,8 @@ export default function LeadControls() {
   const load = async (cid: string) => {
     const { data: userResp } = await supabase.auth.getUser();
     const uid = userResp.user?.id;
-    if (!uid) return;
+    if (!uid) { window.location.href = "/"; return; }
+    setAuthChecked(true);
 
     const { data: mem } = await supabase
       .from("campaign_members").select("role")
@@ -850,6 +852,16 @@ export default function LeadControls() {
     r === "lead" ? "text-brass" : r === "admin" ? "text-blood/80" : "text-parchment/50";
 
   // -- Render ----------------------------------------------------------------
+
+  if (!authChecked) {
+    return (
+      <Frame title="Lead Controls" currentPage="lead">
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
+        </div>
+      </Frame>
+    );
+  }
 
   if (!campaignId) {
     return (

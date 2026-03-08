@@ -161,6 +161,7 @@ export default function Dashboard() {
   // campaignId is read directly from URL so nav links are always populated
   const [campaignId] = useState<string>(() => bootstrapCampaignId());
 
+  const [authChecked, setAuthChecked]         = useState(false);
   const [campaign,        setCampaign]        = useState<Campaign | null>(null);
   const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
   const [round,           setRound]           = useState<Round | null>(null);
@@ -216,7 +217,8 @@ export default function Dashboard() {
   // -- Load all dashboard data ----------------------------------------------
   const load = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) { window.location.href = "/"; return; }
+    setAuthChecked(true);
     setUid(user.id);
     const cid = campaignId;
     if (!cid) return;
@@ -469,6 +471,16 @@ export default function Dashboard() {
   // -- Render ----------------------------------------------------------------
 
   const isLeadOrAdmin = role === "lead" || role === "admin";
+
+  if (!authChecked) {
+    return (
+      <Frame title="Command Throne" currentPage="dashboard">
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
+        </div>
+      </Frame>
+    );
+  }
 
   // No campaign in session (e.g. opened in a new tab without a ?campaign= link)
   if (!campaignId) {

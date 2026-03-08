@@ -73,6 +73,7 @@ export default function ConflictsPage() {
 
   const [uid, setUid]                   = useState<string | null>(null);
   const [role, setRole]                 = useState("player");
+  const [authChecked, setAuthChecked]   = useState(false);
   const [roundNumber, setRoundNumber]   = useState(0);
   const [templateId, setTemplateId]     = useState<string | null>(null);
   const [conflicts, setConflicts]       = useState<Conflict[]>([]);
@@ -102,7 +103,9 @@ export default function ConflictsPage() {
   const load = async (cid: string) => {
     const { data: userResp } = await supabase.auth.getUser();
     const currentUid = userResp.user?.id ?? null;
+    if (!currentUid) { window.location.href = "/"; return; }
     setUid(currentUid);
+    setAuthChecked(true);
 
     if (currentUid) {
       const { data: mem } = await supabase
@@ -626,6 +629,16 @@ export default function ConflictsPage() {
   };
 
   // ── Page render ─────────────────────────────────────────────────────────────
+
+  if (!authChecked) {
+    return (
+      <Frame title="Engagements" currentPage="conflicts">
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
+        </div>
+      </Frame>
+    );
+  }
 
   // No campaign in session (e.g. opened in a new tab without a ?campaign= link)
   if (!campaignId) {
