@@ -1,667 +1,537 @@
 "use client";
-// apps/web/src/app/dashboard/page.tsx
-// Player dashboard: status, war bulletin, faction resources, campaign map.
+// src/app/page.tsx
 //
 // changelog:
-//   2026-03-05 -- Removed My Campaigns card (campaignId from URL param).
-//                 Removed Catch-up Choice card (now a conditional card driven
-//                 by lead offer). Status (top-left) + War Bulletin (top-right).
-//                 Added stage strip to Status card. Added Faction Resources
-//                 card with NIP/NCP balances and spend-phase shopping cart.
-//                 Added Campaign Map preview card with territory legend.
-//                 Underdog catchup offer appears as dedicated card when pending.
-//                 Removed prompt-copy helper functions. Cleaned up debug code.
-//                 Removed Quick Links card. Nav fixed: Frame now receives
-//                 campaignId and role props so all nav links render correctly.
-//                 Theatre Map image is now a link to /map page.
+//   2026-03-08 — SECURITY: all campaign nav anchors (Dashboard, Map, Conflicts,
+//                Lead Controls) converted to buttons that call setCampaignSession
+//                then navigate to the clean path. Campaign IDs are no longer
+//                exposed in the URL bar or browser history.
+//                Removed campaign_id from pending invite display.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { setCampaignSession } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
+import { FACTION_THEMES, getFactionTheme } from "@/components/theme";
 import { Card } from "@/components/Card";
 
-// -- Stage order (must match advance-round edge function) -------------------
-const STAGE_ORDER = ["spend", "recon", "movement", "conflicts", "missions", "results", "publish"] as const;
-type Stage = typeof STAGE_ORDER[number];
-
-// -- NIP shop items ---------------------------------------------------------
-// These are the purchasable abilities in the spend phase.
-const SHOP_ITEMS = [
-  { id: "deep_strike",       label: "Deep Strike",       nip: 1,
-    desc: "Move to any unoccupied sector this round, ignoring adjacency." },
-  { id: "recon",             label: "Recon",             nip: 1,
-    desc: "Reveal the zone of one enemy commander in range." },
-  { id: "mission_selection", label: "Mission Selection", nip: 2,
-    desc: "Choose or veto your mission in the next conflict." },
-  { id: "safe_passage",      label: "Safe Passage",      nip: 1,
-    desc: "Your movement this round cannot be intercepted." },
-] as const;
-
-// -- Catchup options (shown to the underdog player) ------------------------
-const CATCHUP_OPTIONS = [
-  "+2 NIP",
-  "+1 NCP next battle",
-  "Free Recon",
-  "Safe Passage (1 move cannot be intercepted)",
-] as const;
-
-// -- Types ------------------------------------------------------------------
-
-type Campaign = {
-  id:           string;
-  name:         string;
-  phase:        number;
-  round_number: number;
-  instability:  number;
-  map_id:       string | null;
+type Membership = {
+  campaign_id: string;
+  role: string;
+  faction_key: string | null;
+  faction_name: string | null;
+  faction_locked: boolean;
+  commander_name: string | null;
+  campaign: {
+    name: string;
+    phase: number;
+    round_number: number;
+    instability: number;
+  } | null;
 };
 
-type PlayerState = {
-  nip:                number;
-  ncp:                number;
-  status:             string;
-  current_zone_key:   string;
-  current_sector_key: string;
+type PendingInvite = {
+  id: string;
+  campaign_id: string;
+  campaign_name: string;
+  invite_message: string | null;
 };
 
-type Round  = { stage: string };
-type Post   = { id: string; title: string; body: string; round_number: number; created_at: string };
-type Spend  = { spend_type: string; nip_spent: number };
-type Member = { user_id: string; commander_name: string | null; faction_name: string | null; role: string };
-type Sector = { zone_key: string; sector_key: string; owner_user_id: string | null; revealed_public: boolean };
-
-type UnderdogChoice = {
-  id:            string;
-  chosen_option: string | null;
-  status:        string;
-};
-
-// -- Helpers ----------------------------------------------------------------
-
-function getQueryParam(name: string): string {
-  if (typeof window === "undefined") return "";
-  return new URL(window.location.href).searchParams.get(name) ?? "";
+/** Navigate to a campaign page without exposing the campaign ID in the URL. */
+function navTo(path: string, campaignId: string) {
+  setCampaignSession(campaignId);
+  window.location.href = path;
 }
 
-function fmtKey(key: string): string {
-  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// Stable colour per player index for territory display
-const PLAYER_COLOURS = [
-  "bg-brass/30 border-brass/60 text-brass",
-  "bg-blood/30 border-blood/60 text-blood/90",
-  "bg-blue-500/25 border-blue-400/50 text-blue-300",
-  "bg-green-600/25 border-green-500/50 text-green-300",
-  "bg-purple-500/25 border-purple-400/50 text-purple-300",
-  "bg-orange-500/25 border-orange-400/50 text-orange-300",
-  "bg-pink-500/25 border-pink-400/50 text-pink-300",
-  "bg-teal-500/25 border-teal-400/50 text-teal-300",
-];
-
-// -- Main Component ---------------------------------------------------------
-
-export default function Dashboard() {
+export default function Home() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
-  // campaignId is read directly from URL so nav links are always populated
-  const [campaignId] = useState<string>(() => getQueryParam("campaign"));
+  const [email, setEmail] = useState("");
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  const [campaign,        setCampaign]        = useState<Campaign | null>(null);
-  const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
-  const [round,           setRound]           = useState<Round | null>(null);
-  const [role,            setRole]            = useState<string>("player");
-  const [bulletin,        setBulletin]        = useState<Post | null>(null);
-  const [spends,          setSpends]          = useState<Spend[]>([]);
-  const [mapUrl,          setMapUrl]          = useState<string | null>(null);
-  const [sectors,         setSectors]         = useState<Sector[]>([]);
-  const [members,         setMembers]         = useState<Member[]>([]);
-  const [underdogChoice,  setUnderdogChoice]  = useState<UnderdogChoice | null>(null);
-  const [cart,            setCart]            = useState<Record<string, boolean>>({});
-  const [purchasing,      setPurchasing]      = useState(false);
-  const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
-  const [accepting,       setAccepting]       = useState(false);
-  const [uid,             setUid]             = useState<string>("");
+  const [displayName, setDisplayName] = useState("");
+  const [savedName, setSavedName] = useState("");
+  const [savingName, setSavingName] = useState(false);
 
-  // -- Accept invites on load -----------------------------------------------
-  const acceptInvites = async (token: string) => {
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
+  const [loadingCampaigns, setLoadingCampaigns] = useState(false);
+
+  const [pickingFaction, setPickingFaction]   = useState(false);
+  const [pendingFaction, setPendingFaction]   = useState<string | null>(null);
+  const [settingFaction, setSettingFaction]   = useState(false);
+  const [factionError, setFactionError]       = useState<string>("");
+
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [processingInviteId, setProcessingInviteId] = useState<string>("");
+
+  const selectedMembership = memberships.find((m) => m.campaign_id === selectedCampaignId);
+
+  // ── Auth ──────────────────────────────────────────────────
+  useEffect(() => {
+    const run = async () => {
+      const { data, error } = await supabase.auth.getUser();
+      if (error || !data.user) {
+        setUserEmail(null);
+        setUserId(null);
+        return;
+      }
+      setUserEmail(data.user.email ?? null);
+      setUserId(data.user.id);
+      const name = data.user.user_metadata?.display_name ?? "";
+      setDisplayName(name);
+      setSavedName(name);
+    };
+    run().finally(() => setAuthLoading(false));
+  }, [supabase]);
+
+  // ── Load campaigns ────────────────────────────────────────
+  const loadCampaigns = async (uid: string) => {
+    setLoadingCampaigns(true);
     try {
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({}),
-        }
-      );
-      if (!resp.ok) console.warn("[dashboard] accept-invites returned", resp.status);
-    } catch (e) {
-      console.warn("[dashboard] accept-invites failed:", e);
+      const { data, error } = await supabase
+        .from("campaign_members")
+        .select(`
+          campaign_id, role, faction_key, faction_name, faction_locked,
+          commander_name, campaigns (name, phase, round_number, instability)
+        `)
+        .eq("user_id", uid)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const rows: Membership[] = (data ?? []).map((m: any) => ({
+        campaign_id:    m.campaign_id,
+        role:           m.role,
+        faction_key:    m.faction_key ?? null,
+        faction_name:   m.faction_name ?? null,
+        faction_locked: m.faction_locked ?? false,
+        commander_name: m.commander_name ?? null,
+        campaign:       m.campaigns ?? null,
+      }));
+
+      setMemberships(rows);
+      if (rows.length && !selectedCampaignId) setSelectedCampaignId(rows[0].campaign_id);
+    } catch (e: any) {
+      console.error(e);
+    } finally {
+      setLoadingCampaigns(false);
     }
   };
 
-  // -- Load all dashboard data ----------------------------------------------
-  const load = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    setUid(user.id);
-    const cid = campaignId;
-    if (!cid) return;
-
-    // 1. Campaign basics
-    const { data: c } = await supabase
-      .from("campaigns")
-      .select("id,name,phase,round_number,instability,map_id")
-      .eq("id", cid).single();
-    if (!c) return;
-    setCampaign(c as Campaign);
-
-    // 2. My role
-    const { data: mem } = await supabase
-      .from("campaign_members").select("role")
-      .eq("campaign_id", cid).eq("user_id", user.id).single();
-    setRole(mem?.role ?? "player");
-
-    // 3. My player state
-    const { data: ps } = await supabase
-      .from("player_state").select("nip,ncp,status,current_zone_key,current_sector_key")
-      .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
-    setPlayerState(ps ?? null);
-
-    // 4. Current round / stage
-    const { data: r } = await supabase
-      .from("rounds").select("stage")
-      .eq("campaign_id", cid).eq("round_number", c.round_number).maybeSingle();
-    setRound(r ?? null);
-
-    // 5. War bulletin (latest public post)
-    const { data: post } = await supabase
-      .from("posts").select("id,title,body,round_number,created_at")
-      .eq("campaign_id", cid).eq("visibility", "public")
-      .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    setBulletin(post ?? null);
-
-    // 6. My spends this round
-    const { data: spendRows } = await supabase
-      .from("round_spends").select("spend_type,nip_spent")
-      .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
-    setSpends(spendRows ?? []);
-
-    // 7. Map signed URL (if campaign has a map)
-    if (c.map_id) {
-      const { data: mapRow } = await supabase
-        .from("maps").select("bg_image_path,image_path")
-        .eq("id", c.map_id).single();
-      const path = mapRow?.bg_image_path ?? mapRow?.image_path;
-      if (path) {
-        const { data: urlData } = await supabase.storage
-          .from("campaign-maps").createSignedUrl(path, 3600);
-        setMapUrl(urlData?.signedUrl ?? null);
-      }
-    }
-
-    // 8. Sectors visible to this player (RLS: own + revealed_public)
-    const { data: sectorRows } = await supabase
-      .from("sectors").select("zone_key,sector_key,owner_user_id,revealed_public")
-      .eq("campaign_id", cid);
-    setSectors((sectorRows ?? []) as Sector[]);
-
-    // 9. Members (for territory display and commander names)
-    const { data: memberRows } = await supabase
-      .from("campaign_members").select("user_id,commander_name,faction_name,role")
-      .eq("campaign_id", cid);
-    setMembers((memberRows ?? []) as Member[]);
-
-    // 10. Pending underdog choice for this player
-    const { data: udChoice } = await supabase
-      .from("underdog_choices").select("id,chosen_option,status")
-      .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "pending")
-      .maybeSingle();
-    setUnderdogChoice(udChoice ?? null);
+  // ── Load pending invites ──────────────────────────────────
+  const loadInvites = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const { data, error } = await supabase.functions.invoke("accept-invites", {
+        body: { mode: "list" },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (error) { console.error("invite list error:", error); return; }
+      setPendingInvites(data?.invites ?? []);
+    } catch (e) { console.error("loadInvites error:", e); }
   };
 
   useEffect(() => {
-    (async () => {
+    if (!userId) return;
+    loadCampaigns(userId);
+    loadInvites();
+  }, [userId]);
+
+  // ── Actions ───────────────────────────────────────────────
+  const sendMagicLink = async () => {
+    if (!email.trim()) return alert("Enter your email address.");
+    const { error } = await supabase.auth.signInWithOtp({ email });
+    if (error) alert(error.message);
+    else alert("Check your email for the login link.");
+  };
+
+  const signOut = async () => { await supabase.auth.signOut(); location.reload(); };
+
+  const saveDisplayName = async () => {
+    if (!displayName.trim()) return alert("Enter a name.");
+    setSavingName(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ data: { display_name: displayName.trim() } });
+      if (error) throw error;
+      setSavedName(displayName.trim());
+      alert("Name saved.");
+    } catch (e: any) {
+      alert(e?.message ?? "Failed to save name.");
+    } finally { setSavingName(false); }
+  };
+
+  const handleInvite = async (inviteId: string, mode: "accept" | "decline") => {
+    setProcessingInviteId(inviteId);
+    try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) await acceptInvites(session.access_token);
-      await load();
-    })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // -- Purchase cart --------------------------------------------------------
-
-  const toggleCart = (itemId: string) => {
-    setCart((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
+      if (!session?.access_token) { alert("Session expired. Refresh and try again."); return; }
+      const { data, error } = await supabase.functions.invoke("accept-invites", {
+        body: { mode, invite_id: inviteId },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Failed");
+      setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
+      if (mode === "accept" && userId) await loadCampaigns(userId);
+    } catch (e: any) {
+      alert(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
+    } finally { setProcessingInviteId(""); }
   };
 
-  const cartItems   = SHOP_ITEMS.filter((i) => cart[i.id]);
-  const cartTotal   = cartItems.reduce((sum, i) => sum + i.nip, 0);
-  const alreadyBought = new Set(spends.map((s) => s.spend_type));
+  const handleSelectCampaign = (id: string) => {
+    setSelectedCampaignId(id);
+    setPickingFaction(false);
+    setFactionError("");
+  };
 
-  const purchaseCart = async () => {
-    if (!cartItems.length || !campaign || !playerState) return;
-    if (cartTotal > playerState.nip) return addToast("error","Error","Not enough NIP.");
-    setPurchasing(true);
+  const confirmFaction = async (factionKey: string) => {
+    if (!selectedCampaignId) return;
+    setSettingFaction(true);
+    setFactionError("");
     try {
-      // Insert spend records
-      const { error: spendErr } = await supabase.from("round_spends").insert(
-        cartItems.map((i) => ({
-          campaign_id:  campaign.id,
-          round_number: campaign.round_number,
-          user_id:      uid,
-          spend_type:   i.id,
-          nip_spent:    i.nip,
-        }))
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) { setFactionError("Session expired. Refresh and try again."); return; }
+      const { data, error } = await supabase.functions.invoke("set-faction", {
+        body: { campaign_id: selectedCampaignId, faction_key: factionKey },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Failed to set faction");
+      setMemberships((prev) =>
+        prev.map((m) =>
+          m.campaign_id === selectedCampaignId
+            ? { ...m, faction_key: factionKey, faction_name: data.faction_name, faction_locked: true }
+            : m
+        )
       );
-      if (spendErr) throw spendErr;
-      // Deduct NIP from player state (player_state_update_self RLS allows this)
-      const { error: nipErr } = await supabase
-        .from("player_state")
-        .update({ nip: playerState.nip - cartTotal })
-        .eq("campaign_id", campaign.id)
-        .eq("user_id", uid);
-      if (nipErr) throw nipErr;
-      setCart({});
-      await load();
+      setPickingFaction(false);
+      setPendingFaction(null);
     } catch (e: any) {
-      addToast("error","Error",`Purchase failed: ${e?.message ?? String(e)}`);
-    } finally {
-      setPurchasing(false);
-    }
+      setFactionError(e?.message ?? "Failed to set faction.");
+    } finally { setSettingFaction(false); }
   };
 
-  // -- Accept catchup choice ------------------------------------------------
-
-  const acceptCatchup = async () => {
-    if (!underdogChoice || !campaign) return;
-    setAccepting(true);
-    try {
-      // Record the choice
-      const { error: choiceErr } = await supabase
-        .from("underdog_choices")
-        .update({ chosen_option: catchupOption, chosen_at: new Date().toISOString(), status: "accepted" })
-        .eq("id", underdogChoice.id);
-      if (choiceErr) throw choiceErr;
-
-      // Apply the benefit directly where possible
-      if (catchupOption === "+2 NIP" && playerState) {
-        await supabase.from("player_state")
-          .update({ nip: playerState.nip + 2 })
-          .eq("campaign_id", campaign.id).eq("user_id", uid);
-      }
-      if (catchupOption === "Free Recon") {
-        // Insert a zero-cost recon spend for this round
-        await supabase.from("round_spends").insert({
-          campaign_id:  campaign.id,
-          round_number: campaign.round_number,
-          user_id:      uid,
-          spend_type:   "recon",
-          nip_spent:    0,
-          payload:      { source: "underdog_bonus" },
-        });
-      }
-      if (catchupOption === "Safe Passage (1 move cannot be intercepted)") {
-        await supabase.from("round_spends").insert({
-          campaign_id:  campaign.id,
-          round_number: campaign.round_number,
-          user_id:      uid,
-          spend_type:   "safe_passage",
-          nip_spent:    0,
-          payload:      { source: "underdog_bonus" },
-        });
-      }
-      // "+1 NCP next battle" is recorded in the choice and applied by lead manually.
-
-      setUnderdogChoice(null);
-      await load();
-    } catch (e: any) {
-      addToast("error","Error",`Failed to accept: ${e?.message ?? String(e)}`);
-    } finally {
-      setAccepting(false);
-    }
+  const roleBadge = (role: string) => {
+    if (role === "lead")  return "bg-brass/20 text-brass border border-brass/40";
+    if (role === "admin") return "bg-blood/20 text-blood border border-blood/40";
+    return "bg-iron/40 text-parchment/70 border border-parchment/20";
   };
 
-  // -- Derived state --------------------------------------------------------
+  // ── Not signed in ─────────────────────────────────────────
+  if (authLoading) {
+    return (
+      <Frame title="Access" hideNewCampaign>
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
+        </div>
+      </Frame>
+    );
+  }
 
-  const campaignStarted = round !== null;
-  const currentStage    = (round?.stage ?? null) as Stage | null;
-  const stageIndex      = currentStage ? STAGE_ORDER.indexOf(currentStage) : -1;
-  const inSpendPhase    = currentStage === "spend";
+  if (!userEmail) {
+    return (
+      <Frame title="Access" hideNewCampaign>
+        <div className="grid md:grid-cols-2 gap-6">
+          <Card title="Enter the Halo">
+            <div className="space-y-3">
+              <p className="text-parchment/80">Login via magic link — no password required.</p>
+              <input
+                className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
+              />
+              <button
+                className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30"
+                onClick={sendMagicLink}
+              >
+                Send login link
+              </button>
+            </div>
+          </Card>
+          <Card title="What is Shattered Halo?">
+            <p className="text-parchment/80 leading-relaxed">
+              Shattered Halo is a narrative campaign tool for Warhammer 40,000 skirmish play.
+              Rival factions battle across a range of theatre maps — ring worlds, void ships,
+              continental warzones and more — capturing sectors, moving forces in secret, and
+              clashing in tabletop battles that decide territory. Between rounds, commanders
+              spend Narrative Influence Points to shape missions, deploy units, and outmanoeuvre
+              rivals, while a rising Instability clock escalates the campaign toward a brutal endgame.
+            </p>
+          </Card>
+        </div>
+      </Frame>
+    );
+  }
 
-  // Build member colour index for territory display
-  const memberColour = useMemo(() => {
-    const map = new Map<string, string>();
-    members.forEach((m, i) => map.set(m.user_id, PLAYER_COLOURS[i % PLAYER_COLOURS.length]));
-    return map;
-  }, [members]);
-
-  // Group visible sectors by zone_key, then by owner
-  const territoryByZone = useMemo(() => {
-    const zones = new Map<string, Map<string, number>>();
-    for (const s of sectors) {
-      if (!s.owner_user_id) continue;
-      if (!zones.has(s.zone_key)) zones.set(s.zone_key, new Map());
-      const owners = zones.get(s.zone_key)!;
-      owners.set(s.owner_user_id, (owners.get(s.owner_user_id) ?? 0) + 1);
-    }
-    return zones;
-  }, [sectors]);
-
-  const mySectorCount = sectors.filter((s) => s.owner_user_id === uid).length;
-
-  const memberById = useMemo(() => {
-    const m = new Map<string, Member>();
-    members.forEach((mem) => m.set(mem.user_id, mem));
-    return m;
-  }, [members]);
-
-  // -- Render ----------------------------------------------------------------
-
-  const isLeadOrAdmin = role === "lead" || role === "admin";
-
+  // ── Signed in ─────────────────────────────────────────────
   return (
-    <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
+    <Frame title="War Room" currentPage="home">
       <div className="space-y-6">
 
-        {/* ── Row 1: Your Status (left) + War Bulletin (right) ─────────── */}
-        <div className="grid md:grid-cols-2 gap-6 items-start">
-
-          {/* Your Status */}
-          <Card title="Your Status">
-            {campaign && playerState ? (
-              <div className="space-y-3">
-                <div className="space-y-0.5">
-                  <p className="text-parchment font-semibold">{campaign.name}</p>
-                  <p className="text-parchment/50 text-xs">
-                    Phase {campaign.phase} &bull; Round {campaign.round_number} &bull; Instability {campaign.instability}/10
-                  </p>
-                  <p className="text-parchment/40 text-xs">Role: {role}</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-brass/10 text-sm">
-                  <div>
-                    <p className="text-parchment/40 text-xs">Location</p>
-                    <p className="text-parchment/80">{fmtKey(playerState.current_zone_key)}</p>
-                    <p className="text-parchment/40 text-xs font-mono">{playerState.current_sector_key}</p>
-                  </div>
-                  <div>
-                    <p className="text-parchment/40 text-xs">Status</p>
-                    <p className="text-parchment/80 capitalize">{playerState.status}</p>
-                    <p className="text-parchment/40 text-xs">{mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held</p>
-                  </div>
-                </div>
-
-                {/* Stage strip */}
-                {campaignStarted && (
-                  <div className="pt-1 border-t border-brass/10">
-                    <p className="text-xs text-parchment/40 mb-1.5">Current Stage</p>
-                    <div className="flex gap-1 flex-wrap">
-                      {STAGE_ORDER.map((s, i) => (
-                        <span key={s} className={`px-2 py-0.5 rounded text-xs font-mono uppercase ${
-                          s === currentStage
-                            ? "bg-brass/30 border border-brass/60 text-brass font-bold"
-                            : i < stageIndex
-                              ? "bg-void border border-parchment/10 text-parchment/25 line-through"
-                              : "bg-void border border-parchment/10 text-parchment/35"
-                        }`}>{s}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {!campaignStarted && (
-                  <p className="text-parchment/30 text-xs italic">Campaign not yet started.</p>
-                )}
-              </div>
-            ) : (
-              <p className="text-parchment/40 text-sm italic">Loading status...</p>
-            )}
-          </Card>
-
-          {/* War Bulletin */}
-          <Card title="War Bulletin">
-            {bulletin ? (
-              <div className="space-y-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-parchment font-semibold leading-snug">{bulletin.title}</p>
-                  <span className="shrink-0 text-xs text-parchment/30 font-mono">R{bulletin.round_number}</span>
-                </div>
-                <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
-                  {bulletin.body.length > 600 ? bulletin.body.slice(0, 600) + "..." : bulletin.body}
-                </p>
-                <p className="text-parchment/25 text-xs">
-                  {new Date(bulletin.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
-                </p>
-              </div>
-            ) : (
-              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
-            )}
-          </Card>
-
-        </div>
-
-        {/* ── Row 2: Faction Resources (left) + Campaign Map (right) ───── */}
-        <div className="grid md:grid-cols-2 gap-6 items-start">
-
-          {/* Faction Resources */}
-          <Card title="Faction Resources">
-            {playerState ? (
-              <div className="space-y-4">
-
-                {/* NIP / NCP balances */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="px-3 py-2.5 rounded bg-brass/10 border border-brass/25 text-center">
-                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NIP</p>
-                    <p className="text-2xl font-bold text-brass">{playerState.nip}</p>
-                    <p className="text-xs text-parchment/30">Influence Points</p>
-                  </div>
-                  <div className="px-3 py-2.5 rounded bg-parchment/5 border border-parchment/15 text-center">
-                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NCP</p>
-                    <p className="text-2xl font-bold text-parchment/80">{playerState.ncp}</p>
-                    <p className="text-xs text-parchment/30">Campaign Points</p>
-                  </div>
-                </div>
-
-                {/* Purchased abilities this round -- always visible after spend */}
-                {spends.length > 0 && (
-                  <div>
-                    <p className="text-xs text-parchment/40 mb-1.5 font-semibold uppercase tracking-widest">
-                      Round {campaign?.round_number} Purchases
-                    </p>
-                    <div className="space-y-1">
-                      {spends.map((s, i) => {
-                        const item = SHOP_ITEMS.find((x) => x.id === s.spend_type);
-                        return (
-                          <div key={i} className="flex items-center justify-between px-2.5 py-1.5 rounded bg-brass/5 border border-brass/15 text-sm">
-                            <span className="text-parchment/75">{item?.label ?? fmtKey(s.spend_type)}</span>
-                            {s.nip_spent > 0
-                              ? <span className="text-parchment/35 text-xs font-mono">{s.nip_spent} NIP</span>
-                              : <span className="text-brass/60 text-xs font-mono">Free</span>
-                            }
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Shopping cart -- spend phase only */}
-                {inSpendPhase && (
-                  <div className="border-t border-brass/10 pt-3 space-y-3">
-                    <p className="text-xs text-parchment/40 font-semibold uppercase tracking-widest">Spend NIP</p>
-                    <div className="space-y-2">
-                      {SHOP_ITEMS.filter((i) => !alreadyBought.has(i.id)).map((item) => {
-                        const inCart    = !!cart[item.id];
-                        const canAfford = cart[item.id]
-                          ? true
-                          : playerState.nip - cartTotal >= item.nip;
-                        return (
-                          <div key={item.id}
-                            className={`flex items-start gap-3 px-3 py-2 rounded border transition-colors ${
-                              inCart
-                                ? "bg-brass/15 border-brass/50"
-                                : "bg-void border-brass/15 hover:border-brass/30"
-                            }`}>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-baseline gap-2">
-                                <p className="text-parchment/85 text-sm font-semibold">{item.label}</p>
-                                <p className="text-brass/80 text-xs font-mono">{item.nip} NIP</p>
-                              </div>
-                              <p className="text-parchment/40 text-xs mt-0.5">{item.desc}</p>
-                            </div>
-                            <button
-                              onClick={() => toggleCart(item.id)}
-                              disabled={!canAfford && !inCart}
-                              className={`shrink-0 px-3 py-1 rounded text-xs font-semibold border transition-colors disabled:opacity-30 ${
-                                inCart
-                                  ? "bg-brass/30 border-brass/60 text-brass"
-                                  : "bg-void border-parchment/20 hover:border-brass/40 text-parchment/60 hover:text-parchment/90"
-                              }`}>
-                              {inCart ? "Remove" : "Add"}
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Cart total + checkout */}
-                    {cartItems.length > 0 && (
-                      <div className="pt-2 border-t border-brass/15 space-y-2">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-parchment/50">
-                            {cartItems.length} item{cartItems.length !== 1 ? "s" : ""} selected
-                          </span>
-                          <span className="text-brass font-bold font-mono">{cartTotal} NIP</span>
-                        </div>
-                        {cartTotal > playerState.nip && (
-                          <p className="text-blood/70 text-xs">Insufficient NIP ({playerState.nip} available).</p>
-                        )}
-                        <button
-                          onClick={purchaseCart}
-                          disabled={purchasing || cartTotal > playerState.nip}
-                          className="w-full px-4 py-2 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
-                          {purchasing ? "Purchasing..." : `Spend ${cartTotal} NIP`}
-                        </button>
-                      </div>
-                    )}
-
-                    {SHOP_ITEMS.every((i) => alreadyBought.has(i.id)) && (
-                      <p className="text-parchment/30 text-xs italic">All available abilities purchased this round.</p>
-                    )}
-                  </div>
-                )}
-
-                {!inSpendPhase && spends.length === 0 && (
-                  <p className="text-parchment/25 text-xs italic">No purchases this round.</p>
-                )}
-
-              </div>
-            ) : (
-              <p className="text-parchment/40 text-sm italic">Loading resources...</p>
-            )}
-          </Card>
-
-          {/* Campaign Map */}
-          <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
-            {mapUrl ? (
-              <div className="space-y-3">
-                <a href={`/map?campaign=${campaignId}`} title="Open Tactical Hololith">
-                  <img
-                    src={mapUrl}
-                    alt="Campaign theatre map"
-                    className="w-full rounded border border-brass/20 object-cover hover:border-brass/50 transition-colors cursor-pointer"
-                    style={{ maxHeight: "260px" }}
-                  />
-                </a>
-
-                {/* Territory legend */}
-                {territoryByZone.size > 0 && (
-                  <div>
-                    <p className="text-xs text-parchment/35 mb-2 uppercase tracking-widest">Visible Territory</p>
-                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {Array.from(territoryByZone.entries()).map(([zoneKey, owners]) => (
-                        <div key={zoneKey} className="flex items-start gap-2">
-                          <span className="text-parchment/40 text-xs font-mono w-32 shrink-0 pt-0.5">{fmtKey(zoneKey)}</span>
-                          <div className="flex flex-wrap gap-1">
-                            {Array.from(owners.entries()).map(([ownerId, count]) => {
-                              const m = memberById.get(ownerId);
-                              const colour = memberColour.get(ownerId) ?? PLAYER_COLOURS[0];
-                              return (
-                                <span key={ownerId}
-                                  className={`px-1.5 py-0.5 rounded border text-xs font-mono ${colour}`}>
-                                  {m?.commander_name ?? "Unknown"} ×{count}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-parchment/20 text-xs mt-2 italic">
-                      Fog of war — only your sectors and publicly revealed sectors are shown.
-                    </p>
-                  </div>
-                )}
-
-                {territoryByZone.size === 0 && (
-                  <p className="text-parchment/30 text-xs italic">
-                    No territory data visible. Fog of war conceals all positions.
-                  </p>
-                )}
-              </div>
-            ) : campaign?.map_id ? (
-              <p className="text-parchment/40 text-sm italic">Loading map...</p>
-            ) : (
-              <p className="text-parchment/30 text-sm italic">
-                No map generated yet. The theatre of war awaits its cartographer.
-              </p>
-            )}
-          </Card>
-
-        </div>
-
-        {/* ── Row 3: Catchup Offer (conditional — underdog only) ───────── */}
-        {underdogChoice && (
-          <Card title="Catch-up Offer — Underdog Bonus">
-            <div className="space-y-4">
-              <p className="text-parchment/70 text-sm leading-relaxed">
-                The campaign lead has identified you as the current underdog. Choose one benefit
-                to apply before the next round begins.
-              </p>
-              <div className="space-y-2">
-                <p className="text-xs text-parchment/40 uppercase tracking-widest">Select your benefit</p>
-                <select
-                  className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
-                  value={catchupOption}
-                  onChange={(e) => setCatchupOption(e.target.value)}
+        {/* ── Profile ── */}
+        <Card title="Your Profile">
+          <div className="space-y-3">
+            <div className="text-parchment/60 text-sm">
+              Signed in as <span className="text-parchment">{userEmail}</span>
+            </div>
+            <div>
+              <div className="text-sm text-parchment/70 mb-1">Display name</div>
+              <div className="flex gap-3">
+                <input
+                  className="flex-1 px-3 py-2 rounded bg-void border border-brass/30"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Commander name or callsign"
+                  onKeyDown={(e) => e.key === "Enter" && saveDisplayName()}
+                />
+                <button
+                  className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40"
+                  onClick={saveDisplayName}
+                  disabled={savingName || displayName.trim() === savedName}
                 >
-                  {CATCHUP_OPTIONS.map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-                {catchupOption === "+1 NCP next battle" && (
-                  <p className="text-xs text-parchment/35 italic">
-                    This bonus is recorded and applied by the campaign lead at your next conflict.
-                  </p>
-                )}
+                  {savingName ? "Saving…" : "Save"}
+                </button>
               </div>
-              <button
-                onClick={acceptCatchup}
-                disabled={accepting}
-                className="w-full px-4 py-2.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
-                {accepting ? "Accepting..." : "Accept Bonus"}
-              </button>
+              {savedName && (
+                <p className="mt-1 text-xs text-parchment/50">
+                  Current: <span className="text-brass">{savedName}</span>
+                </p>
+              )}
+            </div>
+            <button
+              className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm"
+              onClick={signOut}
+            >
+              Sign out
+            </button>
+          </div>
+        </Card>
+
+        {/* ── Pending Invites ── */}
+        {pendingInvites.length > 0 && (
+          <Card title={`Campaign Invites — ${pendingInvites.length} pending`}>
+            <p className="text-parchment/60 text-sm mb-3">
+              You have been invited to the following campaigns.
+            </p>
+            <div className="space-y-2">
+              {pendingInvites.map((invite) => (
+                <div
+                  key={invite.id}
+                  className="flex flex-col sm:flex-row sm:items-center gap-3 rounded border border-brass/20 bg-void px-4 py-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-parchment font-semibold truncate">{invite.campaign_name}</div>
+                    {invite.invite_message && (
+                      <p className="mt-1 text-sm text-parchment/70 leading-relaxed italic">
+                        {invite.invite_message}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      disabled={processingInviteId === invite.id}
+                      className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40 text-sm"
+                      onClick={() => handleInvite(invite.id, "accept")}
+                    >
+                      {processingInviteId === invite.id ? "…" : "Accept"}
+                    </button>
+                    <button
+                      disabled={processingInviteId === invite.id}
+                      className="px-3 py-1.5 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 disabled:opacity-40 text-sm"
+                      onClick={() => handleInvite(invite.id, "decline")}
+                    >
+                      {processingInviteId === invite.id ? "…" : "Decline"}
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </Card>
         )}
 
+        {/* ── Your Campaigns ── */}
+        <Card title="Your Campaigns">
+          {loadingCampaigns ? (
+            <p className="text-parchment/70">Loading campaigns…</p>
+          ) : memberships.length === 0 ? (
+            <p className="text-parchment/70">
+              You are not enrolled in any campaigns yet. Accept an invite above, or{" "}
+              <a href="/campaigns" className="text-brass underline">create a new campaign</a>.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {memberships.map((m) => {
+                const camp    = m.campaign;
+                const theme   = getFactionTheme(m.faction_key);
+                const isSelected = m.campaign_id === selectedCampaignId;
+
+                return (
+                  <div
+                    key={m.campaign_id}
+                    className="rounded border border-brass/25 bg-void/60 overflow-hidden"
+                  >
+                    {/* Campaign header */}
+                    <div className="flex items-start gap-3 px-4 py-3">
+                      {theme && (
+                        <div
+                          className="shrink-0 w-10 h-10 rounded bg-cover bg-center border border-brass/30"
+                          style={{ backgroundImage: `url(${theme.crest})` }}
+                          title={theme.name}
+                        />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-parchment truncate">
+                          {camp?.name ?? "—"}
+                        </div>
+                        {camp && (
+                          <div className="text-xs text-parchment/50 mt-0.5">
+                            Phase {camp.phase} · Round {camp.round_number} · Instability {camp.instability}/10
+                          </div>
+                        )}
+                        <div className="text-xs mt-0.5">
+                          {m.faction_name
+                            ? <span className="text-brass">{m.faction_name}</span>
+                            : <span className="text-parchment/30 italic">No faction selected</span>
+                          }
+                          {m.commander_name && (
+                            <span className="ml-2 text-parchment/40">— {m.commander_name}</span>
+                          )}
+                        </div>
+                      </div>
+                      <span className={`shrink-0 text-xs px-2 py-0.5 rounded font-mono uppercase tracking-wide ${roleBadge(m.role)}`}>
+                        {m.role}
+                      </span>
+                    </div>
+
+                    {/* Nav buttons — JS navigation, no ?campaign= in URL */}
+                    <div className="flex flex-wrap gap-1.5 px-4 pb-3 border-t border-brass/10 pt-2.5">
+                      <button
+                        onClick={() => navTo("/dashboard", m.campaign_id)}
+                        className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
+                      >
+                        Dashboard
+                      </button>
+                      <button
+                        onClick={() => navTo("/map", m.campaign_id)}
+                        className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
+                      >
+                        Map
+                      </button>
+                      <button
+                        onClick={() => navTo("/conflicts", m.campaign_id)}
+                        className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
+                      >
+                        Conflicts
+                      </button>
+                      {(m.role === "lead" || m.role === "admin") && (
+                        <button
+                          onClick={() => navTo("/lead", m.campaign_id)}
+                          className="px-3 py-1.5 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-xs"
+                        >
+                          Lead Controls
+                        </button>
+                      )}
+
+                      {/* Faction pledge */}
+                      <div className="ml-auto">
+                        {m.faction_key && theme ? (
+                          <div className="flex items-center gap-1.5">
+                            <img src={theme.crest} alt={theme.name} className="w-5 h-5 object-contain opacity-80" />
+                            <span className="text-xs text-parchment/50">{theme.name}</span>
+                            {m.faction_locked && <span className="text-xs text-parchment/30">🔒</span>}
+                          </div>
+                        ) : (isSelected && pickingFaction) ? null : (
+                          <button
+                            className="px-3 py-1.5 rounded bg-brass/10 border border-brass/30 hover:bg-brass/20 text-xs text-parchment/60"
+                            onClick={() => { handleSelectCampaign(m.campaign_id); setPickingFaction(true); setFactionError(""); }}
+                          >
+                            Pledge Allegiance
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Faction picker */}
+                    {isSelected && pickingFaction && !m.faction_key && (
+                      <div className="px-4 pb-4 border-t border-brass/15 pt-3">
+                        <div className="text-sm text-parchment/70 mb-2">
+                          Choose your faction — <span className="text-blood/80">this cannot be changed once confirmed.</span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-3">
+                          {FACTION_THEMES.map((f) => (
+                            <button
+                              key={f.key}
+                              disabled={settingFaction}
+                              onClick={() => { setPendingFaction(f.key); setFactionError(""); }}
+                              className={[
+                                "relative rounded overflow-hidden border transition-colors group h-24 disabled:opacity-40",
+                                pendingFaction === f.key
+                                  ? "border-brass/80 ring-2 ring-brass/50"
+                                  : "border-brass/20 hover:border-brass/60",
+                              ].join(" ")}
+                              style={{ backgroundImage: `url(${f.preview})`, backgroundSize: "cover", backgroundPosition: "center" }}
+                              title={f.name}
+                            >
+                              <div className="absolute inset-0 bg-void/60 group-hover:bg-void/40 transition-colors" />
+                              <div className="absolute inset-0 flex flex-col items-center justify-end pb-2 px-1">
+                                <img src={f.crest} alt="" className="w-8 h-8 object-contain drop-shadow mb-1" />
+                                <span className="text-parchment text-xs font-semibold text-center leading-tight drop-shadow">
+                                  {f.name}
+                                </span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        {factionError && <p className="text-blood text-sm mb-2">{factionError}</p>}
+                        {pendingFaction && (() => {
+                          const pf = FACTION_THEMES.find((f) => f.key === pendingFaction);
+                          return (
+                            <div className="flex items-center gap-3 pt-2 border-t border-brass/20">
+                              <div className="flex items-center gap-2 flex-1">
+                                {pf && <img src={pf.crest} alt="" className="w-6 h-6 object-contain" />}
+                                <span className="text-sm text-parchment/80">
+                                  Pledge allegiance to <span className="text-brass font-semibold">{pf?.name ?? pendingFaction}</span>?
+                                </span>
+                                <span className="text-xs text-blood/70">This cannot be undone.</span>
+                              </div>
+                              <button
+                                disabled={settingFaction}
+                                className="px-4 py-1.5 rounded bg-brass/30 border border-brass/60 hover:bg-brass/40 text-sm font-semibold disabled:opacity-40"
+                                onClick={() => confirmFaction(pendingFaction)}
+                              >
+                                {settingFaction ? "Pledging…" : "Confirm"}
+                              </button>
+                              <button
+                                className="text-xs text-parchment/40 hover:text-parchment/60 underline"
+                                onClick={() => setPendingFaction(null)}
+                              >
+                                Back
+                              </button>
+                            </div>
+                          );
+                        })()}
+                        <button
+                          className="text-xs text-parchment/40 hover:text-parchment/60 underline mt-2 block"
+                          onClick={() => { setPickingFaction(false); setPendingFaction(null); setFactionError(""); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
 
       </div>
-      <ToastContainer toasts={toasts} dismiss={dismissToast} />
     </Frame>
   );
 }
