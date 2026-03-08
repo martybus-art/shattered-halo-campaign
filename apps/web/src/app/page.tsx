@@ -1,6 +1,16 @@
 "use client";
+// src/app/page.tsx
+//
+// changelog:
+//   2026-03-08 — SECURITY: all campaign nav anchors (Dashboard, Map, Conflicts,
+//                Lead Controls) converted to buttons that call setCampaignSession
+//                then navigate to the clean path. Campaign IDs are no longer
+//                exposed in the URL bar or browser history.
+//                Removed campaign_id from pending invite display.
+
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { setCampaignSession } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { FACTION_THEMES, getFactionTheme } from "@/components/theme";
 import { Card } from "@/components/Card";
@@ -27,55 +37,44 @@ type PendingInvite = {
   invite_message: string | null;
 };
 
+/** Navigate to a campaign page without exposing the campaign ID in the URL. */
+function navTo(path: string, campaignId: string) {
+  setCampaignSession(campaignId);
+  window.location.href = path;
+}
+
 export default function Home() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
-  // Auth state
   const [email, setEmail] = useState("");
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // Profile state
   const [displayName, setDisplayName] = useState("");
   const [savedName, setSavedName] = useState("");
   const [savingName, setSavingName] = useState(false);
 
-  // Campaigns
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
 
-  // Faction picker
   const [pickingFaction, setPickingFaction]   = useState(false);
   const [pendingFaction, setPendingFaction]   = useState<string | null>(null);
   const [settingFaction, setSettingFaction]   = useState(false);
   const [factionError, setFactionError]       = useState<string>("");
 
-  // Pending invites
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [processingInviteId, setProcessingInviteId] = useState<string>("");
 
-  // Inline feedback (replaces alert() calls)
-  const [loginMsg, setLoginMsg]   = useState<{ text: string; ok: boolean } | null>(null);
-  const [nameMsg, setNameMsg]     = useState<{ text: string; ok: boolean } | null>(null);
-  const [inviteError, setInviteError] = useState<string>("");
-
-  // Derived — role for the selected campaign
   const selectedMembership = memberships.find((m) => m.campaign_id === selectedCampaignId);
-  const selectedRole = selectedMembership?.role ?? "player";
 
   // ── Auth ──────────────────────────────────────────────────
   useEffect(() => {
     const run = async () => {
       const { data, error } = await supabase.auth.getUser();
-      if (error || !data.user) {
-        setUserEmail(null);
-        setUserId(null);
-        return;
-      }
+      if (error || !data.user) { setUserEmail(null); setUserId(null); return; }
       setUserEmail(data.user.email ?? null);
       setUserId(data.user.id);
-
       const name = data.user.user_metadata?.display_name ?? "";
       setDisplayName(name);
       setSavedName(name);
@@ -90,13 +89,8 @@ export default function Home() {
       const { data, error } = await supabase
         .from("campaign_members")
         .select(`
-          campaign_id,
-          role,
-          faction_key,
-          faction_name,
-          faction_locked,
-          commander_name,
-          campaigns (name, phase, round_number, instability)
+          campaign_id, role, faction_key, faction_name, faction_locked,
+          commander_name, campaigns (name, phase, round_number, instability)
         `)
         .eq("user_id", uid)
         .order("created_at", { ascending: false });
@@ -104,13 +98,13 @@ export default function Home() {
       if (error) throw error;
 
       const rows: Membership[] = (data ?? []).map((m: any) => ({
-        campaign_id: m.campaign_id,
-        role: m.role,
-        faction_key: m.faction_key ?? null,
-        faction_name: m.faction_name ?? null,
+        campaign_id:    m.campaign_id,
+        role:           m.role,
+        faction_key:    m.faction_key ?? null,
+        faction_name:   m.faction_name ?? null,
         faction_locked: m.faction_locked ?? false,
         commander_name: m.commander_name ?? null,
-        campaign: m.campaigns ?? null,
+        campaign:       m.campaigns ?? null,
       }));
 
       setMemberships(rows);
@@ -127,17 +121,13 @@ export default function Home() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
-
       const { data, error } = await supabase.functions.invoke("accept-invites", {
         body: { mode: "list" },
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
-
       if (error) { console.error("invite list error:", error); return; }
       setPendingInvites(data?.invites ?? []);
-    } catch (e) {
-      console.error("loadInvites error:", e);
-    }
+    } catch (e) { console.error("loadInvites error:", e); }
   };
 
   useEffect(() => {
@@ -148,66 +138,45 @@ export default function Home() {
 
   // ── Actions ───────────────────────────────────────────────
   const sendMagicLink = async () => {
-    if (!email.trim()) { setLoginMsg({ text: "Enter your email address.", ok: false }); return; }
-    setLoginMsg(null);
+    if (!email.trim()) return alert("Enter your email address.");
     const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) setLoginMsg({ text: error.message, ok: false });
-    else setLoginMsg({ text: "Check your email for the login link.", ok: true });
+    if (error) alert(error.message);
+    else alert("Check your email for the login link.");
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    location.reload();
-  };
+  const signOut = async () => { await supabase.auth.signOut(); location.reload(); };
 
   const saveDisplayName = async () => {
-    if (!displayName.trim()) { setNameMsg({ text: "Enter a name.", ok: false }); return; }
+    if (!displayName.trim()) return alert("Enter a name.");
     setSavingName(true);
-    setNameMsg(null);
     try {
-      const { error } = await supabase.auth.updateUser({
-        data: { display_name: displayName.trim() },
-      });
+      const { error } = await supabase.auth.updateUser({ data: { display_name: displayName.trim() } });
       if (error) throw error;
       setSavedName(displayName.trim());
-      setNameMsg({ text: "Name saved.", ok: true });
+      alert("Name saved.");
     } catch (e: any) {
-      setNameMsg({ text: e?.message ?? "Failed to save name.", ok: false });
-    } finally {
-      setSavingName(false);
-    }
+      alert(e?.message ?? "Failed to save name.");
+    } finally { setSavingName(false); }
   };
 
   const handleInvite = async (inviteId: string, mode: "accept" | "decline") => {
     setProcessingInviteId(inviteId);
-    setInviteError("");
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) { setInviteError("Session expired. Refresh and try again."); return; }
-
+      if (!session?.access_token) { alert("Session expired. Refresh and try again."); return; }
       const { data, error } = await supabase.functions.invoke("accept-invites", {
         body: { mode, invite_id: inviteId },
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
-
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error ?? "Failed");
-
-      // Remove from local list immediately
       setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
-
-      // If accepted, reload campaigns so the new one appears
-      if (mode === "accept" && userId) {
-        await loadCampaigns(userId);
-      }
+      if (mode === "accept" && userId) await loadCampaigns(userId);
     } catch (e: any) {
-      setInviteError(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
-    } finally {
-      setProcessingInviteId("");
-    }
+      alert(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
+    } finally { setProcessingInviteId(""); }
   };
 
-  // Reset faction picker when a different campaign is selected
   const handleSelectCampaign = (id: string) => {
     setSelectedCampaignId(id);
     setPickingFaction(false);
@@ -221,16 +190,12 @@ export default function Home() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) { setFactionError("Session expired. Refresh and try again."); return; }
-
       const { data, error } = await supabase.functions.invoke("set-faction", {
         body: { campaign_id: selectedCampaignId, faction_key: factionKey },
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
-
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error ?? "Failed to set faction");
-
-      // Update local state so UI reflects immediately without a full reload
       setMemberships((prev) =>
         prev.map((m) =>
           m.campaign_id === selectedCampaignId
@@ -242,17 +207,9 @@ export default function Home() {
       setPendingFaction(null);
     } catch (e: any) {
       setFactionError(e?.message ?? "Failed to set faction.");
-    } finally {
-      setSettingFaction(false);
-    }
+    } finally { setSettingFaction(false); }
   };
 
-  const goToDashboard = () => {
-    if (!selectedCampaignId) return;
-    window.location.href = `/dashboard?campaign=${selectedCampaignId}`;
-  };
-
-  // ── Style helpers ─────────────────────────────────────────
   const roleBadge = (role: string) => {
     if (role === "lead")  return "bg-brass/20 text-brass border border-brass/40";
     if (role === "admin") return "bg-blood/20 text-blood border border-blood/40";
@@ -280,14 +237,8 @@ export default function Home() {
               >
                 Send login link
               </button>
-              {loginMsg && (
-                <p className={`text-sm mt-1 ${loginMsg.ok ? "text-brass" : "text-blood"}`}>
-                  {loginMsg.text}
-                </p>
-              )}
             </div>
           </Card>
-
           <Card title="What this is">
             <ul className="list-disc pl-5 space-y-2 text-parchment/80">
               <li>Secret movement + fog-of-war map reveals</li>
@@ -312,7 +263,6 @@ export default function Home() {
             <div className="text-parchment/60 text-sm">
               Signed in as <span className="text-parchment">{userEmail}</span>
             </div>
-
             <div>
               <div className="text-sm text-parchment/70 mb-1">Display name</div>
               <div className="flex gap-3">
@@ -336,13 +286,7 @@ export default function Home() {
                   Current: <span className="text-brass">{savedName}</span>
                 </p>
               )}
-              {nameMsg && (
-                <p className={`text-xs mt-1 ${nameMsg.ok ? "text-brass" : "text-blood"}`}>
-                  {nameMsg.text}
-                </p>
-              )}
             </div>
-
             <button
               className="px-4 py-2 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-sm"
               onClick={signOut}
@@ -352,11 +296,11 @@ export default function Home() {
           </div>
         </Card>
 
-        {/* ── Pending Invites — only shown when there are invites waiting ── */}
+        {/* ── Pending Invites ── */}
         {pendingInvites.length > 0 && (
           <Card title={`Campaign Invites — ${pendingInvites.length} pending`}>
             <p className="text-parchment/60 text-sm mb-3">
-              You have been invited to the following campaigns. Accept to join or decline to remove the invite.
+              You have been invited to the following campaigns.
             </p>
             <div className="space-y-2">
               {pendingInvites.map((invite) => (
@@ -391,9 +335,6 @@ export default function Home() {
                 </div>
               ))}
             </div>
-            {inviteError && (
-              <p className="mt-2 text-sm text-blood">{inviteError}</p>
-            )}
           </Card>
         )}
 
@@ -407,170 +348,168 @@ export default function Home() {
               <a href="/campaigns" className="text-brass underline">create a new campaign</a>.
             </p>
           ) : (
-            <div className="space-y-4">
-              <div className="space-y-3">
-                {memberships.map((m) => {
-                  const camp = m.campaign;
-                  const theme = getFactionTheme(m.faction_key);
-                  const isSelected = m.campaign_id === selectedCampaignId;
+            <div className="space-y-3">
+              {memberships.map((m) => {
+                const camp    = m.campaign;
+                const theme   = getFactionTheme(m.faction_key);
+                const isSelected = m.campaign_id === selectedCampaignId;
 
-                  return (
-                    <div
-                      key={m.campaign_id}
-                      className="rounded border border-brass/25 bg-void/60 overflow-hidden"
-                    >
-                      {/* ── Campaign header ── */}
-                      <div className="flex items-start gap-3 px-4 py-3">
-                        {theme && (
-                          <div
-                            className="shrink-0 w-10 h-10 rounded bg-cover bg-center border border-brass/30"
-                            style={{ backgroundImage: `url(${theme.crest})` }}
-                            title={theme.name}
-                          />
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-parchment truncate">
-                            {camp?.name ?? "Unknown Campaign"}
-                          </div>
-                          {camp && (
-                            <div className="text-xs text-parchment/50 mt-0.5">
-                              Phase {camp.phase} · Round {camp.round_number} · Instability {camp.instability}/10
-                            </div>
-                          )}
-                          <div className="text-xs mt-0.5">
-                            {m.faction_name
-                              ? <span className="text-brass">{m.faction_name}</span>
-                              : <span className="text-parchment/30 italic">No faction selected</span>
-                            }
-                            {m.commander_name && (
-                              <span className="ml-2 text-parchment/40">— {m.commander_name}</span>
-                            )}
-                          </div>
+                return (
+                  <div
+                    key={m.campaign_id}
+                    className="rounded border border-brass/25 bg-void/60 overflow-hidden"
+                  >
+                    {/* Campaign header */}
+                    <div className="flex items-start gap-3 px-4 py-3">
+                      {theme && (
+                        <div
+                          className="shrink-0 w-10 h-10 rounded bg-cover bg-center border border-brass/30"
+                          style={{ backgroundImage: `url(${theme.crest})` }}
+                          title={theme.name}
+                        />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-parchment truncate">
+                          {camp?.name ?? "—"}
                         </div>
-                        <span className={`shrink-0 text-xs px-2 py-0.5 rounded font-mono uppercase tracking-wide ${roleBadge(m.role)}`}>
-                          {m.role}
-                        </span>
+                        {camp && (
+                          <div className="text-xs text-parchment/50 mt-0.5">
+                            Phase {camp.phase} · Round {camp.round_number} · Instability {camp.instability}/10
+                          </div>
+                        )}
+                        <div className="text-xs mt-0.5">
+                          {m.faction_name
+                            ? <span className="text-brass">{m.faction_name}</span>
+                            : <span className="text-parchment/30 italic">No faction selected</span>
+                          }
+                          {m.commander_name && (
+                            <span className="ml-2 text-parchment/40">— {m.commander_name}</span>
+                          )}
+                        </div>
                       </div>
+                      <span className={`shrink-0 text-xs px-2 py-0.5 rounded font-mono uppercase tracking-wide ${roleBadge(m.role)}`}>
+                        {m.role}
+                      </span>
+                    </div>
 
-                      {/* ── Nav buttons ── */}
-                      <div className="flex flex-wrap gap-1.5 px-4 pb-3 border-t border-brass/10 pt-2.5">
-                        <a
-                          href={`/dashboard?campaign=${m.campaign_id}`}
-                          className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
+                    {/* Nav buttons — JS navigation, no ?campaign= in URL */}
+                    <div className="flex flex-wrap gap-1.5 px-4 pb-3 border-t border-brass/10 pt-2.5">
+                      <button
+                        onClick={() => navTo("/dashboard", m.campaign_id)}
+                        className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
+                      >
+                        Dashboard
+                      </button>
+                      <button
+                        onClick={() => navTo("/map", m.campaign_id)}
+                        className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
+                      >
+                        Map
+                      </button>
+                      <button
+                        onClick={() => navTo("/conflicts", m.campaign_id)}
+                        className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
+                      >
+                        Conflicts
+                      </button>
+                      {(m.role === "lead" || m.role === "admin") && (
+                        <button
+                          onClick={() => navTo("/lead", m.campaign_id)}
+                          className="px-3 py-1.5 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-xs"
                         >
-                          Dashboard
-                        </a>
-                        <a
-                          href={`/map?campaign=${m.campaign_id}`}
-                          className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
-                        >
-                          Map
-                        </a>
-                        <a
-                          href={`/conflicts?campaign=${m.campaign_id}`}
-                          className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
-                        >
-                          Conflicts
-                        </a>
-                        {(m.role === "lead" || m.role === "admin") && (
-                          <a
-                            href={`/lead?campaign=${m.campaign_id}`}
-                            className="px-3 py-1.5 rounded bg-blood/20 border border-blood/40 hover:bg-blood/30 text-xs"
+                          Lead Controls
+                        </button>
+                      )}
+
+                      {/* Faction pledge */}
+                      <div className="ml-auto">
+                        {m.faction_key && theme ? (
+                          <div className="flex items-center gap-1.5">
+                            <img src={theme.crest} alt={theme.name} className="w-5 h-5 object-contain opacity-80" />
+                            <span className="text-xs text-parchment/50">{theme.name}</span>
+                            {m.faction_locked && <span className="text-xs text-parchment/30">🔒</span>}
+                          </div>
+                        ) : (isSelected && pickingFaction) ? null : (
+                          <button
+                            className="px-3 py-1.5 rounded bg-brass/10 border border-brass/30 hover:bg-brass/20 text-xs text-parchment/60"
+                            onClick={() => { handleSelectCampaign(m.campaign_id); setPickingFaction(true); setFactionError(""); }}
                           >
-                            Lead Controls
-                          </a>
+                            Pledge Allegiance
+                          </button>
                         )}
-
-                        {/* Faction pledge / allegiance banner — right-aligned */}
-                        <div className="ml-auto">
-                          {m.faction_key && theme ? (
-                            <div className="flex items-center gap-1.5">
-                              <img src={theme.crest} alt={theme.name} className="w-5 h-5 object-contain opacity-80" />
-                              <span className="text-xs text-parchment/50">{theme.name}</span>
-                              {m.faction_locked && <span className="text-xs text-parchment/30">🔒</span>}
-                            </div>
-                          ) : (isSelected && pickingFaction) ? null : (
-                            <button
-                              className="px-3 py-1.5 rounded bg-brass/10 border border-brass/30 hover:bg-brass/20 text-xs text-parchment/60"
-                              onClick={() => { handleSelectCampaign(m.campaign_id); setPickingFaction(true); setFactionError(""); }}
-                            >
-                              Pledge Allegiance
-                            </button>
-                          )}
-                        </div>
                       </div>
+                    </div>
 
-                      {/* ── Faction picker (expands inline when active) ── */}
-                      {isSelected && pickingFaction && !m.faction_key && (
-                        <div className="px-4 pb-4 border-t border-brass/15 pt-3">
-                          <div className="text-sm text-parchment/70 mb-2">
-                            Choose your faction — <span className="text-blood/80">this cannot be changed once confirmed.</span>
-                          </div>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-3">
-                            {FACTION_THEMES.map((f) => (
-                              <button
-                                key={f.key}
-                                disabled={settingFaction}
-                                onClick={() => { setPendingFaction(f.key); setFactionError(""); }}
-                                className={[
+                    {/* Faction picker */}
+                    {isSelected && pickingFaction && !m.faction_key && (
+                      <div className="px-4 pb-4 border-t border-brass/15 pt-3">
+                        <div className="text-sm text-parchment/70 mb-2">
+                          Choose your faction — <span className="text-blood/80">this cannot be changed once confirmed.</span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-3">
+                          {FACTION_THEMES.map((f) => (
+                            <button
+                              key={f.key}
+                              disabled={settingFaction}
+                              onClick={() => { setPendingFaction(f.key); setFactionError(""); }}
+                              className={[
                                 "relative rounded overflow-hidden border transition-colors group h-24 disabled:opacity-40",
                                 pendingFaction === f.key
                                   ? "border-brass/80 ring-2 ring-brass/50"
                                   : "border-brass/20 hover:border-brass/60",
                               ].join(" ")}
-                                style={{ backgroundImage: `url(${f.preview})`, backgroundSize: "cover", backgroundPosition: "center" }}
-                                title={f.name}
-                              >
-                                <div className="absolute inset-0 bg-void/60 group-hover:bg-void/40 transition-colors" />
-                                <div className="absolute inset-0 flex flex-col items-center justify-end pb-2 px-1">
-                                  <img src={f.crest} alt="" className="w-8 h-8 object-contain drop-shadow mb-1" />
-                                  <span className="text-parchment text-xs font-semibold text-center leading-tight drop-shadow">
-                                    {f.name}
-                                  </span>
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                          {factionError && <p className="text-blood text-sm mb-2">{factionError}</p>}
-                          {pendingFaction && (() => {
-                            const pf = FACTION_THEMES.find((f) => f.key === pendingFaction);
-                            return (
-                              <div className="flex items-center gap-3 pt-2 border-t border-brass/20">
-                                <div className="flex items-center gap-2 flex-1">
-                                  {pf && <img src={pf.crest} alt="" className="w-6 h-6 object-contain" />}
-                                  <span className="text-sm text-parchment/80">
-                                    Pledge allegiance to <span className="text-brass font-semibold">{pf?.name ?? pendingFaction}</span>?
-                                  </span>
-                                  <span className="text-xs text-blood/70">This cannot be undone.</span>
-                                </div>
-                                <button
-                                  disabled={settingFaction}
-                                  className="px-4 py-1.5 rounded bg-brass/30 border border-brass/60 hover:bg-brass/40 text-sm font-semibold disabled:opacity-40"
-                                  onClick={() => confirmFaction(pendingFaction)}
-                                >
-                                  {settingFaction ? "Pledging…" : "Confirm"}
-                                </button>
-                                <button
-                                  className="text-xs text-parchment/40 hover:text-parchment/60 underline"
-                                  onClick={() => setPendingFaction(null)}
-                                >
-                                  Back
-                                </button>
+                              style={{ backgroundImage: `url(${f.preview})`, backgroundSize: "cover", backgroundPosition: "center" }}
+                              title={f.name}
+                            >
+                              <div className="absolute inset-0 bg-void/60 group-hover:bg-void/40 transition-colors" />
+                              <div className="absolute inset-0 flex flex-col items-center justify-end pb-2 px-1">
+                                <img src={f.crest} alt="" className="w-8 h-8 object-contain drop-shadow mb-1" />
+                                <span className="text-parchment text-xs font-semibold text-center leading-tight drop-shadow">
+                                  {f.name}
+                                </span>
                               </div>
-                            );
-                          })()}
-                          <button
-                            className="text-xs text-parchment/40 hover:text-parchment/60 underline"
-                            onClick={() => { setPickingFaction(false); setPendingFaction(null); setFactionError(""); }}
-                          >
-                            Cancel
-                          </button>
+                            </button>
+                          ))}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                        {factionError && <p className="text-blood text-sm mb-2">{factionError}</p>}
+                        {pendingFaction && (() => {
+                          const pf = FACTION_THEMES.find((f) => f.key === pendingFaction);
+                          return (
+                            <div className="flex items-center gap-3 pt-2 border-t border-brass/20">
+                              <div className="flex items-center gap-2 flex-1">
+                                {pf && <img src={pf.crest} alt="" className="w-6 h-6 object-contain" />}
+                                <span className="text-sm text-parchment/80">
+                                  Pledge allegiance to <span className="text-brass font-semibold">{pf?.name ?? pendingFaction}</span>?
+                                </span>
+                                <span className="text-xs text-blood/70">This cannot be undone.</span>
+                              </div>
+                              <button
+                                disabled={settingFaction}
+                                className="px-4 py-1.5 rounded bg-brass/30 border border-brass/60 hover:bg-brass/40 text-sm font-semibold disabled:opacity-40"
+                                onClick={() => confirmFaction(pendingFaction)}
+                              >
+                                {settingFaction ? "Pledging…" : "Confirm"}
+                              </button>
+                              <button
+                                className="text-xs text-parchment/40 hover:text-parchment/60 underline"
+                                onClick={() => setPendingFaction(null)}
+                              >
+                                Back
+                              </button>
+                            </div>
+                          );
+                        })()}
+                        <button
+                          className="text-xs text-parchment/40 hover:text-parchment/60 underline mt-2 block"
+                          onClick={() => { setPickingFaction(false); setPendingFaction(null); setFactionError(""); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </Card>

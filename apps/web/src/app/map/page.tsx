@@ -16,6 +16,7 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 import { MapImageDisplay } from "@/components/MapImageDisplay";
@@ -73,11 +74,6 @@ type Member = {
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function getQueryParam(name: string): string {
-  if (typeof window === "undefined") return "";
-  return new URL(window.location.href).searchParams.get(name) ?? "";
-}
 
 function fmtKey(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -171,7 +167,7 @@ export default function MapPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
   // campaignId read directly from URL so it is populated before any useEffect
-  const [campaignId] = useState<string>(() => getQueryParam("campaign"));
+  const [campaignId] = useState<string>(() => bootstrapCampaignId());
 
   const [mapId,        setMapId]        = useState<string | null>(null);
   const [role,         setRole]         = useState<string>("player");
@@ -475,6 +471,19 @@ export default function MapPage() {
     myMoves.find((m) => m.unit_id === unitId) ?? null;
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  if (!campaignId) {
+    return (
+      <Frame title="Tactical Hololith" currentPage="map">
+        <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+          <p className="text-parchment/50">No campaign selected.</p>
+          <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">
+            Return to Home
+          </a>
+        </div>
+      </Frame>
+    );
+  }
 
   return (
     <Frame

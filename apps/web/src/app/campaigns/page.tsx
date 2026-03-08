@@ -22,6 +22,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { setCampaignSession } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 import { PLANET_ZONE_NAMES, SHIP_ZONE_NAMES } from "@/lib/zoneNames";
@@ -42,7 +43,7 @@ let _toastId = 0;
 function ToastContainer({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
   if (!toasts.length) return null;
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
+    <div className="fixed top-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
       {toasts.map((t) => (
         <div key={t.id} className={`pointer-events-auto rounded border px-4 py-3 shadow-2xl shadow-black/60 backdrop-blur-sm
             ${t.type === "success" ? "bg-void border-brass/60" : ""}
@@ -540,7 +541,8 @@ export default function CampaignsPage() {
       }
 
       // Redirect to lead page -- map generation happens there
-      window.location.href = `/lead?campaign=${data.campaign_id}`;
+      setCampaignSession(data.campaign_id);
+      window.location.href = "/lead";
 
     } catch (e: any) {
       addToast("error", "Creation failed", e?.message ?? String(e));

@@ -28,6 +28,7 @@
 
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import AdminPanel from "@/app/lead/components/AdminPanel";
 import { Card } from "@/components/Card";
@@ -68,6 +69,14 @@ type AvailableMap = {
   generation_status: string | null;
 };
 
+// Human-readable labels for the normalised layout keys used in rules_overrides.map_layout
+const LAYOUT_LABELS: Record<string, string> = {
+  ring:       "Halo Ring",
+  spoke:      "Spoke / Radial",
+  void_ship:  "Void Ship",
+  continent:  "Fractured Continents",
+};
+
 // Shape returned by distribute-income for each player (dry-run and live)
 type PlayerIncomeResult = {
   userId:        string;
@@ -82,12 +91,6 @@ type PlayerIncomeResult = {
   isUnderdog:    boolean;
 };
 
-// campaignId is read from the URL query param on first render so nav links
-// are always populated even before async load completes.
-function getQueryCampaign(): string {
-  if (typeof window === "undefined") return "";
-  return new URL(window.location.href).searchParams.get("campaign") ?? "";
-}
 
 // -- Generate Map Modal -----------------------------------------------------
 
@@ -549,7 +552,7 @@ export default function LeadControls() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
   // Initialise campaignId from URL immediately so nav links are always correct
-  const [campaignId]                    = useState<string>(getQueryCampaign);
+  const [campaignId]                    = useState<string>(() => bootstrapCampaignId());
   const [campaign, setCampaign]         = useState<Campaign | null>(null);
   const [round, setRound]               = useState<{ stage: string } | null>(null);
   const [role, setRole]                 = useState<string>("player");
@@ -848,6 +851,19 @@ export default function LeadControls() {
 
   // -- Render ----------------------------------------------------------------
 
+  if (!campaignId) {
+    return (
+      <Frame title="Lead Controls" currentPage="lead">
+        <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+          <p className="text-parchment/50">No campaign selected.</p>
+          <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">
+            Return to Home
+          </a>
+        </div>
+      </Frame>
+    );
+  }
+
   return (
     <Frame title="Lead Controls" currentPage="lead" campaignId={campaignId} role={role}>
       <div className="space-y-6">
@@ -865,6 +881,14 @@ export default function LeadControls() {
                   <div className="space-y-0.5">
                     <p className="text-parchment/50 text-xs">
                       Phase {campaign.phase} &bull; Round {campaign.round_number} &bull; Instability {campaign.instability}/10
+                    </p>
+                    <p className="text-parchment/40 text-xs">
+                      Layout: <span className="text-brass/70 font-semibold">
+                        {LAYOUT_LABELS[campaign.rules_overrides?.map_layout ?? ""] ?? (campaign.rules_overrides?.map_layout ?? "Unknown")}
+                      </span>
+                    </p>
+                    <p className="text-parchment/40 text-xs">
+                      ID: <span className="font-mono text-parchment/30 select-all">{campaign.id}</span>
                     </p>
                     <p className="text-parchment/40 text-xs">Role: {role}</p>
                   </div>

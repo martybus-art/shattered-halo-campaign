@@ -27,6 +27,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 
@@ -136,11 +137,6 @@ type UnderdogChoice = {
 
 // -- Helpers ----------------------------------------------------------------
 
-function getQueryParam(name: string): string {
-  if (typeof window === "undefined") return "";
-  return new URL(window.location.href).searchParams.get(name) ?? "";
-}
-
 function fmtKey(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -163,7 +159,7 @@ export default function Dashboard() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
   // campaignId is read directly from URL so nav links are always populated
-  const [campaignId] = useState<string>(() => getQueryParam("campaign"));
+  const [campaignId] = useState<string>(() => bootstrapCampaignId());
 
   const [campaign,        setCampaign]        = useState<Campaign | null>(null);
   const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
@@ -474,6 +470,20 @@ export default function Dashboard() {
 
   const isLeadOrAdmin = role === "lead" || role === "admin";
 
+  // No campaign in session (e.g. opened in a new tab without a ?campaign= link)
+  if (!campaignId) {
+    return (
+      <Frame title="Command Throne" currentPage="dashboard">
+        <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+          <p className="text-parchment/50">No campaign selected.</p>
+          <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">
+            Return to Home
+          </a>
+        </div>
+      </Frame>
+    );
+  }
+
   return (
     <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
       <div className="space-y-6">
@@ -719,7 +729,7 @@ export default function Dashboard() {
           <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
             {mapUrl ? (
               <div className="space-y-3">
-                <a href={`/map?campaign=${campaignId}`} title="Open Tactical Hololith">
+                <a href="/map" onClick={(e) => { e.preventDefault(); import("@/lib/campaignSession").then(m => { m.setCampaignSession(campaignId); window.location.href = "/map"; }); }} title="Open Tactical Hololith" className="cursor-pointer">
                   <img
                     src={mapUrl}
                     alt="Campaign theatre map"

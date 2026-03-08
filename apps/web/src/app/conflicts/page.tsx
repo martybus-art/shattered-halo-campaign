@@ -1,6 +1,15 @@
 "use client";
+// src/app/conflicts/page.tsx
+//
+// changelog:
+//   2026-03-08 — SECURITY: replaced ?campaign=UUID URL pattern with
+//                bootstrapCampaignId() from campaignSession. Campaign ID is
+//                now stored in sessionStorage and wiped from the URL bar on
+//                first load. Added no-campaign fallback state.
+
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
+import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 
@@ -44,11 +53,6 @@ type Member = {
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function getQueryCampaign(): string | null {
-  if (typeof window === "undefined") return null;
-  return new URL(window.location.href).searchParams.get("campaign");
-}
-
 function titleCase(s: string) {
   return s.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
 }
@@ -63,7 +67,10 @@ function memberLabel(members: Member[], userId: string): string {
 export default function ConflictsPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
-  const [campaignId, setCampaignId]     = useState("");
+  // bootstrapCampaignId reads ?campaign= from URL (if present), saves to
+  // sessionStorage, wipes from URL bar, then returns the ID.
+  const [campaignId] = useState<string>(() => bootstrapCampaignId());
+
   const [uid, setUid]                   = useState<string | null>(null);
   const [role, setRole]                 = useState("player");
   const [roundNumber, setRoundNumber]   = useState(0);
@@ -75,7 +82,7 @@ export default function ConflictsPage() {
 
   // Per-conflict UI state
   const [reportingFor, setReportingFor]           = useState<string | null>(null);
-  const [winnerPick, setWinnerPick]               = useState<string>(""); // user_id or "draw"
+  const [winnerPick, setWinnerPick]               = useState<string>("");
   const [nipEarned, setNipEarned]                 = useState(2);
   const [ncpEarned, setNcpEarned]                 = useState(0);
   const [resultNotes, setResultNotes]             = useState("");
@@ -116,14 +123,12 @@ export default function ConflictsPage() {
     setRoundNumber(camp.round_number);
     setTemplateId(camp.template_id);
 
-    // All members for name resolution
     const { data: allMembers } = await supabase
       .from("campaign_members")
       .select("user_id, faction_name, faction_key, commander_name, role")
       .eq("campaign_id", cid);
     setMembers(allMembers ?? []);
 
-    // Conflicts — show all rounds so past results are visible
     const { data: conf } = await supabase
       .from("conflicts")
       .select("*")
@@ -131,7 +136,6 @@ export default function ConflictsPage() {
       .order("round_number", { ascending: false });
     setConflicts(conf ?? []);
 
-    // Missions for this template
     const { data: ms } = await supabase
       .from("missions")
       .select("id, name, description, mission_type")
@@ -140,7 +144,6 @@ export default function ConflictsPage() {
       .lte("phase_min", camp.phase ?? 1);
     setMissions(ms ?? []);
 
-    // Battle results keyed by conflict_id
     if (conf?.length) {
       const ids = conf.map((c) => c.id);
       const { data: br } = await supabase
@@ -154,9 +157,8 @@ export default function ConflictsPage() {
   };
 
   useEffect(() => {
-    const q = getQueryCampaign();
-    if (q) { setCampaignId(q); load(q); }
-  }, []);
+    if (campaignId) load(campaignId);
+  }, [campaignId]);
 
   // ── Session token helper ────────────────────────────────────────────────────
   const getToken = async () => {
@@ -197,7 +199,6 @@ export default function ConflictsPage() {
       const isConfirming  = existing && !existing.confirmed && existing.reported_by !== uid;
 
       if (isConfirming) {
-        // Second player path — call resolve-conflict which handles sector transfer + elimination
         const reportedWinner = (existing.outcome_json as any)?.winner_user_id ?? null;
         const agrees = reportedWinner === winnerUserId;
 
@@ -227,7 +228,6 @@ export default function ConflictsPage() {
         setResultStatus((prev) => ({ ...prev, [conflict.id]: msg }));
 
       } else if (!existing) {
-        // First player path — insert unconfirmed battle_result directly
         const { error } = await supabase.from("battle_results").insert({
           conflict_id: conflict.id,
           reported_by: uid,
@@ -315,10 +315,96 @@ export default function ConflictsPage() {
     }
   };
 
-  // ── Render ──────────────────────────────────────────────────────────────────
-  const currentConflicts = conflicts.filter((c) => c.round_number === roundNumber);
-  const pastConflicts    = conflicts.filter((c) => c.round_number < roundNumber);
+  // ── Result report form ──────────────────────────────────────────────────────
+  const renderResultForm = (conflict: Conflict) => {
+    const isConfirming = !!(results[conflict.id] && !results[conflict.id].confirmed && results[conflict.id].reported_by !== uid);
+    return (
+      <div className="space-y-3 pt-1">
+        <div>
+          <label className="text-xs text-parchment/50 mb-1 block">Who won?</label>
+          <div className="flex flex-wrap gap-2">
+            {[conflict.player_a, conflict.player_b].map((playerId) => (
+              <button
+                key={playerId}
+                className={[
+                  "px-3 py-1.5 rounded border text-sm transition-colors",
+                  winnerPick === playerId
+                    ? "border-brass/70 bg-brass/25 text-parchment"
+                    : "border-brass/25 bg-void hover:border-brass/50 text-parchment/70",
+                ].join(" ")}
+                onClick={() => setWinnerPick(playerId)}
+              >
+                {memberLabel(members, playerId)}
+              </button>
+            ))}
+            <button
+              className={[
+                "px-3 py-1.5 rounded border text-sm transition-colors",
+                winnerPick === "draw"
+                  ? "border-parchment/50 bg-parchment/10 text-parchment"
+                  : "border-parchment/20 bg-void hover:border-parchment/40 text-parchment/50",
+              ].join(" ")}
+              onClick={() => setWinnerPick("draw")}
+            >
+              Draw
+            </button>
+          </div>
+        </div>
 
+        {!isConfirming && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-parchment/50 mb-1 block">NIP earned (winner)</label>
+              <input
+                type="number" min={0} max={10}
+                value={nipEarned}
+                onChange={(e) => setNipEarned(parseInt(e.target.value) || 0)}
+                className="w-full px-2 py-1 rounded bg-void border border-brass/30 text-sm text-center"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-parchment/50 mb-1 block">NCP earned (winner)</label>
+              <input
+                type="number" min={0} max={5}
+                value={ncpEarned}
+                onChange={(e) => setNcpEarned(parseInt(e.target.value) || 0)}
+                className="w-full px-2 py-1 rounded bg-void border border-brass/30 text-sm text-center"
+              />
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className="text-xs text-parchment/50 mb-1 block">Notes (optional)</label>
+          <textarea
+            rows={2}
+            className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-sm resize-none"
+            placeholder="Anything notable about the battle…"
+            value={resultNotes}
+            onChange={(e) => setResultNotes(e.target.value)}
+          />
+        </div>
+
+        <div className="flex gap-2 items-center">
+          <button
+            disabled={!winnerPick || submittingResult}
+            className="px-4 py-1.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/35 text-sm font-semibold disabled:opacity-40"
+            onClick={() => submitResult(conflict)}
+          >
+            {submittingResult ? "Submitting…" : isConfirming ? "Confirm Result" : "Submit Result"}
+          </button>
+          <button
+            className="text-xs text-parchment/40 hover:text-parchment/60 underline"
+            onClick={() => { setReportingFor(null); setWinnerPick(""); setResultNotes(""); }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Render conflict card ────────────────────────────────────────────────────
   const renderConflict = (conflict: Conflict) => {
     const existing        = results[conflict.id];
     const isInvolved      = uid === conflict.player_a || uid === conflict.player_b;
@@ -436,7 +522,7 @@ export default function ConflictsPage() {
             )}
           </div>
 
-          {/* Mission influence (only if mission not yet assigned) */}
+          {/* Mission influence */}
           {conflict.mission_status !== "assigned" && isInvolved && (
             <div className="border-t border-brass/15 pt-3">
               <div className="text-xs text-parchment/40 uppercase tracking-widest mb-2">Mission Influence</div>
@@ -539,101 +625,29 @@ export default function ConflictsPage() {
     );
   };
 
-  // ── Result report form (shared for both first-report and confirm) ─────────────
-  const renderResultForm = (conflict: Conflict) => {
-    const isConfirming = !!(results[conflict.id] && !results[conflict.id].confirmed && results[conflict.id].reported_by !== uid);
-    return (
-      <div className="space-y-3 pt-1">
-        <div>
-          <label className="text-xs text-parchment/50 mb-1 block">Who won?</label>
-          <div className="flex flex-wrap gap-2">
-            {[conflict.player_a, conflict.player_b].map((playerId) => (
-              <button
-                key={playerId}
-                className={[
-                  "px-3 py-1.5 rounded border text-sm transition-colors",
-                  winnerPick === playerId
-                    ? "border-brass/70 bg-brass/25 text-parchment"
-                    : "border-brass/25 bg-void hover:border-brass/50 text-parchment/70",
-                ].join(" ")}
-                onClick={() => setWinnerPick(playerId)}
-              >
-                {memberLabel(members, playerId)}
-              </button>
-            ))}
-            <button
-              className={[
-                "px-3 py-1.5 rounded border text-sm transition-colors",
-                winnerPick === "draw"
-                  ? "border-parchment/50 bg-parchment/10 text-parchment"
-                  : "border-parchment/20 bg-void hover:border-parchment/40 text-parchment/50",
-              ].join(" ")}
-              onClick={() => setWinnerPick("draw")}
-            >
-              Draw
-            </button>
-          </div>
-        </div>
-
-        {!isConfirming && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-parchment/50 mb-1 block">NIP earned (winner)</label>
-              <input
-                type="number" min={0} max={10}
-                value={nipEarned}
-                onChange={(e) => setNipEarned(parseInt(e.target.value) || 0)}
-                className="w-full px-2 py-1 rounded bg-void border border-brass/30 text-sm text-center"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-parchment/50 mb-1 block">NCP earned (winner)</label>
-              <input
-                type="number" min={0} max={5}
-                value={ncpEarned}
-                onChange={(e) => setNcpEarned(parseInt(e.target.value) || 0)}
-                className="w-full px-2 py-1 rounded bg-void border border-brass/30 text-sm text-center"
-              />
-            </div>
-          </div>
-        )}
-
-        <div>
-          <label className="text-xs text-parchment/50 mb-1 block">Notes (optional)</label>
-          <textarea
-            rows={2}
-            className="w-full px-2 py-1.5 rounded bg-void border border-brass/30 text-sm resize-none"
-            placeholder="Anything notable about the battle…"
-            value={resultNotes}
-            onChange={(e) => setResultNotes(e.target.value)}
-          />
-        </div>
-
-        <div className="flex gap-2 items-center">
-          <button
-            disabled={!winnerPick || submittingResult}
-            className="px-4 py-1.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/35 text-sm font-semibold disabled:opacity-40"
-            onClick={() => submitResult(conflict)}
-          >
-            {submittingResult ? "Submitting…" : isConfirming ? "Confirm Result" : "Submit Result"}
-          </button>
-          <button
-            className="text-xs text-parchment/40 hover:text-parchment/60 underline"
-            onClick={() => { setReportingFor(null); setWinnerPick(""); setResultNotes(""); }}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  };
-
   // ── Page render ─────────────────────────────────────────────────────────────
+
+  // No campaign in session (e.g. opened in a new tab without a ?campaign= link)
+  if (!campaignId) {
+    return (
+      <Frame title="Engagements" currentPage="conflicts">
+        <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+          <p className="text-parchment/50">No campaign selected.</p>
+          <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">
+            Return to Home
+          </a>
+        </div>
+      </Frame>
+    );
+  }
+
+  const currentConflicts = conflicts.filter((c) => c.round_number === roundNumber);
+  const pastConflicts    = conflicts.filter((c) => c.round_number < roundNumber);
+
   return (
     <Frame title="Engagements" campaignId={campaignId} role={role} currentPage="conflicts">
       <div className="space-y-6">
 
-        {/* Current round conflicts */}
         {currentConflicts.length > 0 && (
           <div className="space-y-4">
             <h2 className="text-xs uppercase tracking-widest text-parchment/40 px-1">
@@ -652,7 +666,6 @@ export default function ConflictsPage() {
           </Card>
         )}
 
-        {/* Past rounds */}
         {pastConflicts.length > 0 && (
           <div className="space-y-4">
             <h2 className="text-xs uppercase tracking-widest text-parchment/40 px-1">
