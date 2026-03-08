@@ -37,6 +37,56 @@ type PendingInvite = {
   invite_message: string | null;
 };
 
+type ToastType = "success" | "error" | "info";
+type Toast = { id: number; type: ToastType; title: string; body?: string };
+let _toastId = 0;
+
+function ToastContainer({
+  toasts,
+  dismiss,
+}: {
+  toasts: Toast[];
+  dismiss: (id: number) => void;
+}) {
+  if (!toasts.length) return null;
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex w-full max-w-sm flex-col gap-3 pointer-events-none">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto rounded-lg border px-4 py-3 shadow-2xl shadow-black/60 backdrop-blur-sm ${
+            t.type === "success" ? "bg-void border-brass/60" : ""
+          } ${t.type === "error" ? "bg-void border-blood/60" : ""} ${
+            t.type === "info" ? "bg-void border-brass/30" : ""
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p
+                className={`text-sm font-semibold uppercase tracking-widest ${
+                  t.type === "success" ? "text-brass" : ""
+                } ${t.type === "error" ? "text-blood" : ""} ${
+                  t.type === "info" ? "text-brass/70" : ""
+                }`}
+              >
+                {t.title}
+              </p>
+              {t.body ? <p className="mt-1 text-xs text-parchment/60 leading-relaxed">{t.body}</p> : null}
+            </div>
+            <button
+              onClick={() => dismiss(t.id)}
+              className="text-lg leading-none text-parchment/30 hover:text-parchment/70"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
 /** Navigate to a campaign page without exposing the campaign ID in the URL. */
 function navTo(path: string, campaignId: string) {
   setCampaignSession(campaignId);
@@ -66,6 +116,20 @@ export default function Home() {
 
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [processingInviteId, setProcessingInviteId] = useState<string>("");
+
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const addToast = (type: ToastType, title: string, body?: string) => {
+    const id = ++_toastId;
+    setToasts((prev) => [...prev, { id, type, title, body }]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  };
+
+  const dismissToast = (id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
 
   const selectedMembership = memberships.find((m) => m.campaign_id === selectedCampaignId);
 
@@ -143,24 +207,24 @@ export default function Home() {
 
   // ── Actions ───────────────────────────────────────────────
   const sendMagicLink = async () => {
-    if (!email.trim()) return alert("Enter your email address.");
+    if (!email.trim()) return addToast("error", "Email Required", "Enter your email address.");
     const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) alert(error.message);
-    else alert("Check your email for the login link.");
+    if (error) addToast("error", "Login Failed", error.message);
+    else addToast("success", "Magic Link Sent", "Check your email for the login link.");
   };
 
   const signOut = async () => { await supabase.auth.signOut(); location.reload(); };
 
   const saveDisplayName = async () => {
-    if (!displayName.trim()) return alert("Enter a name.");
+    if (!displayName.trim()) return addToast("error", "Name Required", "Enter a name.");
     setSavingName(true);
     try {
       const { error } = await supabase.auth.updateUser({ data: { display_name: displayName.trim() } });
       if (error) throw error;
       setSavedName(displayName.trim());
-      alert("Name saved.");
+      addToast("success", "Name Saved", "Your display name has been updated.");
     } catch (e: any) {
-      alert(e?.message ?? "Failed to save name.");
+      addToast("error", "Save Failed", e?.message ?? "Failed to save name.");
     } finally { setSavingName(false); }
   };
 
@@ -168,7 +232,7 @@ export default function Home() {
     setProcessingInviteId(inviteId);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) { alert("Session expired. Refresh and try again."); return; }
+      if (!session?.access_token) { addToast("error", "Session Expired", "Refresh and try again."); return; }
       const { data, error } = await supabase.functions.invoke("accept-invites", {
         body: { mode, invite_id: inviteId },
         headers: { Authorization: `Bearer ${session.access_token}` },
@@ -178,7 +242,7 @@ export default function Home() {
       setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
       if (mode === "accept" && userId) await loadCampaigns(userId);
     } catch (e: any) {
-      alert(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
+      addToast("error", mode === "accept" ? "Accept Failed" : "Decline Failed", e?.message ?? "Something went wrong.");
     } finally { setProcessingInviteId(""); }
   };
 
@@ -532,6 +596,7 @@ export default function Home() {
         </Card>
 
       </div>
+      <ToastContainer toasts={toasts} dismiss={dismissToast} />
     </Frame>
   );
 }
