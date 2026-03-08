@@ -4,62 +4,119 @@
 // Rules enforced:
 //   - Movement phase: any unit (scout or occupation), 1 step adjacency.
 //   - Recon phase: scout units only, requires recon token purchased this round.
-//   - Deep strike: occupation or scout can move anywhere on map if the player
-//     has a deep_strike token this round. Occupation deep-striking into an
-//     unscouted sector records a defensive_bonus flag on the resulting conflict.
+//   - Deep strike: any unit can move anywhere on the map if the player has a
+//     deep_strike token this round. Occupation deep-striking into an unscouted
+//     sector records a defensive_bonus flag on the resulting conflict.
 //   - Occupation into undefended enemy sector: ownership auto-transferred.
 //   - Scout or occupation into defended enemy sector: conflict record inserted.
 //   - One move per unit per round (can update before phase ends).
 //
+// Reveal rules (when revealed_public becomes true):
+//   - Scout enters any unclaimed sector: sector upserted with revealed_public=true.
+//   - Scout enters undefended enemy sector: revealed_public=true set.
+//   - Any unit triggers a conflict (enemy occupation present): both
+//     attacker and defender can now see each other — revealed_public=true.
+//   - Occupation captures undefended enemy sector: revealed_public=true
+//     so the ex-owner (and anyone who has previously scouted it) can see
+//     the ownership change.
+//
 // changelog:
+//   2026-03-08 -- BUG FIX: conflicts insert now uses player_a / player_b
+//                 (correct column names). Previously used attacker_user_id /
+//                 defender_user_id / metadata which don't exist — conflicts
+//                 were never created.
+//   2026-03-08 -- BUG FIX: buildAdjacency now reads the layout field from
+//                 the maps table and applies the correct topology. Previously
+//                 hardcoded to ring regardless of campaign layout type, so
+//                 adjacency was wrong for spoke / continent / void_ship.
+//   2026-03-08 -- BUG FIX (privacy): revealed_public=true now set on conflict
+//                 creation (both players know about each other) and on
+//                 occupation auto-capture (ex-owner sees ownership change).
 //   2026-03-05 -- Initial implementation.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
-
-const SECTOR_KEYS = ["a", "b", "c", "d"];
 
 type MapDef = {
   zones: { key: string; name: string; sectors?: { key: string }[] }[];
   adjacency?: Record<string, string[]>; // optional explicit adjacency override
 };
 
-// Ring adjacency: each zone is adjacent to the next and previous in the array.
-// Same-zone moves are always valid.
-function buildAdjacency(map: MapDef): Map<string, Set<string>> {
-  const adj = new Map<string, Set<string>>();
+// Builds the same adjacency topology as the frontend buildAdjacency function.
+// layout values:
+//   "ring"      — each zone → prev + next, wrapping (Halo Ring)
+//   "spoke"     — zones[0] = hub → every outer; outer also ring among themselves
+//   "void_ship" — 2 parallel corridors bridged at bow and stern
+//   "continent" — clusters of ~3 internally ring-connected, bridged per cluster
+function buildAdjacency(map: MapDef, layout: string): Map<string, Set<string>> {
+  const adj   = new Map<string, Set<string>>();
   const zones = map.zones;
-  const n = zones.length;
-  for (let i = 0; i < n; i++) {
-    const key = zones[i].key;
-    if (!adj.has(key)) adj.set(key, new Set());
-    adj.get(key)!.add(key); // same zone always adjacent to itself
+  const n     = zones.length;
 
-    if (n > 1) {
-      const prev = zones[(i - 1 + n) % n].key;
-      const next = zones[(i + 1) % n].key;
-      adj.get(key)!.add(prev);
-      adj.get(key)!.add(next);
+  for (const z of zones) {
+    adj.set(z.key, new Set([z.key])); // self-adjacency always valid
+  }
+  if (n <= 1) return adj;
+
+  const link = (a: string, b: string) => {
+    adj.get(a)!.add(b);
+    adj.get(b)!.add(a);
+  };
+
+  switch (layout) {
+
+    case "spoke": {
+      // zones[0] = hub connects to every outer zone.
+      // Outer zones also form a ring among themselves.
+      const hub = zones[0].key;
+      for (let i = 1; i < n; i++) {
+        link(hub, zones[i].key);
+        link(zones[i].key, zones[i === 1 ? n - 1 : i - 1].key);
+      }
+      break;
+    }
+
+    case "void_ship": {
+      // Port corridor: zones[0 .. perCol-1]
+      // Starboard corridor: zones[perCol .. n-1]
+      // Bridges: bow (0 ↔ perCol) and stern (perCol-1 ↔ n-1)
+      const perCol = Math.ceil(n / 2);
+      for (let i = 0; i < perCol - 1; i++) link(zones[i].key, zones[i + 1].key);
+      for (let i = perCol; i < n - 1; i++) link(zones[i].key, zones[i + 1].key);
+      if (n > perCol) link(zones[0].key, zones[perCol].key);
+      if (perCol > 1 && n > perCol) link(zones[perCol - 1].key, zones[n - 1].key);
+      break;
+    }
+
+    case "continent": {
+      const cs = Math.max(2, Math.round(n / Math.ceil(n / 3)));
+      const nc = Math.ceil(n / cs);
+      for (let c = 0; c < nc; c++) {
+        const s  = c * cs;
+        const e  = Math.min(s + cs, n);
+        const cl = zones.slice(s, e);
+        for (let i = 0; i < cl.length; i++) link(cl[i].key, cl[(i + 1) % cl.length].key);
+        if (c < nc - 1) link(cl[cl.length - 1].key, zones[e].key);
+      }
+      break;
+    }
+
+    case "ring":
+    default: {
+      for (let i = 0; i < n; i++) link(zones[i].key, zones[(i + 1) % n].key);
+      break;
     }
   }
 
   // Apply explicit adjacency overrides from map_json if present
   if (map.adjacency) {
     for (const [zk, neighbours] of Object.entries(map.adjacency)) {
-      if (!adj.has(zk)) adj.set(zk, new Set());
+      if (!adj.has(zk)) adj.set(zk, new Set([zk]));
       for (const nb of neighbours) adj.get(zk)!.add(nb);
     }
   }
 
   return adj;
-}
-
-function isAdjacent(
-  fromZone: string,
-  toZone: string,
-  adj: Map<string, Set<string>>
-): boolean {
-  return adj.get(fromZone)?.has(toZone) ?? false;
 }
 
 serve(async (req) => {
@@ -74,12 +131,7 @@ serve(async (req) => {
     const admin = adminClient();
     const body  = await req.json().catch(() => ({}));
 
-    const {
-      campaign_id,
-      unit_id,
-      to_zone_key,
-      to_sector_key,
-    } = body as {
+    const { campaign_id, unit_id, to_zone_key, to_sector_key } = body as {
       campaign_id:   string;
       unit_id:       string;
       to_zone_key:   string;
@@ -144,24 +196,25 @@ serve(async (req) => {
       .eq("user_id", uid).eq("spend_type", "deep_strike").maybeSingle();
     const hasDeepStrike = !!dsToken;
 
-    // ── 6. Load map for adjacency ────────────────────────────────────────────
+    // ── 6. Load map for adjacency (reads layout field) ────────────────────────
     let mapDef: MapDef = { zones: [] };
+    let mapLayout      = "ring"; // default
     if (camp.map_id) {
       const { data: mapRow } = await admin
-        .from("maps").select("map_json")
+        .from("maps").select("map_json, layout")
         .eq("id", camp.map_id).maybeSingle();
       if (mapRow?.map_json && (mapRow.map_json as any)?.zones?.length) {
-        mapDef = mapRow.map_json as MapDef;
+        mapDef    = mapRow.map_json as MapDef;
+        mapLayout = (mapRow.layout as string | null) ?? "ring";
       }
     }
-    // Fallback: treat from-zone and to-zone as always adjacent (single-zone campaign)
-    const adj = buildAdjacency(mapDef);
+    const adj = buildAdjacency(mapDef, mapLayout);
 
-    // ── 7. Adjacency check (skip if deep strike) ─────────────────────────────
+    // ── 7. Adjacency check (bypass if deep strike) ───────────────────────────
     const moveType = hasDeepStrike ? "deep_strike" : (stage === "recon" ? "recon" : "normal");
 
     if (!hasDeepStrike) {
-      const adjacent = isAdjacent(unit.zone_key, to_zone_key, adj);
+      const adjacent = adj.get(unit.zone_key)?.has(to_zone_key) ?? false;
       if (!adjacent) {
         return json(400, {
           ok: false,
@@ -170,7 +223,7 @@ serve(async (req) => {
       }
     }
 
-    // ── 8. Check what's at the destination ───────────────────────────────────
+    // ── 8. Check destination sector ──────────────────────────────────────────
     const { data: destSector } = await admin
       .from("sectors").select("owner_user_id, fortified, revealed_public")
       .eq("campaign_id", campaign_id)
@@ -180,7 +233,7 @@ serve(async (req) => {
     const destOwner = destSector?.owner_user_id ?? null;
     const enemyHeld = destOwner !== null && destOwner !== uid;
 
-    // Check if destination has an enemy occupation unit defending it
+    // Check if destination has an enemy occupation unit
     const { data: defenderUnits } = await admin
       .from("units").select("id, unit_type, user_id")
       .eq("campaign_id", campaign_id)
@@ -191,7 +244,7 @@ serve(async (req) => {
       (u: any) => u.user_id !== uid && u.unit_type === "occupation"
     );
 
-    // Has this player's scout unit previously visited this sector?
+    // Has this player previously scouted this sector?
     const { data: priorScout } = await admin
       .from("moves").select("id")
       .eq("campaign_id", campaign_id).eq("user_id", uid)
@@ -205,54 +258,68 @@ serve(async (req) => {
 
     if (enemyHeld) {
       if (!enemyOccupationPresent) {
-        // Enemy owns it but no occupation unit — auto-transfer ownership
-        // (occupation unit is required to defend a territory)
+        // Enemy owns it but no defending unit — occupation unit captures it
         if (unit.unit_type === "occupation") {
           autoTransfer = true;
-          await admin.from("sectors").update({ owner_user_id: uid })
+          await admin.from("sectors")
+            .update({
+              owner_user_id:   uid,
+              revealed_public: true,   // ex-owner can see the capture; both now know
+            })
             .eq("campaign_id", campaign_id)
             .eq("zone_key", to_zone_key).eq("sector_key", to_sector_key);
         }
-        // Scout moving into undefended enemy territory: record intel, flag as visible
+        // Scout enters undefended enemy territory — reveal it
         if (unit.unit_type === "scout") {
-          await admin.from("sectors").update({ revealed_public: true })
+          await admin.from("sectors")
+            .update({ revealed_public: true })
             .eq("campaign_id", campaign_id)
             .eq("zone_key", to_zone_key).eq("sector_key", to_sector_key);
         }
       } else {
-        // Enemy has an occupation unit present — this is a conflict
-        // Deep strike into unscouted territory gives defender a bonus
+        // Enemy occupation unit present — conflict
         defensiveBonus = hasDeepStrike && !hasScouted;
 
+        // Reveal the sector: both attacker and defender now know each other's
+        // presence here. This is the first moment enemy starting positions
+        // become visible on the map if they haven't been scouted before.
+        await admin.from("sectors")
+          .update({ revealed_public: true })
+          .eq("campaign_id", campaign_id)
+          .eq("zone_key", to_zone_key).eq("sector_key", to_sector_key);
+
+        // Insert conflict using the correct column names (player_a / player_b)
         const { data: conflict, error: cErr } = await admin
           .from("conflicts").insert({
             campaign_id,
-            round_number:      camp.round_number,
-            attacker_user_id:  uid,
-            defender_user_id:  destOwner,
-            zone_key:          to_zone_key,
-            sector_key:        to_sector_key,
-            status:            "pending",
-            metadata: {
-              unit_type:       unit.unit_type,
-              move_type:       moveType,
-              defensive_bonus: defensiveBonus,
-            },
+            round_number:    camp.round_number,
+            player_a:        uid,           // attacker
+            player_b:        destOwner,     // defender
+            zone_key:        to_zone_key,
+            sector_key:      to_sector_key,
+            status:          "pending",
+            twist_tags:      defensiveBonus ? ["defensive_bonus"] : [],
           }).select("id").single();
 
-        if (!cErr && conflict) conflictId = conflict.id;
+        if (cErr) {
+          console.error("[submit-move] conflict insert error:", cErr.message);
+        } else if (conflict) {
+          conflictId = conflict.id;
+        }
       }
     } else if (!destOwner && unit.unit_type === "scout") {
-      // Scout moving into unclaimed territory: reveal it
-      await admin.from("sectors")
-        .upsert({
+      // Scout entering unclaimed territory — reveal it
+      await admin.from("sectors").upsert(
+        {
           campaign_id,
-          zone_key:       to_zone_key,
-          sector_key:     to_sector_key,
-          owner_user_id:  null,
+          zone_key:        to_zone_key,
+          sector_key:      to_sector_key,
+          owner_user_id:   null,
           revealed_public: true,
-          fortified:      false,
-        }, { onConflict: "campaign_id,zone_key,sector_key" });
+          fortified:       false,
+        },
+        { onConflict: "campaign_id,zone_key,sector_key" }
+      );
     }
 
     // ── 9. Upsert move record (one move per unit per round) ───────────────────
@@ -287,10 +354,9 @@ serve(async (req) => {
     }
 
     // ── 10. Update unit position ──────────────────────────────────────────────
-    await admin.from("units").update({
-      zone_key:   to_zone_key,
-      sector_key: to_sector_key,
-    }).eq("id", unit_id);
+    await admin.from("units")
+      .update({ zone_key: to_zone_key, sector_key: to_sector_key })
+      .eq("id", unit_id);
 
     // ── 11. Update player_state public location (occupation unit only) ────────
     if (unit.unit_type === "occupation") {

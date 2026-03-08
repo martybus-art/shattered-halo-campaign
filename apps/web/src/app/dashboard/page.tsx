@@ -325,11 +325,16 @@ export default function Dashboard() {
       }
     }
 
-    // 8. Sectors visible to this player (RLS: own + revealed_public)
+    // 8. Sectors visible to this player (RLS: own + revealed_public).
+    //    Client-side filter applied as defense-in-depth — ensures no unrevealed
+    //    enemy sectors are ever displayed even if RLS were misconfigured.
     const { data: sectorRows } = await supabase
       .from("sectors").select("zone_key,sector_key,owner_user_id,revealed_public")
       .eq("campaign_id", cid);
-    setSectors((sectorRows ?? []) as Sector[]);
+    const visibleSectors = ((sectorRows ?? []) as Sector[]).filter(
+      (s) => s.owner_user_id === user.id || s.revealed_public
+    );
+    setSectors(visibleSectors);
 
     // 9. Members (for territory display and commander names)
     const { data: memberRows } = await supabase
@@ -584,7 +589,7 @@ export default function Dashboard() {
     <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
       <div className="space-y-6">
 
-        {/* ── Row 1: Your Status (left) + War Bulletin (right) ─────────── */}
+        {/* ── Row 1: Your Status (left) + Faction Resources (right) ─────────── */}
         <div className="grid md:grid-cols-2 gap-6 items-start">
 
           {/* Your Status */}
@@ -677,49 +682,6 @@ export default function Dashboard() {
               <p className="text-parchment/40 text-sm italic">Loading status...</p>
             )}
           </Card>
-
-          {/* War Bulletin — last 5 public posts */}
-          <Card title="War Bulletin">
-            {bulletinPosts.length > 0 ? (
-              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
-                {bulletinPosts.map((post, idx) => {
-                  const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
-                  return (
-                    <div
-                      key={post.id}
-                      className={idx > 0 ? "pt-4 border-t border-brass/10" : ""}
-                    >
-                      {/* Title row */}
-                      <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
-                        <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <PostTagBadge tags={tags} />
-                          <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
-                        </div>
-                      </div>
-                      {/* Body — truncated for older posts to keep the card scannable */}
-                      <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
-                        {idx === 0
-                          ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
-                          : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
-                        }
-                      </p>
-                      <p className="text-parchment/25 text-xs mt-1">
-                        {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
-            )}
-          </Card>
-
-        </div>
-
-        {/* ── Row 2: Faction Resources (left) + Campaign Map (right) ───── */}
-        <div className="grid md:grid-cols-2 gap-6 items-start">
 
           {/* Faction Resources */}
           <Card title="Faction Resources">
@@ -838,6 +800,51 @@ export default function Dashboard() {
               <p className="text-parchment/40 text-sm italic">Loading resources...</p>
             )}
           </Card>
+
+
+        </div>
+
+        {/* ── Row 2: War Bulletin (left) + Campaign Map (right) ───────────── */}
+        <div className="grid md:grid-cols-2 gap-6 items-start">
+
+          {/* War Bulletin — last 5 public posts */}
+          <Card title="War Bulletin">
+            {bulletinPosts.length > 0 ? (
+              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
+                {bulletinPosts.map((post, idx) => {
+                  const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
+                  return (
+                    <div
+                      key={post.id}
+                      className={idx > 0 ? "pt-4 border-t border-brass/10" : ""}
+                    >
+                      {/* Title row */}
+                      <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
+                        <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <PostTagBadge tags={tags} />
+                          <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
+                        </div>
+                      </div>
+                      {/* Body — truncated for older posts to keep the card scannable */}
+                      <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
+                        {idx === 0
+                          ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
+                          : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
+                        }
+                      </p>
+                      <p className="text-parchment/25 text-xs mt-1">
+                        {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
+            )}
+          </Card>
+
 
           {/* Campaign Map */}
           <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
