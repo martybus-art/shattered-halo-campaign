@@ -2,6 +2,9 @@
 // src/app/conflicts/page.tsx
 //
 // changelog:
+//   2026-03-09 — LAYOUT: Pre-Battle Dispatch and Battle Result moved to LEFT column
+//                (before Ceasefire). RIGHT column now: Mission info → Battlefield SVG →
+//                Post-Battle Chronicle. JSX text \u2014 escape fixed to &mdash;.
 //   2026-03-09 — FEATURE: Dual Battle Chronicles. "Pre-Battle Dispatch" is always
 //                available and generates a dramatic hype narrative (factions, stakes,
 //                grimdark flavour, no outcome). Post-battle "Generate Chronicle"
@@ -868,7 +871,7 @@ export default function ConflictsPage() {
           <div className="rounded border border-brass/30 bg-brass/5 px-3 py-2 flex items-center gap-2">
             <span className="text-brass text-base">\u26dc</span>
             <span className="text-parchment/80 text-sm">
-              Ceasefire Pact \u2014 no battle took place. Both factions stood down.
+              Ceasefire Pact &mdash; no battle took place. Both factions stood down.
             </span>
           </div>
         </div>
@@ -911,7 +914,7 @@ export default function ConflictsPage() {
           <div className="space-y-2">
             <div className="rounded border border-brass/20 bg-void/60 px-3 py-2">
               <p className="text-sm text-parchment/70">
-                <span className="text-brass">\u26dc</span> Ceasefire proposed \u2014 awaiting{" "}
+                <span className="text-brass">\u26dc</span> Ceasefire proposed &mdash; awaiting{" "}
                 <span className="text-brass">{opponentLabel}</span>.
               </p>
             </div>
@@ -1002,7 +1005,7 @@ export default function ConflictsPage() {
         {/* ── 2-Column layout ─────────────────────────────────────────── */}
         <div className="grid sm:grid-cols-2 gap-x-6 gap-y-4">
 
-          {/* LEFT: Combatants → Mission Influence → Alliance */}
+          {/* LEFT: Combatants → Mission Influence → Pre-Battle Dispatch → Battle Result → Alliance */}
           <div className="space-y-4">
 
             {/* Combatants */}
@@ -1100,44 +1103,6 @@ export default function ConflictsPage() {
               </div>
             )}
 
-            {/* Ceasefire / Alliance section */}
-            {renderAllianceSection(conflict)}
-
-          </div>
-          {/* end LEFT */}
-
-          {/* RIGHT: Mission → SVG → Pre-Chronicle → Result → Post-Chronicle */}
-          <div className="space-y-4">
-
-            {/* Mission info */}
-            <div>
-              <div className="text-xs text-parchment/40 uppercase tracking-widest mb-1">
-                Mission
-              </div>
-              {mission ? (
-                <>
-                  <div className="text-parchment font-semibold">{mission.name}</div>
-                  <div className="text-xs text-parchment/50 capitalize">{mission.mission_type}</div>
-                  <div className="text-xs text-parchment/40 mt-0.5 leading-snug">
-                    {mission.description}
-                  </div>
-                </>
-              ) : (
-                <div className="text-parchment/30 italic text-xs">
-                  {conflict.mission_status === "unassigned"
-                    ? "Mission not yet assigned"
-                    : "Mission assigned"}
-                </div>
-              )}
-            </div>
-
-            {/* Battlefield Layout SVG */}
-            <BattlefieldLayout
-              conflictId={conflict.id}
-              factionA={factionA}
-              factionB={factionB}
-            />
-
             {/* Pre-Battle Dispatch — always available for non-allied conflicts */}
             {!isAllied && (
               <div className="border-t border-brass/15 pt-3">
@@ -1210,7 +1175,7 @@ export default function ConflictsPage() {
                   </div>
                 ) : existing && alreadyReported ? (
                   <p className="text-sm text-parchment/50 italic">
-                    Your result is submitted \u2014 awaiting confirmation from {opponentLabel}.
+                    Your result is submitted &mdash; awaiting confirmation from {opponentLabel}.
                   </p>
                 ) : canConfirm ? (
                   <div className="rounded border border-brass/25 bg-void/60 px-3 py-2 space-y-2">
@@ -1263,6 +1228,44 @@ export default function ConflictsPage() {
                 </p>
               </div>
             )}
+
+            {/* Ceasefire / Alliance section */}
+            {renderAllianceSection(conflict)}
+
+          </div>
+          {/* end LEFT */}
+
+          {/* RIGHT: Mission → SVG → Post-Chronicle */}
+          <div className="space-y-4">
+
+            {/* Mission info */}
+            <div>
+              <div className="text-xs text-parchment/40 uppercase tracking-widest mb-1">
+                Mission
+              </div>
+              {mission ? (
+                <>
+                  <div className="text-parchment font-semibold">{mission.name}</div>
+                  <div className="text-xs text-parchment/50 capitalize">{mission.mission_type}</div>
+                  <div className="text-xs text-parchment/40 mt-0.5 leading-snug">
+                    {mission.description}
+                  </div>
+                </>
+              ) : (
+                <div className="text-parchment/30 italic text-xs">
+                  {conflict.mission_status === "unassigned"
+                    ? "Mission not yet assigned"
+                    : "Mission assigned"}
+                </div>
+              )}
+            </div>
+
+            {/* Battlefield Layout SVG */}
+            <BattlefieldLayout
+              conflictId={conflict.id}
+              factionA={factionA}
+              factionB={factionB}
+            />
 
             {/* Post-Battle Chronicle — results phase or past rounds */}
             {!isAllied && showPost && (
@@ -1361,7 +1364,7 @@ export default function ConflictsPage() {
         {currentConflicts.length > 0 && (
           <div className="space-y-4">
             <h2 className="text-xs uppercase tracking-widest text-parchment/40 px-1">
-              Round {roundNumber} \u2014 Active Engagements
+              Round {roundNumber} &mdash; Active Engagements
               {roundStage && (
                 <span className="ml-2 text-brass/50">
                   ({titleCase(roundStage)} phase)

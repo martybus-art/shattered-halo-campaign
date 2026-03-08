@@ -2,6 +2,10 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-09 — LAYOUT: Tactical Hololith and AI Theatre Map placed side-by-side
+//                in a 2-column grid (lg:grid-cols-2). Hololith on the left, map
+//                image on the right. Single-column on mobile; right column hidden
+//                when no mapId is present.
 //   2026-03-08 — FEATURE: Replaced zone/sector dropdowns with an interactive
 //                SVG Tactical Layout Map. Design rules:
 //                  • ALL zones always visible — layout shape reflects map type
@@ -904,9 +908,12 @@ export default function MapPage() {
           <p className="text-parchment/50 animate-pulse text-sm px-1">Loading tactical data…</p>
         )}
 
-        {/* ── Tactical Layout Map ── */}
+        {/* ── Tactical Hololith + AI Theatre Map (side by side) ── */}
         {!loading && (
-          <Card title={
+        <div className={`grid gap-4 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
+
+        {/* LEFT: Tactical Hololith */}
+        <Card title={
             allZones.length > 0 && mapZoneCount
               ? `Tactical Hololith — ${effectiveZones.length} / ${mapZoneCount} Zones Surveyed`
               : "Tactical Hololith"
@@ -980,11 +987,17 @@ export default function MapPage() {
                 );
               })}
           </Card>
-        )}
+        {/* end LEFT */}
 
-        {/* ── AI Theatre Map (generated image, secondary) ── */}
-        {mapId && !loading && (
-          <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
+          {/* RIGHT: AI Theatre Map (generated image) */}
+          {mapId && (
+            <div className="min-w-0">
+              <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
+            </div>
+          )}
+
+        </div>
+        {/* end Hololith + Theatre Map grid */}
         )}
 
         {/* ── My Units ── */}
