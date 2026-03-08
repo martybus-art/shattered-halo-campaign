@@ -49,6 +49,7 @@ export default function Home() {
   const [email, setEmail] = useState("");
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const [displayName, setDisplayName] = useState("");
   const [savedName, setSavedName] = useState("");
@@ -72,14 +73,18 @@ export default function Home() {
   useEffect(() => {
     const run = async () => {
       const { data, error } = await supabase.auth.getUser();
-      if (error || !data.user) { setUserEmail(null); setUserId(null); return; }
+      if (error || !data.user) {
+        setUserEmail(null);
+        setUserId(null);
+        return;
+      }
       setUserEmail(data.user.email ?? null);
       setUserId(data.user.id);
       const name = data.user.user_metadata?.display_name ?? "";
       setDisplayName(name);
       setSavedName(name);
     };
-    run();
+    run().finally(() => setAuthLoading(false));
   }, [supabase]);
 
   // ── Load campaigns ────────────────────────────────────────
@@ -217,6 +222,16 @@ export default function Home() {
   };
 
   // ── Not signed in ─────────────────────────────────────────
+  if (authLoading) {
+    return (
+      <Frame title="Access">
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
+        </div>
+      </Frame>
+    );
+  }
+
   if (!userEmail) {
     return (
       <Frame title="Access">
