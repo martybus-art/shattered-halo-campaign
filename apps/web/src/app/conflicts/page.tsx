@@ -31,6 +31,9 @@
 //   2026-03-08 — FEATURE: Alliance / Ceasefire system.
 //   2026-03-08 — FEATURE: Chronicles published to War Bulletin.
 //   2026-03-08 — SECURITY: sessionStorage campaign ID pattern.
+//   2026-03-09 — BUG FIX: renderAllianceSection guarded on "scheduled" status
+//                but conflicts are created with status "pending". Fixed to accept
+//                both "pending" and "scheduled" so Propose Ceasefire shows.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
@@ -911,7 +914,7 @@ export default function ConflictsPage() {
       );
     }
 
-    if (conflict.status !== "scheduled") return null;
+    if (conflict.status !== "pending" && conflict.status !== "scheduled") return null;
 
     const proposedByMe       = conflict.alliance_proposed_by === uid;
     const proposedByOpponent = conflict.alliance_proposed_by !== null && conflict.alliance_proposed_by !== uid;

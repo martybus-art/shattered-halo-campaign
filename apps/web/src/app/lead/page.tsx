@@ -58,6 +58,18 @@ type Member = {
   faction_name:   string | null;
 };
 
+type LeadPost = {
+  id:               string;
+  title:            string;
+  body:             string;
+  round_number:     number;
+  created_at:       string;
+  tags:             string[];
+  visibility:       string;        // 'public' | 'private'
+  audience_user_id: string | null;
+  created_by:       string | null;
+};
+
 type KnownUser = { id: string; email: string; display_name: string | null };
 
 type AvailableMap = {
@@ -573,6 +585,12 @@ export default function LeadControls() {
   const [resultModal, setResultModal]   = useState<ResultModalState>({ open: false });
 
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({ open: false });
+
+  // War Bulletin — all posts for this campaign (lead sees all)
+  const [allPosts,        setAllPosts]        = useState<LeadPost[]>([]);
+  const [promotingPostId, setPromotingPostId] = useState<string | null>(null);
+  const [bulletinFilter,  setBulletinFilter]  = useState<"all" | "public" | "private">("all");
+
   const confirmResolverRef = useRef<((v: boolean) => void) | null>(null);
 
   const askConfirm = (
@@ -658,6 +676,17 @@ export default function LeadControls() {
         .order("created_at", { ascending: false });
       setAvailableMaps((mapRows ?? []) as AvailableMap[]);
     } catch { /* non-fatal */ }
+
+    // War Bulletin — leads see ALL posts (posts_lead_read policy covers this)
+    try {
+      const { data: postRows } = await supabase
+        .from("posts")
+        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id,created_by")
+        .eq("campaign_id", cid)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      setAllPosts((postRows ?? []) as LeadPost[]);
+    } catch { /* non-fatal */ }
   };
 
   useEffect(() => { load(campaignId); }, []); // eslint-disable-line
@@ -702,6 +731,29 @@ export default function LeadControls() {
       if (data?.signedUrl) urls[m.id] = data.signedUrl;
     }
     setMapPickerUrls(urls);
+  };
+
+  // -- Promote post to public -----------------------------------------------
+  const makePublic = async (postId: string) => {
+    setPromotingPostId(postId);
+    try {
+      const { error } = await supabase
+        .from("posts")
+        .update({ visibility: "public", audience_user_id: null })
+        .eq("id", postId)
+        .eq("campaign_id", campaignId ?? "");
+      if (error) throw error;
+      // Refresh bulletin
+      setAllPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, visibility: "public", audience_user_id: null } : p
+        )
+      );
+    } catch (e: any) {
+      setResultModal({ open: true, tone: "blood", title: "Failed", message: e?.message ?? "Could not promote post." });
+    } finally {
+      setPromotingPostId(null);
+    }
   };
 
   const callFn = async (fn: string, extraBody?: Record<string, unknown>) => {
@@ -1193,6 +1245,106 @@ export default function LeadControls() {
           )}
 
         </div>
+
+        {/* ── War Bulletin (lead sees all posts) ───────────────────── */}
+        {allowed && campaign && (
+          <div className="mt-6">
+            <Card title="War Bulletin — All Posts">
+              {/* Filter bar */}
+              <div className="flex items-center gap-2 mb-4 flex-wrap">
+                <span className="text-xs text-parchment/40 uppercase tracking-widest font-semibold">Show:</span>
+                {(["all", "public", "private"] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setBulletinFilter(f)}
+                    className={`px-3 py-1 rounded text-xs font-semibold border transition-colors ${
+                      bulletinFilter === f
+                        ? "bg-brass/25 border-brass/50 text-brass"
+                        : "bg-void border-parchment/15 text-parchment/50 hover:border-brass/30"
+                    }`}
+                  >
+                    {f === "all" ? "All" : f === "public" ? "🌐 Public" : "🔒 Private"}
+                  </button>
+                ))}
+                <span className="ml-auto text-xs text-parchment/25 font-mono">
+                  {allPosts.filter((p) => bulletinFilter === "all" || p.visibility === bulletinFilter).length} post(s)
+                </span>
+              </div>
+
+              {/* Post list */}
+              {allPosts.length === 0 ? (
+                <p className="text-parchment/30 text-sm italic">No posts yet.</p>
+              ) : (
+                <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                  {allPosts
+                    .filter((p) => bulletinFilter === "all" || p.visibility === bulletinFilter)
+                    .map((post) => {
+                      const isPrivate = post.visibility === "private";
+                      const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
+                      const audience = isPrivate && post.audience_user_id
+                        ? (members.find((m) => m.user_id === post.audience_user_id)?.commander_name
+                          ?? members.find((m) => m.user_id === post.audience_user_id)?.faction_name
+                          ?? "Unknown player")
+                        : null;
+                      return (
+                        <div
+                          key={post.id}
+                          className={`px-3 py-2.5 rounded border ${
+                            isPrivate
+                              ? "border-parchment/12 bg-parchment/3"
+                              : "border-brass/12 bg-brass/3"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1 flex-wrap">
+                            <p className="text-parchment/90 font-semibold text-sm flex-1 leading-snug">{post.title}</p>
+                            <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                              <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${
+                                isPrivate
+                                  ? "border-parchment/15 text-parchment/35"
+                                  : "border-brass/30 bg-brass/10 text-brass/60"
+                              }`}>
+                                {isPrivate ? "🔒 Private" : "🌐 Public"}
+                              </span>
+                              <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
+                            </div>
+                          </div>
+                          {audience && (
+                            <p className="text-parchment/35 text-xs mb-1">Recipient: {audience}</p>
+                          )}
+                          {tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mb-1">
+                              {tags.map((t) => (
+                                <span key={t} className="text-xs px-1.5 py-0.5 rounded bg-void border border-parchment/10 text-parchment/30 font-mono">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-parchment/55 text-xs leading-relaxed">
+                            {post.body.length > 250 ? post.body.slice(0, 250) + "…" : post.body}
+                          </p>
+                          <div className="flex items-center justify-between mt-2">
+                            <p className="text-parchment/20 text-xs">
+                              {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                            </p>
+                            {isPrivate && (
+                              <button
+                                onClick={() => makePublic(post.id)}
+                                disabled={promotingPostId === post.id}
+                                className="px-3 py-1 rounded text-xs font-semibold border border-brass/40 bg-brass/15 hover:bg-brass/30 text-brass/80 transition-colors disabled:opacity-40"
+                              >
+                                {promotingPostId === post.id ? "Publishing…" : "Make Public"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
 
         {/* ── Admin Panel (lead/admin only) ─────────────────────────── */}
         {allowed && campaign && (

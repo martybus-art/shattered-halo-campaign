@@ -1,3 +1,13 @@
+// supabase/functions/invite-players/index.ts
+//
+// changelog:
+//   2026-03-09 — FEATURE: Pass campaign_narrative in email data payload so
+//                both Supabase Auth email templates (Invite User + Magic Link)
+//                can render branded narrative content. Both inviteUserByEmail
+//                and the OTP fallback for existing users now include
+//                campaign_narrative alongside campaign_id, campaign_name,
+//                and invite_message.
+
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
@@ -58,10 +68,10 @@ serve(async (req) => {
       return json(403, { ok: false, error: "Lead or admin role required" });
     }
 
-    // Fetch campaign name and invite_message for the email body
+    // Fetch campaign name, invite_message, and campaign_narrative for the email body
     const { data: campaign, error: campErr } = await admin
       .from("campaigns")
-      .select("name, invite_message")
+      .select("name, invite_message, campaign_narrative")
       .eq("id", campaign_id)
       .single();
 
@@ -69,8 +79,9 @@ serve(async (req) => {
       return json(404, { ok: false, error: "Campaign not found" });
     }
 
-    const campaignName: string = campaign.name;
-    const inviteMessage: string | null = campaign.invite_message ?? null;
+    const campaignName:      string      = campaign.name;
+    const inviteMessage:     string|null = campaign.invite_message ?? null;
+    const campaignNarrative: string|null = campaign.campaign_narrative ?? null;
 
     // Normalise emails
     const emails = player_emails
@@ -85,27 +96,34 @@ serve(async (req) => {
 
     if (invErr) return json(500, { ok: false, error: `Invite insert failed: ${invErr.message}` });
 
-    // Send emails via Supabase Auth (routes through your configured SMTP/Resend)
-    // inviteUserByEmail sends a signup+magic-link email to new users.
-    // For existing users it returns an error — we catch that and skip gracefully
-    // since their pending_invite row is already there and they'll see it on next login.
+    // Build the shared email data payload — passed to both new-user and existing-user paths.
+    // The Supabase Auth email templates reference these via {{ .Data.* }} syntax.
+    const emailData = {
+      campaign_id,
+      campaign_name:      campaignName,
+      invite_message:     inviteMessage     ?? "",
+      campaign_narrative: campaignNarrative ?? "",
+    };
+
+    // ── Send emails ──────────────────────────────────────────────────────────
+    // NEW USERS:      inviteUserByEmail → sends Supabase "Invite User" template.
+    //                 The OTP in that template registers the account and signs
+    //                 them in — they land at REDIRECT_URL and see their invite
+    //                 on the profile page.
+    //
+    // EXISTING USERS: inviteUserByEmail returns an error. We fall back to a
+    //                 magic-link OTP via /auth/v1/otp — sends the "Magic Link"
+    //                 template. On click they are signed in and land on the
+    //                 profile page where their pending_invite is waiting.
     const results: { email: string; sent: boolean; reason?: string }[] = [];
 
     for (const email of emails) {
       try {
-        // Build the email body to include in Supabase's "Additional data" field.
-        // Note: the actual email template is set in Supabase Auth dashboard.
-        // We pass campaign context via redirectTo query params so the template
-        // can reference them if configured.
         const redirectTo = `${REDIRECT_URL}?campaign_invite=1`;
 
         const { error: authErr } = await admin.auth.admin.inviteUserByEmail(email, {
           redirectTo,
-          data: {
-            campaign_id,
-            campaign_name: campaignName,
-            invite_message: inviteMessage ?? "",
-          },
+          data: emailData,
         });
 
         if (authErr) {
@@ -115,32 +133,34 @@ serve(async (req) => {
             authErr.message.toLowerCase().includes("exists");
 
           if (alreadyExists) {
-            // For existing users, inviteUserByEmail doesn't send an email.
-            // Send them a magic link OTP via the Supabase Auth REST API instead,
-            // so they get a notification email and a click-to-login link.
+            // Existing user — send a magic-link OTP so they get the branded campaign email
             try {
               const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
               const serviceKey  = Deno.env.get("SB_SERVICE_ROLE_KEY") ?? "";
               const otpRes = await fetch(`${supabaseUrl}/auth/v1/otp`, {
-                method: "POST",
+                method:  "POST",
                 headers: {
-                  "Content-Type": "application/json",
-                  "apikey": serviceKey,
+                  "Content-Type":  "application/json",
+                  "apikey":        serviceKey,
                   "Authorization": `Bearer ${serviceKey}`,
                 },
                 body: JSON.stringify({
                   email,
                   create_user: false,
                   options: {
-                    redirectTo: `${REDIRECT_URL}?campaign_invite=1`,
-                    data: { campaign_id, campaign_name: campaignName, invite_message: inviteMessage ?? "" },
+                    redirectTo,
+                    data: emailData,
                   },
                 }),
               });
               const otpOk = otpRes.ok || otpRes.status === 200;
-              results.push({ email, sent: otpOk, reason: otpOk ? undefined : "existing_user_otp_failed" });
-            } catch (otpErr: any) {
-              // OTP send failed — invite row still inserted, player will see it on next login
+              results.push({
+                email,
+                sent:   otpOk,
+                reason: otpOk ? undefined : "existing_user_otp_failed",
+              });
+            } catch {
+              // OTP send failed — pending_invite row still exists; player sees it on next login
               results.push({ email, sent: false, reason: "existing_user_otp_failed" });
             }
           } else {
@@ -155,19 +175,19 @@ serve(async (req) => {
     }
 
     const sentCount     = results.filter((r) => r.sent).length;
-    const existingCount = results.filter((r) => r.reason === "existing_user").length;
-    const failedCount   = results.filter((r) => !r.sent && r.reason !== "existing_user").length;
+    const existingCount = results.filter((r) => r.reason === "existing_user_otp_failed").length;
+    const failedCount   = results.filter((r) => !r.sent && r.reason !== "existing_user_otp_failed").length;
 
     console.log(
       `invite-players: campaign=${campaign_id} sent=${sentCount} existing=${existingCount} failed=${failedCount}`
     );
 
     return json(200, {
-      ok: true,
-      invited: emails.length,
-      sent: sentCount,
-      existing_users: existingCount,  // invite row inserted, email not sent — they see it on login
-      failed: failedCount,
+      ok:             true,
+      invited:        emails.length,
+      sent:           sentCount,
+      existing_users: existingCount,
+      failed:         failedCount,
       results,
     });
 

@@ -3,6 +3,12 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-09 — FEATURE: War Bulletin now shows private + public posts.
+//                Private posts (🔒) are visible only to audience_user_id.
+//                Public posts visible to all members. Merged & sorted newest-first.
+//                NIP purchases now auto-post a private "Resources Acquired" entry.
+//                PostTagBadge expanded: instability, battle_log, purchase, relic,
+//                dispatch, alliance, chronicle, phase.
 //   2026-03-09 — FEATURE: Round Purchases now shows Used/Available badge on
 //                trackable tokens (Deep Strike, Recon). Fetches this round's
 //                moves in load() and builds a usedTokens Set. safe_passage has
@@ -147,12 +153,14 @@ type Round  = { stage: string };
 
 // tags is a jsonb array from the DB — typed as string[] for our purposes.
 type Post   = {
-  id:           string;
-  title:        string;
-  body:         string;
-  round_number: number;
-  created_at:   string;
-  tags:         string[];
+  id:               string;
+  title:            string;
+  body:             string;
+  round_number:     number;
+  created_at:       string;
+  tags:             string[];
+  visibility:       string;        // 'public' | 'private'
+  audience_user_id: string | null; // set on private posts — the recipient
 };
 
 type Spend  = { spend_type: string; nip_spent: number };
@@ -183,8 +191,43 @@ const PLAYER_COLOURS = [
   "bg-teal-500/25 border-teal-400/50 text-teal-300",
 ];
 
-// Post tag badge — visual indicator for chronicle vs alliance vs plain posts
+// Post tag badge — visual indicator for post category
 function PostTagBadge({ tags }: { tags: string[] }) {
+  if (tags.includes("instability")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/40 bg-blood/10 text-blood/70 font-mono uppercase tracking-wider">
+        ⚡ Instability
+      </span>
+    );
+  }
+  if (tags.includes("battle_log")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/25 bg-parchment/5 text-parchment/50 font-mono uppercase tracking-wider">
+        ⚔ Battle
+      </span>
+    );
+  }
+  if (tags.includes("purchase")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/25 bg-brass/8 text-brass/60 font-mono uppercase tracking-wider">
+        ◈ Purchase
+      </span>
+    );
+  }
+  if (tags.includes("relic")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/40 bg-brass/15 text-brass/80 font-mono uppercase tracking-wider">
+        ✸ Relic
+      </span>
+    );
+  }
+  if (tags.includes("dispatch")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
+        📡 Dispatch
+      </span>
+    );
+  }
   if (tags.includes("alliance")) {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/30 bg-brass/10 text-brass/70 font-mono uppercase tracking-wider">
@@ -196,6 +239,13 @@ function PostTagBadge({ tags }: { tags: string[] }) {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
         ✦ Chronicle
+      </span>
+    );
+  }
+  if (tags.includes("phase")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/30 bg-blood/8 text-blood/60 font-mono uppercase tracking-wider">
+        ◉ Phase Shift
       </span>
     );
   }
@@ -308,13 +358,24 @@ export default function Dashboard() {
       .eq("campaign_id", cid).eq("round_number", c.round_number).maybeSingle();
     setRound(r ?? null);
 
-    // 5. War bulletin — last 5 public posts, newest first.
-    //    Includes tags so the UI can render chronicle/alliance badges.
-    const { data: posts } = await supabase
-      .from("posts").select("id,title,body,round_number,created_at,tags")
-      .eq("campaign_id", cid).eq("visibility", "public")
-      .order("created_at", { ascending: false }).limit(5);
-    setBulletinPosts((posts ?? []) as Post[]);
+    // 5. War bulletin — last 10 posts visible to this player:
+    //    • All public posts in the campaign
+    //    • Private posts where audience_user_id = this player
+    //    Merged, deduplicated, and sorted newest-first.
+    const [{ data: publicPosts }, { data: privatePosts }] = await Promise.all([
+      supabase.from("posts")
+        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
+        .eq("campaign_id", cid).eq("visibility", "public")
+        .order("created_at", { ascending: false }).limit(10),
+      supabase.from("posts")
+        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
+        .eq("campaign_id", cid).eq("visibility", "private").eq("audience_user_id", user.id)
+        .order("created_at", { ascending: false }).limit(10),
+    ]);
+    const allPosts = [...(publicPosts ?? []), ...(privatePosts ?? [])]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 10);
+    setBulletinPosts(allPosts as Post[]);
 
     // 6. My spends this round
     const { data: spendRows } = await supabase
@@ -457,6 +518,18 @@ export default function Dashboard() {
         .eq("campaign_id", campaign.id)
         .eq("user_id", uid);
       if (nipErr) throw nipErr;
+      // Post a private bulletin entry for this player only
+      const itemNames = cartItems.map((i) => i.label).join(", ");
+      await supabase.from("posts").insert({
+        campaign_id:      campaign.id,
+        round_number:     campaign.round_number,
+        visibility:       "private",
+        audience_user_id: uid,
+        title:            `Resources Acquired — Round ${campaign.round_number}`,
+        body:             `Spent ${cartTotal} NIP to activate: ${itemNames}.`,
+        tags:             ["purchase"],
+        created_by:       uid,
+      });
       setCart({});
       addToast("success", "Purchase complete", `${cartItems.length} ability${cartItems.length !== 1 ? "s" : ""} activated for this round.`);
       await load();
@@ -703,26 +776,32 @@ export default function Dashboard() {
             )}
           </Card>
 
-          {/* War Bulletin — last 5 public posts */}
+          {/* War Bulletin — public + private posts for this player */}
           <Card title="War Bulletin">
             {bulletinPosts.length > 0 ? (
               <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
                 {bulletinPosts.map((post, idx) => {
-                  const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
+                  const tags: string[]    = Array.isArray(post.tags) ? post.tags : [];
+                  const isPrivate         = post.visibility === "private";
                   return (
                     <div
                       key={post.id}
-                      className={idx > 0 ? "pt-4 border-t border-brass/10" : ""}
+                      className={`${idx > 0 ? "pt-4 border-t border-brass/10" : ""} ${isPrivate ? "rounded px-2 py-1 bg-void/60 border border-parchment/8" : ""}`}
                     >
                       {/* Title row */}
                       <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
                         <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                          {isPrivate && (
+                            <span className="text-xs px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/35 font-mono">
+                              🔒 Private
+                            </span>
+                          )}
                           <PostTagBadge tags={tags} />
                           <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
                         </div>
                       </div>
-                      {/* Body — truncated for older posts to keep the card scannable */}
+                      {/* Body */}
                       <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
                         {idx === 0
                           ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)

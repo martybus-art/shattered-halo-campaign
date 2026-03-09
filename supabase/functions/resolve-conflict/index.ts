@@ -63,8 +63,6 @@ serve(async (req) => {
       .maybeSingle();
 
     // ── Determine final winner ───────────────────────────────────────────────
-    // If confirmer_agrees = true we use their stated winner_user_id.
-    // If disputed and not lead → flag for lead adjudication (don't resolve yet).
     const reportedWinner = existing
       ? ((existing.outcome_json as any)?.winner_user_id ?? null)
       : null;
@@ -76,7 +74,6 @@ serve(async (req) => {
       reportedWinner !== winner_user_id;
 
     if (disputed) {
-      // Record dispute, don't transfer sector yet
       await admin.from("battle_results").update({
         confirmed: true,
         outcome_json: {
@@ -95,11 +92,10 @@ serve(async (req) => {
       });
     }
 
-    // Final winner: lead override > confirmer > original reporter
     const finalWinner: string | null = winner_user_id;
     const loserUserId: string | null = finalWinner
       ? (finalWinner === conflict.player_a ? conflict.player_b : conflict.player_a)
-      : null; // null = draw, no loser
+      : null;
 
     // ── Upsert battle_results as confirmed ───────────────────────────────────
     if (existing) {
@@ -117,7 +113,6 @@ serve(async (req) => {
         },
       }).eq("id", existing.id);
     } else {
-      // Lead resolving directly without a prior report
       await admin.from("battle_results").insert({
         conflict_id,
         reported_by: user.id,
@@ -135,7 +130,6 @@ serve(async (req) => {
     // ── Transfer sector ownership to winner ──────────────────────────────────
     let sectorTransferred = false;
     if (finalWinner) {
-      // Find the sector row for this conflict location
       const { data: sectorRow } = await admin
         .from("sectors")
         .select("id, owner_user_id")
@@ -150,7 +144,6 @@ serve(async (req) => {
           .eq("id", sectorRow.id);
         sectorTransferred = true;
       } else {
-        // Sector row doesn't exist yet — insert it as owned by winner
         await admin.from("sectors").insert({
           campaign_id,
           zone_key,
@@ -182,23 +175,15 @@ serve(async (req) => {
         const ledgerEntries: object[] = [];
         if (nip_earned > 0) {
           ledgerEntries.push({
-            campaign_id,
-            user_id: finalWinner,
-            round_number,
-            entry_type: "earn",
-            currency: "NIP",
-            amount: nip_earned,
+            campaign_id, user_id: finalWinner, round_number,
+            entry_type: "earn", currency: "NIP", amount: nip_earned,
             reason: `Victory at ${zone_key}:${sector_key} — Round ${round_number}`,
           });
         }
         if (ncp_earned > 0) {
           ledgerEntries.push({
-            campaign_id,
-            user_id: finalWinner,
-            round_number,
-            entry_type: "earn",
-            currency: "NCP",
-            amount: ncp_earned,
+            campaign_id, user_id: finalWinner, round_number,
+            entry_type: "earn", currency: "NCP", amount: ncp_earned,
             reason: `Victory at ${zone_key}:${sector_key} — Round ${round_number}`,
           });
         }
@@ -206,7 +191,7 @@ serve(async (req) => {
       }
     }
 
-    // ── Check if loser is eliminated (no sectors left) ───────────────────────
+    // ── Check if loser is eliminated ─────────────────────────────────────────
     let loserEliminated = false;
     if (loserUserId) {
       const { count } = await admin
@@ -216,26 +201,62 @@ serve(async (req) => {
         .eq("owner_user_id", loserUserId);
 
       if ((count ?? 0) === 0) {
-        // Mark loser as inactive
         await admin.from("player_state")
           .update({ status: "inactive" })
           .eq("campaign_id", campaign_id)
           .eq("user_id", loserUserId);
 
-        // Record elimination in ledger as a system event
         await admin.from("ledger").insert({
-          campaign_id,
-          user_id: loserUserId,
-          round_number,
-          entry_type: "system",
-          currency: "NIP",
-          amount: 0,
+          campaign_id, user_id: loserUserId, round_number,
+          entry_type: "system", currency: "NIP", amount: 0,
           reason: `Eliminated — no sectors remaining after defeat at ${zone_key}:${sector_key}`,
         });
 
         loserEliminated = true;
         console.log(`resolve-conflict: player ${loserUserId} eliminated in campaign ${campaign_id}`);
       }
+    }
+
+    // ── Post private battle log to BOTH players ───────────────────────────────
+    // Each player gets their own private post so they can see the outcome without
+    // it being broadcast to the whole campaign. Lead can promote to public if desired.
+    const outcomeLabel = finalWinner === null
+      ? "Draw — honours even."
+      : finalWinner === conflict.player_a
+        ? `Player A victorious.${nip_earned > 0 ? ` +${nip_earned} NIP` : ""}${ncp_earned > 0 ? ` +${ncp_earned} NCP` : ""} awarded.`
+        : `Player B victorious.${nip_earned > 0 ? ` +${nip_earned} NIP` : ""}${ncp_earned > 0 ? ` +${ncp_earned} NCP` : ""} awarded.`;
+
+    const sectorLine = sectorTransferred && finalWinner
+      ? `\nSector ${zone_key.replace(/_/g, " ")} / ${sector_key.toUpperCase()} has changed hands.`
+      : "";
+    const eliminationLine = loserEliminated && loserUserId
+      ? `\nThe defeated faction has been eliminated — no sectors remain.`
+      : "";
+    const notesLine = notes ? `\nCombat notes: ${notes}` : "";
+
+    const battleBody = [
+      `Battle at ${zone_key.replace(/_/g, " ")} / sector ${sector_key.toUpperCase()} — Round ${round_number}.`,
+      outcomeLabel,
+      sectorLine,
+      eliminationLine,
+      notesLine,
+    ].filter(Boolean).join("\n");
+
+    const battleLogPosts = [conflict.player_a, conflict.player_b]
+      .filter(Boolean)
+      .map((pid: string) => ({
+        campaign_id,
+        round_number,
+        visibility: "private",
+        audience_user_id: pid,
+        title: `Battle Log — ${zone_key.replace(/_/g, " ")} / ${sector_key.toUpperCase()}`,
+        body: battleBody,
+        tags: ["battle_log"],
+        created_by: user.id,
+      }));
+
+    if (battleLogPosts.length > 0) {
+      await admin.from("posts").insert(battleLogPosts);
     }
 
     console.log(

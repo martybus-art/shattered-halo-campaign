@@ -7,8 +7,12 @@
 //                then navigate to the clean path. Campaign IDs are no longer
 //                exposed in the URL bar or browser history.
 //                Removed campaign_id from pending invite display.
+//   2026-03-09 — FEATURE: Detect ?campaign_invite=1 URL param (set by invite
+//                email links). After auth resolves, scroll to and highlight the
+//                Campaign Invites card so the player sees it immediately.
+//                inviteHighlight state + invitesPanelRef added.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { setCampaignSession } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
@@ -36,56 +40,6 @@ type PendingInvite = {
   campaign_name: string;
   invite_message: string | null;
 };
-
-type ToastType = "success" | "error" | "info";
-type Toast = { id: number; type: ToastType; title: string; body?: string };
-let _toastId = 0;
-
-function ToastContainer({
-  toasts,
-  dismiss,
-}: {
-  toasts: Toast[];
-  dismiss: (id: number) => void;
-}) {
-  if (!toasts.length) return null;
-  return (
-    <div className="fixed bottom-6 right-6 z-50 flex w-full max-w-sm flex-col gap-3 pointer-events-none">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={`pointer-events-auto rounded-lg border px-4 py-3 shadow-2xl shadow-black/60 backdrop-blur-sm ${
-            t.type === "success" ? "bg-void border-brass/60" : ""
-          } ${t.type === "error" ? "bg-void border-blood/60" : ""} ${
-            t.type === "info" ? "bg-void border-brass/30" : ""
-          }`}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p
-                className={`text-sm font-semibold uppercase tracking-widest ${
-                  t.type === "success" ? "text-brass" : ""
-                } ${t.type === "error" ? "text-blood" : ""} ${
-                  t.type === "info" ? "text-brass/70" : ""
-                }`}
-              >
-                {t.title}
-              </p>
-              {t.body ? <p className="mt-1 text-xs text-parchment/60 leading-relaxed">{t.body}</p> : null}
-            </div>
-            <button
-              onClick={() => dismiss(t.id)}
-              className="text-lg leading-none text-parchment/30 hover:text-parchment/70"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 
 /** Navigate to a campaign page without exposing the campaign ID in the URL. */
 function navTo(path: string, campaignId: string) {
@@ -116,20 +70,8 @@ export default function Home() {
 
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [processingInviteId, setProcessingInviteId] = useState<string>("");
-
-  const [toasts, setToasts] = useState<Toast[]>([]);
-
-  const addToast = (type: ToastType, title: string, body?: string) => {
-    const id = ++_toastId;
-    setToasts((prev) => [...prev, { id, type, title, body }]);
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 5000);
-  };
-
-  const dismissToast = (id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
+  const [inviteHighlight, setInviteHighlight] = useState(false);
+  const invitesPanelRef = useRef<HTMLDivElement>(null);
 
   const selectedMembership = memberships.find((m) => m.campaign_id === selectedCampaignId);
 
@@ -205,26 +147,46 @@ export default function Home() {
     loadInvites();
   }, [userId]);
 
+  // ── Detect ?campaign_invite=1 from email link ─────────────
+  // When a player clicks the branded invite email, they land here with this
+  // param set. Once invites have loaded, scroll to and briefly highlight the
+  // invites card so they notice it immediately. Then clean the URL.
+  useEffect(() => {
+    if (!userId) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("campaign_invite") !== "1") return;
+    // Wait for invites to load (loadInvites is async), then scroll + highlight
+    const timer = setTimeout(() => {
+      setInviteHighlight(true);
+      invitesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      // Remove param from URL without a page reload
+      const clean = window.location.pathname;
+      window.history.replaceState({}, "", clean);
+      // Fade highlight out after 3 seconds
+      setTimeout(() => setInviteHighlight(false), 3000);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [userId]);
   // ── Actions ───────────────────────────────────────────────
   const sendMagicLink = async () => {
-    if (!email.trim()) return addToast("error", "Email Required", "Enter your email address.");
+    if (!email.trim()) return alert("Enter your email address.");
     const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) addToast("error", "Login Failed", error.message);
-    else addToast("success", "Magic Link Sent", "Check your email for the login link.");
+    if (error) alert(error.message);
+    else alert("Check your email for the login link.");
   };
 
   const signOut = async () => { await supabase.auth.signOut(); location.reload(); };
 
   const saveDisplayName = async () => {
-    if (!displayName.trim()) return addToast("error", "Name Required", "Enter a name.");
+    if (!displayName.trim()) return alert("Enter a name.");
     setSavingName(true);
     try {
       const { error } = await supabase.auth.updateUser({ data: { display_name: displayName.trim() } });
       if (error) throw error;
       setSavedName(displayName.trim());
-      addToast("success", "Name Saved", "Your display name has been updated.");
+      alert("Name saved.");
     } catch (e: any) {
-      addToast("error", "Save Failed", e?.message ?? "Failed to save name.");
+      alert(e?.message ?? "Failed to save name.");
     } finally { setSavingName(false); }
   };
 
@@ -232,7 +194,7 @@ export default function Home() {
     setProcessingInviteId(inviteId);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) { addToast("error", "Session Expired", "Refresh and try again."); return; }
+      if (!session?.access_token) { alert("Session expired. Refresh and try again."); return; }
       const { data, error } = await supabase.functions.invoke("accept-invites", {
         body: { mode, invite_id: inviteId },
         headers: { Authorization: `Bearer ${session.access_token}` },
@@ -242,7 +204,7 @@ export default function Home() {
       setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
       if (mode === "accept" && userId) await loadCampaigns(userId);
     } catch (e: any) {
-      addToast("error", mode === "accept" ? "Accept Failed" : "Decline Failed", e?.message ?? "Something went wrong.");
+      alert(`${mode === "accept" ? "Accept" : "Decline"} failed: ${e?.message}`);
     } finally { setProcessingInviteId(""); }
   };
 
@@ -379,10 +341,16 @@ export default function Home() {
 
         {/* ── Pending Invites ── */}
         {pendingInvites.length > 0 && (
-          <Card title={`Campaign Invites — ${pendingInvites.length} pending`}>
-            <p className="text-parchment/60 text-sm mb-3">
-              You have been invited to the following campaigns.
-            </p>
+          <div ref={invitesPanelRef}>
+            <Card title={`Campaign Invites — ${pendingInvites.length} pending`}>
+              {inviteHighlight && (
+                <div className="mb-3 rounded border border-brass/60 bg-brass/10 px-3 py-2 text-sm text-brass">
+                  ⬇ You have a campaign invitation waiting — accept or decline below.
+                </div>
+              )}
+              <p className="text-parchment/60 text-sm mb-3">
+                You have been invited to the following campaigns.
+              </p>
             <div className="space-y-2">
               {pendingInvites.map((invite) => (
                 <div
@@ -417,6 +385,7 @@ export default function Home() {
               ))}
             </div>
           </Card>
+          </div>
         )}
 
         {/* ── Your Campaigns ── */}
@@ -596,7 +565,6 @@ export default function Home() {
         </Card>
 
       </div>
-      <ToastContainer toasts={toasts} dismiss={dismissToast} />
     </Frame>
   );
 }
