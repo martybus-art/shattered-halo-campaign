@@ -3,6 +3,10 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-09 — FEATURE: Round Purchases now shows Used/Available badge on
+//                trackable tokens (Deep Strike, Recon). Fetches this round's
+//                moves in load() and builds a usedTokens Set. safe_passage has
+//                no move_type counterpart so no badge is shown for it.
 //   2026-03-09 — LAYOUT: Restructured from 2 stacked rows to a single 2-column grid.
 //                LEFT col: Your Status + War Bulletin.
 //                RIGHT col: Faction Resources + Theatre Map (directly stacked, no gap).
@@ -214,6 +218,7 @@ export default function Dashboard() {
   // Bulletin now holds the 5 most recent public posts instead of just the latest
   const [bulletinPosts,   setBulletinPosts]   = useState<Post[]>([]);
   const [spends,          setSpends]          = useState<Spend[]>([]);
+  const [usedTokens,      setUsedTokens]      = useState<Set<string>>(new Set());
   const [mapUrl,          setMapUrl]          = useState<string | null>(null);
   const [sectors,         setSectors]         = useState<Sector[]>([]);
   const [members,         setMembers]         = useState<Member[]>([]);
@@ -316,6 +321,12 @@ export default function Dashboard() {
       .from("round_spends").select("spend_type,nip_spent")
       .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
     setSpends(spendRows ?? []);
+
+    // 6b. My moves this round — used to show which purchased tokens have been spent
+    const { data: moveRows } = await supabase
+      .from("moves").select("move_type")
+      .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
+    setUsedTokens(new Set((moveRows ?? []).map((m: { move_type: string }) => m.move_type)));
 
     // 7. Map signed URL (if campaign has a map)
     if (c.map_id) {
@@ -766,13 +777,24 @@ export default function Dashboard() {
                     <div className="space-y-1">
                       {spends.map((s, i) => {
                         const item = SHOP_ITEMS.find((x) => x.id === s.spend_type);
+                        // Tokens that are consumed by a move get a used/available status.
+                        // safe_passage has no move_type counterpart so no status shown.
+                        const isTrackable = s.spend_type === "deep_strike" || s.spend_type === "recon";
+                        const wasUsed     = isTrackable && usedTokens.has(s.spend_type);
                         return (
                           <div key={i} className="flex items-center justify-between px-2.5 py-1.5 rounded bg-brass/5 border border-brass/15 text-sm">
                             <span className="text-parchment/75">{item?.label ?? fmtKey(s.spend_type)}</span>
-                            {s.nip_spent > 0
-                              ? <span className="text-parchment/35 text-xs font-mono">{s.nip_spent} NIP</span>
-                              : <span className="text-brass/60 text-xs font-mono">Free</span>
-                            }
+                            <div className="flex items-center gap-2">
+                              {isTrackable && (
+                                wasUsed
+                                  ? <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/30">Used</span>
+                                  : <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-brass/35 bg-brass/10 text-brass/70">Available</span>
+                              )}
+                              {s.nip_spent > 0
+                                ? <span className="text-parchment/35 text-xs font-mono">{s.nip_spent} NIP</span>
+                                : <span className="text-brass/60 text-xs font-mono">Free</span>
+                              }
+                            </div>
                           </div>
                         );
                       })}
