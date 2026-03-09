@@ -44,9 +44,8 @@ body::before{
   z-index: -2;
 }
 
-/* Minimal veil — just enough to ensure text contrast, not enough to bury the image.
-   OLD values were 0.62/0.52 which killed ~55% of the image on top of the 0.65 opacity.
-   Reduced to ~0.18 max so the image stays visible while cards handle their own readability. */
+/* Minimal veil — just enough for text contrast, not enough to bury the image.
+   OLD values were 0.62/0.52 which killed ~55% of the image on top of the 0.65 opacity above. */
 body::after{
   content:"";
   position: fixed;
@@ -60,6 +59,7 @@ body::after{
 /* Smoother default typography */
 *{ box-sizing: border-box; }
 
+/* backdrop-filter is applied per-card (Card.tsx) not on main, so layout stays clean */
 main{
-  backdrop-filter: blur(2px);
+  /* intentionally no backdrop-filter here */
 }
