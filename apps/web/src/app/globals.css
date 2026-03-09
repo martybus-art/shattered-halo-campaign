@@ -36,22 +36,24 @@ body::before{
   background-position: center;
   background-repeat: no-repeat;
 
-  /* crisp + present */
-  opacity: 0.65;
+  /* Raised from 0.65 — image needs to be present, not ghostly */
+  opacity: 0.90;
   filter: saturate(1.05) contrast(1.12) brightness(0.98);
   transform: translateZ(0); /* helps some GPUs render sharp */
 
   z-index: -2;
 }
 
-/* Soft bright veil so content stays readable */
+/* Minimal veil — just enough to ensure text contrast, not enough to bury the image.
+   OLD values were 0.62/0.52 which killed ~55% of the image on top of the 0.65 opacity.
+   Reduced to ~0.18 max so the image stays visible while cards handle their own readability. */
 body::after{
   content:"";
   position: fixed;
   inset: 0;
   background:
-     radial-gradient(900px 520px at 20% 10%, rgba(255,255,255,0.42), rgba(255,255,255,0.14) 60%, rgba(255,255,255,0.06)),
-    linear-gradient(180deg, rgba(248,245,246,0.62), rgba(248,245,246,0.52));
+    radial-gradient(900px 520px at 20% 10%, rgba(255,255,255,0.18), rgba(255,255,255,0.06) 60%, rgba(255,255,255,0.02)),
+    linear-gradient(180deg, rgba(248,245,246,0.16), rgba(248,245,246,0.10));
   z-index: -1;
 }
 

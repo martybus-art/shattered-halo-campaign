@@ -8,8 +8,8 @@
 
   /* Semantic UI tokens (corporate, bright, readable) */
   --bg: #f8f5f6;
-  --surface: rgba(255,255,255,.82);
-  --surface-strong: rgba(255,255,255,.92);
+  --surface: rgba(255,255,255,.68);
+  --surface-strong: rgba(255,255,255,.80);
   --border: rgba(66,70,150,.14);
 
   --text: #111827;
@@ -40,11 +40,11 @@
 .ui-backdrop::before{
   content:"";
   position:absolute; inset:0;
-  /* subtle, pro gradient veil (keeps bg image readable but not noisy) */
+  /* Reduced from 0.74/0.18/0.92 — let the bg image show through */
   background:
-    radial-gradient(900px 520px at 20% 10%, rgba(255,255,255,.74), rgba(255,255,255,.18) 55%, rgba(255,255,255,.08)),
-    radial-gradient(900px 520px at 80% 0%, rgba(66,70,150,.10), transparent 60%),
-    linear-gradient(180deg, rgba(248,245,246,.92), rgba(248,245,246,.84));
+    radial-gradient(900px 520px at 20% 10%, rgba(255,255,255,.22), rgba(255,255,255,.06) 55%, rgba(255,255,255,.02)),
+    radial-gradient(900px 520px at 80% 0%, rgba(66,70,150,.08), transparent 60%),
+    linear-gradient(180deg, rgba(248,245,246,.18), rgba(248,245,246,.12));
 }
 .ui-backdrop > *{ position:relative; z-index:1; }
 
@@ -55,7 +55,7 @@
   border-radius:14px;
   padding:18px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(14px);
 }
 
 /* Buttons */
