@@ -2,6 +2,8 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-11 — FIX: Normalise "spoke" -> "spokes" at load time. DB may store
+//                either spelling; code and isOverlayLayout check require "spokes".
 //   2026-03-11 — LAYOUT: For ring/spokes layouts, restructured to 2-column grid:
 //                left col = My Units / Movement / Deploy / Pending Orders cards,
 //                right col = CampaignMapOverlay map card. Non-ring layouts keep
@@ -684,7 +686,9 @@ export default function MapPage() {
       setRoundNumber(rn);
       const ro = ((c as any)?.rules_overrides ?? {}) as Record<string, any>;
       setFogEnabled((ro.fog as any)?.enabled !== false);
-      setMapLayout((ro.map_layout as string | undefined) ?? "ring");
+      // Normalise "spoke" -> "spokes" — DB may have been seeded with either spelling.
+      const normaliseLayout = (l: string) => l === "spoke" ? "spokes" : l;
+      setMapLayout(normaliseLayout((ro.map_layout as string | undefined) ?? "ring"));
 
       // Round stage
       const { data: rnd } = await supabase
@@ -702,7 +706,7 @@ export default function MapPage() {
         setMapZoneCount((mapRow?.zone_count as number | null) ?? null);
         // Fall back to map table layout if rules_overrides doesn't set one
         if (!ro.map_layout && (mapRow as any)?.layout) {
-          setMapLayout((mapRow as any).layout as string);
+          setMapLayout(normaliseLayout((mapRow as any).layout as string));
         }
         // Fetch signed URL for AI map image
         if ((mapRow as any)?.bg_image_path) {
