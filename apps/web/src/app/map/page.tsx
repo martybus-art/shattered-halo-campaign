@@ -2,6 +2,13 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-11 — FIX: Overlay condition was ring-only (mapLayout === "ring").
+//                Changed to (mapLayout === "ring" || mapLayout === "spokes") so
+//                spokes campaigns also use CampaignMapOverlay instead of falling
+//                through to the side-by-side Hololith layout.
+//                FIX: layout prop was hardcoded "ring"; now layout={mapLayout as any}.
+//                STYLE: Overlay block wrapped in max-w-xl mx-auto container to
+//                reduce map footprint on page.
 //   2026-03-10 — INTEGRATION: CampaignMapOverlay replaces the side-by-side
 //                Tactical Hololith + AI Theatre Map for ring layout campaigns
 //                that have a generated AI map image. The new overlay renders
@@ -936,13 +943,13 @@ export default function MapPage() {
         )}
 
         {/* ── Map Display ── */}
-        {/* Ring layout with AI image: merged CampaignMapOverlay (image + SVG ring overlay) */}
+        {/* Ring/spokes layout with AI image: merged CampaignMapOverlay (image + SVG overlay) */}
         {/* All other layouts: original side-by-side Tactical Hololith + AI Theatre Map */}
-        {!loading && mapLayout === "ring" && mapId && mapImageUrl ? (
-          <>
+        {!loading && (mapLayout === "ring" || mapLayout === "spokes") && mapId && mapImageUrl ? (
+          <div className="max-w-xl mx-auto w-full space-y-3">
             <CampaignMapOverlay
               mapUrl={mapImageUrl}
-              layout="ring"
+              layout={mapLayout as any}
               zoneCount={mapZoneCount ?? effectiveZones.length}
               zoneKeys={zoneKeys}
               zoneNames={zoneNames}   
@@ -1005,7 +1012,7 @@ export default function MapPage() {
                   />
                 );
               })}
-          </>
+          </div>
         ) : !loading ? (
         /* Non-ring or no AI image: original side-by-side layout */
         <div className={`grid gap-4 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
