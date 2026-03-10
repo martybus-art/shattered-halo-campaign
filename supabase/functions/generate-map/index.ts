@@ -13,6 +13,13 @@
 //                (new lead-page Generate Map modal flow). Fixed DB column names:
 //                generation_status (not status), writes both bg_image_path and
 //                image_path for MapImageDisplay compatibility.
+//   2026-03-10 -- Ring prompt updated with SVG overlay alignment guidance.
+//                The ring's playable band (inner radius ~50%, outer ~86% of frame)
+//                is now specified so terrain colouring harmonises with the
+//                CampaignMapOverlay SVG sector geometry. Medium-toned playable
+//                surface requested so semi-transparent coloured overlays stay
+//                legible. Aspect ratio standardised to 1:1 (1024×1024) for ring
+//                layout to match the overlay's square aspect-square viewport.
 
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -23,7 +30,6 @@ import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts
 type Layout = "ring" | "continent" | "radial" | "ship_line";
 
 // ── Biome visual descriptors ──────────────────────────────────────────────────
-// These are injected into the layout prompt to flavour terrain appearance.
 
 const BIOME_DESCRIPTORS: Record<string, string> = {
   gothic_ruins:            "crumbling Gothic cathedral spires, shattered arches, collapsed nave vaults, pale dust and ash, Imperial eagles half-buried in rubble",
@@ -41,7 +47,6 @@ const BIOME_DESCRIPTORS: Record<string, string> = {
 };
 
 // ── Layout prompts ────────────────────────────────────────────────────────────
-// All prompts are written to produce top-down 2D tactical map imagery.
 
 function buildPrompt(params: {
   layout:             Layout;
@@ -66,129 +71,167 @@ function buildPrompt(params: {
     : "";
 
   const sharedStyle = [
-  "Warhammer 40,000 official art style.",
-  "Epic grimdark sci-fi environment concept art.",
-  "Hand-painted illustrated campaign map aesthetic — rich ink wash textures and painterly terrain detail.",
-  "Grimdark palette for the core of the image: black, stone, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
-  "Vibrant colours to contrast zone territories: Toxic Orange, rich royal Purple, Deep majestic Blue, Forest Green, Heroic Yellow and Gold.",
-  "Zones should feel like physical regions carved into the megastructure terrain, not diagram segments.",
-  "Each region has distinct environmental storytelling — ruins, war damage, alien growth, manufactorum structures.",
-  "Battle damage visible — craters, scorch marks, ruined buildings, shattered infrastructure.",
-  "Cinematic lighting, atmospheric haze, volumetric glow from plasma conduits",
-  "Light sources such as a nearby star, or nearby gas cloud Nebulae, or Neutron star in the backgroud softly illuminate the image",
-  "Designed as a strategic theatre map used by a commander planning a planetary campaign.",
-  "No text overlays. No UI elements. No radial diagram layout.",
-  "Painterly, highly detailed, cinematic sci-fi concept art.",
-  "Massive sci-fi megastructure strategic campaign map",
-  "Massive scale environments — structures feel kilometers large, not room-sized.",
-  "avoid segmented wheels, radial wedges, pie charts, infographics, UI, menus, blueprints, floor plans, grid lines, clean diagrams, labels, text"
-].join(" ");
+    "Warhammer 40,000 official art style.",
+    "Epic grimdark sci-fi environment concept art.",
+    "Hand-painted illustrated campaign map aesthetic — rich ink wash textures and painterly terrain detail.",
+    "Grimdark palette for the core of the image: black, stone, dark iron grey, deep crimson, tarnished gold, sickly green warp energy.",
+    "Vibrant colours to contrast zone territories: Toxic Orange, rich royal Purple, Deep majestic Blue, Forest Green, Heroic Yellow and Gold.",
+    "Zones should feel like physical regions carved into the megastructure terrain, not diagram segments.",
+    "Each region has distinct environmental storytelling — ruins, war damage, alien growth, manufactorum structures.",
+    "Battle damage visible — craters, scorch marks, ruined buildings, shattered infrastructure.",
+    "Cinematic lighting, atmospheric haze, volumetric glow from plasma conduits",
+    "Light sources such as a nearby star, or nearby gas cloud Nebulae, or Neutron star in the background softly illuminate the image",
+    "Designed as a strategic theatre map used by a commander planning a planetary campaign.",
+    "No text overlays. No UI elements. No radial diagram layout.",
+    "Painterly, highly detailed, cinematic sci-fi concept art.",
+    "Massive sci-fi megastructure strategic campaign map",
+    "Massive scale environments — structures feel kilometers large, not room-sized.",
+    "avoid segmented wheels, radial wedges, pie charts, infographics, UI, menus, blueprints, floor plans, grid lines, clean diagrams, labels, text",
+  ].join(" ");
 
-const sharedShotLock = [
-  "Single image, cinematic environment concept art used as a strategic campaign map.",
-  "Orbital / high-altitude perspective: the subject is a real physical place or megastructure, not a UI diagram.",
-  "Readable territories emerge from terrain and structural breaks (fractures, walls, ridgelines, chasms, ruined seams), not clean geometric wedges.",
-  "Large-scale sense of depth: shadows, atmospheric haze, volumetric light, drifting debris, smoke, ash clouds.",
-  "Composition is wide and dramatic, with a clear focal point and secondary points of interest.",
-  "Avoid infographic styling: no radial wedges, no pie slices, no schematic floor plan, no blueprint lines, no grid overlay, no menu UI.",
-].join(" ");
+  const sharedShotLock = [
+    "Single image, cinematic environment concept art used as a strategic campaign map.",
+    "Orbital / high-altitude perspective: the subject is a real physical place or megastructure, not a UI diagram.",
+    "Readable territories emerge from terrain and structural breaks (fractures, walls, ridgelines, chasms, ruined seams), not clean geometric wedges.",
+    "Large-scale sense of depth: shadows, atmospheric haze, volumetric light, drifting debris, smoke, ash clouds.",
+    "Composition is wide and dramatic, with a clear focal point and secondary points of interest.",
+    "Avoid infographic styling: no radial wedges, no pie slices, no schematic floor plan, no blueprint lines, no grid overlay, no menu UI.",
+  ].join(" ");
 
-const sharedLighting = [
-  "Strategic map readability lighting — terrain and structures must remain clearly visible.",
-  "Global soft illumination across the entire scene so no major areas disappear into darkness.",
-  "Multiple light sources reveal terrain: lava glow, reactor glow, city lights, atmospheric haze, reflected starlight.",
-  "Rim lighting and ambient light outlining structures and terrain edges.",
-  "High contrast between territories while maintaining a dark grimdark palette.",
-  "Important terrain features clearly visible from the orbital perspective.",
-  "The scene should feel like a commander’s war map — dramatic but readable."
-].join(" ");
+  const sharedLighting = [
+    "Strategic map readability lighting — terrain and structures must remain clearly visible.",
+    "Global soft illumination across the entire scene so no major areas disappear into darkness.",
+    "Multiple light sources reveal terrain: lava glow, reactor glow, city lights, atmospheric haze, reflected starlight.",
+    "Rim lighting and ambient light outlining structures and terrain edges.",
+    "High contrast between territories while maintaining a dark grimdark palette.",
+    "Important terrain features clearly visible from the orbital perspective.",
+    "The scene should feel like a commander's war map — dramatic but readable.",
+  ].join(" ");
 
   switch (layout) {
     case "ring": {
-  return [
-    `Cinematic orbital view of a colossal Ringworld or Halo megastructure in Warhammer 40K, seen from space.`,
-    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
-    `The ring forms a vast broken halo around a central abyss, ancient and partially ruined.`,
-    `${zone_count} major war-torn regions spread organically across the ring structure, each territory emerging naturally from the terrain rather than forming radial segments.`,
-    `Terrain across the ring: ${biomeMod}`,
-    `Each region shows environmental identity and faction influence — ruined imperial strongholds, corrupted chaos landscapes, alien xenos ecosystems.`,
-    `The inner edge of the ring opens into a deep black void at the center.`,
-    `The outer edge exposes the megastructure frame — colossal iron girders, plasma conduits, shattered armor plating, atmospheric vents.`,
-    `The ring shows signs of ancient Golden Age engineering, far older than the current factions fighting over it.`,
-    `Zones are separated by natural breaks: collapsed superstructure seams, fractured causeways, river-chasms, trench lines, energy barriers, and debris fields — not clean painted wedges.`,
-    `The zones represent competing influences from Imperium, Chaos, and Xenos factions.`,
-    `Debris fields, shattered structures, and floating wreckage surround sections of the ring.`,
-    `Glowing plasma conduits run through the megastructure, casting amber light along the inner edge.`,
-    `Atmospheric haze, dust storms, warp glow, and burning ruins across the surface.`,
-    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
-    sharedStyle, sharedLighting,
-  ].join(" ");
-}
+      // ── SVG overlay alignment note ─────────────────────────────────────────
+      // The CampaignMapOverlay component renders a square SVG (viewBox 0 0 1000
+      // 1000) over this image. The ring's playable band is drawn between inner
+      // radius 250 (25% from centre) and outer radius 430 (43% from centre), so
+      // the ring occupies roughly the middle annular region of the square frame.
+      // The image should match these proportions so terrain detail aligns with
+      // the sector grid lines.
+      //
+      // Brightness target for the playable ring surface: mid-tone (not pitch
+      // black, not bright white) so that semi-transparent coloured SVG fills
+      // (yellow/red/blue/green at 20–45% opacity) remain legible on top.
+      // The central void should be distinctly dark. The outer frame (space/void
+      // beyond the ring) should also be dark.
+
+      const ringOverlayNote = [
+        `COMPOSITION REQUIREMENT: The image must be square (1:1 aspect ratio).`,
+        `The ring megastructure should be centred in the frame as a complete circular band,`,
+        `with the inner void (empty space) occupying roughly the central 50% of the frame width,`,
+        `and the ring's outer edge occupying roughly 86% of the frame width.`,
+        `The outer void (space beyond the ring) fills the corners.`,
+        `The ring's playable surface (the annular band between inner and outer edge) should be`,
+        `medium-toned — not pitch black, not brilliant white — so that coloured semi-transparent`,
+        `zone overlays placed on top remain clearly visible.`,
+        `The central void and outer space should be distinctly darker than the ring surface.`,
+        `The ring is divided into ${zone_count} approximately equal zones arranged clockwise.`,
+        `Each zone can be subtly distinguished by its terrain colour or biome character,`,
+        `though zone boundaries should emerge from terrain breaks rather than painted lines.`,
+      ].join(" ");
+
+      return [
+        `Cinematic orbital view of a colossal Ringworld or Halo megastructure in Warhammer 40K, seen from space.`,
+        `${narrativeContext}${campaignNameContext}`,
+        sharedShotLock,
+        ringOverlayNote,
+        `The ring forms a vast broken halo around a central abyss, ancient and partially ruined.`,
+        `${zone_count} major war-torn regions spread organically across the ring structure, each territory emerging naturally from the terrain rather than forming radial segments.`,
+        `Terrain across the ring: ${biomeMod}`,
+        `Each region shows environmental identity and faction influence — ruined imperial strongholds, corrupted chaos landscapes, alien xenos ecosystems.`,
+        `The inner edge of the ring opens into a deep black void at the center.`,
+        `The outer edge exposes the megastructure frame — colossal iron girders, plasma conduits, shattered armor plating, atmospheric vents.`,
+        `The ring shows signs of ancient Golden Age engineering, far older than the current factions fighting over it.`,
+        `Zones are separated by natural breaks: collapsed superstructure seams, fractured causeways, river-chasms, trench lines, energy barriers, and debris fields — not clean painted wedges.`,
+        `The zones represent competing influences from Imperium, Chaos, and Xenos factions.`,
+        `Debris fields, shattered structures, and floating wreckage surround sections of the ring.`,
+        `Glowing plasma conduits run through the megastructure, casting amber light along the inner edge.`,
+        `Atmospheric haze, dust storms, warp glow, and burning ruins across the surface.`,
+        `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+        sharedStyle,
+        sharedLighting,
+      ].join(" ");
+    }
 
     case "continent": {
-  return [
-    `Cinematic orbital view of a war-torn Warhammer 40K planet with fractured continents and catastrophic geological damage, seen from space.`,
-    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
-    `${zone_count} major war zones spread across the planet's broken continents and tectonic plates, each territory emerging naturally from the terrain rather than forming neat or symmetrical regions.`,
-    `Terrain across the continents: ${biomeMod}`,
-    `The planetary crust is shattered — continents split apart by colossal chasms, tectonic fractures, magma seas, toxic sludge oceans, and collapsed hive-city ruins.`,
-    `Ragged coastlines, void-cliffs, and shattered landmasses drift apart across boiling oceans or exposed mantle.`,
-    `Zone boundaries appear through environmental breaks: mountain chains, crater fields, fortress walls, canyon systems, toxic seas, lava rivers, and ancient defense lines — not drawn borders.`,
-    `Evidence of ancient wars scars the landscape: orbital bombardment craters, shattered hive cities, broken manufactorum complexes, trench networks, and abandoned fortresses.`,
-    `The continents show the lingering influence of many factions — Imperial bastions, Chaos-corrupted wastelands, and alien Xenos ecosystems — layered across millennia of warfare.`,
-    `Storm systems, ash clouds, warp anomalies, and atmospheric haze swirl across the planet, illuminated by distant sunlight and fires from ongoing conflict.`,
-    `Floating debris fields and fragments of shattered moons orbit nearby.`,
-    `epic sci-fi planetary campaign map environment concept art`,
-    `No text overlays. No UI elements. Avoid infographic or boardgame map layouts.`,
-    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
-    sharedStyle, sharedLighting,
-  ].join(" ");
-}
+      return [
+        `Cinematic orbital view of a war-torn Warhammer 40K planet with fractured continents and catastrophic geological damage, seen from space.`,
+        `${narrativeContext}${campaignNameContext}`,
+        sharedShotLock,
+        `${zone_count} major war zones spread across the planet's broken continents and tectonic plates, each territory emerging naturally from the terrain rather than forming neat or symmetrical regions.`,
+        `Terrain across the continents: ${biomeMod}`,
+        `The planetary crust is shattered — continents split apart by colossal chasms, tectonic fractures, magma seas, toxic sludge oceans, and collapsed hive-city ruins.`,
+        `Ragged coastlines, void-cliffs, and shattered landmasses drift apart across boiling oceans or exposed mantle.`,
+        `Zone boundaries appear through environmental breaks: mountain chains, crater fields, fortress walls, canyon systems, toxic seas, lava rivers, and ancient defense lines — not drawn borders.`,
+        `Evidence of ancient wars scars the landscape: orbital bombardment craters, shattered hive cities, broken manufactorum complexes, trench networks, and abandoned fortresses.`,
+        `The continents show the lingering influence of many factions — Imperial bastions, Chaos-corrupted wastelands, and alien Xenos ecosystems — layered across millennia of warfare.`,
+        `Storm systems, ash clouds, warp anomalies, and atmospheric haze swirl across the planet, illuminated by distant sunlight and fires from ongoing conflict.`,
+        `Floating debris fields and fragments of shattered moons orbit nearby.`,
+        `epic sci-fi planetary campaign map environment concept art`,
+        `No text overlays. No UI elements. Avoid infographic or boardgame map layouts.`,
+        `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+        sharedStyle,
+        sharedLighting,
+      ].join(" ");
+    }
 
     case "radial": {
-  return [
-    `Cinematic orbital view of a colossal disc-shaped megastructure floating in space in the Warhammer 40K universe, engineered as a hub-and-spoke radial fortress-world.`,
-    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
-    `${zone_count} distinct war zones laid out as a central hub objective with massive spoke corridors radiating outward to perimeter territories — the spokes are physical land-bridges and superstructure causeways, not clean diagram wedges.`,
-    `Terrain across the disc and spokes: ${biomeMod}`,
-    `The central hub is the primary objective: an ancient pre-Imperial tower or spire older than the Warhammer 40K era, heavily fortified, scarred by sieges, partially abandoned yet still powered by failing archeotech.`,
-    `Each spoke corridor is its own battle theatre: shattered transit arteries lined with ruined bastions, collapsed manufactorum gantries, barricades, crater fields, and broken defense pylons.`,
-    `The spoke corridors show heavy bombardment, void-exposure fractures, and sections patched with brutalist 40K fortifications.`,
-    `The outer perimeter territories are more wild and unstable — fractured habitats, alien overgrowth, ash deserts, warp-tainted scars, and forgotten outposts — bearing evidence of old Imperium, Chaos, and Xenos occupations.`,
-    `Zones are separated by natural breaks: collapsed superstructure seams, fractured causeways, river-chasms, trench lines, energy barriers, and debris fields — not clean painted wedges.`,
-    `Visible superstructure on the underside edges: iron ribs, plasma conduits, exposed deck plating, vents, cables, and broken docking pylons; floating debris and wreckage in the surrounding void.`,
-    `Atmospheric haze and smoke pockets cling to surviving terrain; intermittent amber plasma glow runs through conduits; occasional sickly green warp-light bleeds from ruptures.`,
-    `No text overlays. No UI elements. Avoid boardgame wheel or infographic styling — this is a physical environment seen from space.`,
-    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
-    sharedStyle, sharedLighting,
-  ].join(" ");
-}
+      return [
+        `Cinematic orbital view of a colossal disc-shaped megastructure floating in space in the Warhammer 40K universe, engineered as a hub-and-spoke radial fortress-world.`,
+        `${narrativeContext}${campaignNameContext}`,
+        sharedShotLock,
+        `${zone_count} distinct war zones laid out as a central hub objective with massive spoke corridors radiating outward to perimeter territories — the spokes are physical land-bridges and superstructure causeways, not clean diagram wedges.`,
+        `Terrain across the disc and spokes: ${biomeMod}`,
+        `The central hub is the primary objective: an ancient pre-Imperial tower or spire older than the Warhammer 40K era, heavily fortified, scarred by sieges, partially abandoned yet still powered by failing archeotech.`,
+        `Each spoke corridor is its own battle theatre: shattered transit arteries lined with ruined bastions, collapsed manufactorum gantries, barricades, crater fields, and broken defense pylons.`,
+        `The spoke corridors show heavy bombardment, void-exposure fractures, and sections patched with brutalist 40K fortifications.`,
+        `The outer perimeter territories are more wild and unstable — fractured habitats, alien overgrowth, ash deserts, warp-tainted scars, and forgotten outposts.`,
+        `Zones are separated by natural breaks: collapsed superstructure seams, fractured causeways, river-chasms, trench lines, energy barriers, and debris fields — not clean painted wedges.`,
+        `Visible superstructure on the underside edges: iron ribs, plasma conduits, exposed deck plating, vents, cables, and broken docking pylons; floating debris and wreckage in the surrounding void.`,
+        `Atmospheric haze and smoke pockets cling to surviving terrain; intermittent amber plasma glow runs through conduits; occasional sickly green warp-light bleeds from ruptures.`,
+        `No text overlays. No UI elements. Avoid boardgame wheel or infographic styling — this is a physical environment seen from space.`,
+        `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+        sharedStyle,
+        sharedLighting,
+      ].join(" ");
+    }
 
     case "ship_line": {
-  return [
-    `Cinematic top-down cutaway view of a colossal Warhammer 40K Gothic warship drifting through space, its armored hull partially exposed to reveal the vast internal structure like a megastructure cross-section.`,
-    `${narrativeContext}${campaignNameContext}`,sharedShotLock,
-    `The warship spans the image from bow (left) to stern (right), its immense gothic silhouette visible against the void.`,
-    `${zone_count} major interior battle zones are distributed along the length of the ship — each zone representing a massive strategic compartment or cluster of decks rather than small rooms.`,
-    `Terrain of the interior war zones: ${biomeMod}`,
-    `These zones include areas such as command sanctums, cathedral-like crew districts, reactor cathedrals, weapon batteries, launch bays, warp engines, and sensor arrays.`,
-    `Each zone is separated by colossal armoured bulkheads, blast doors, and deck-spanning structural ribs — visible as thick dark mechanical barriers within the ship.`,
-    `The ship is unimaginably vast, containing cathedral vaults, towering reactor chambers, kilometre-long corridors, shrine complexes, and weapon halls.`,
-    `The Command Bridge rises in a gothic tower structure filled with cogitator banks and tactical hololiths.`,
-    `The Navigator’s Sanctum and Astropathic Choir chambers glow with eerie psychic light.`,
-    `The Plasma Reactors and Warp Drive sections dominate the stern half of the vessel — colossal cathedral-like machinery glowing with blue-white plasma energy.`,
-    `Weapon decks line the hull — macro cannon batteries, lance arrays, torpedo chambers, and launch bays embedded into the armoured sides of the ship.`,
-    `Void shield generators and augur arrays form massive machinery chambers surrounded by defensive infrastructure.`,
-    `Crew districts appear as dense industrial labyrinths of barracks, shrines, manufactorums, and gothic halls.`,
-    `Interior aesthetic: corroded iron deck plates, gothic arches, cathedral vaults, cogitator consoles glowing amber, incense braziers, servo skull stations, purity seals and devotional statues.`,
-    `Battle damage throughout the ship: breached decks exposing the void, fires, plasma leaks, collapsed corridors, shattered statues, blast marks and wreckage.`,
-    `Stars and nebula glow are visible beyond the hull outline where armor plates have been torn open.`,
-    `The stern engines burn with intense blue-white plasma light illuminating surrounding compartments.`,
-    `No blueprint diagrams, no dungeon grid layout, no UI overlays — this is a grimdark environment concept art tactical map.`,
-    `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
-    sharedStyle, sharedLighting,
-  ].join(" ");
-}
+      return [
+        `Cinematic top-down cutaway view of a colossal Warhammer 40K Gothic warship drifting through space, its armored hull partially exposed to reveal the vast internal structure like a megastructure cross-section.`,
+        `${narrativeContext}${campaignNameContext}`,
+        sharedShotLock,
+        `The warship spans the image from bow (left) to stern (right), its immense gothic silhouette visible against the void.`,
+        `${zone_count} major interior battle zones are distributed along the length of the ship — each zone representing a massive strategic compartment or cluster of decks rather than small rooms.`,
+        `Terrain of the interior war zones: ${biomeMod}`,
+        `These zones include areas such as command sanctums, cathedral-like crew districts, reactor cathedrals, weapon batteries, launch bays, warp engines, and sensor arrays.`,
+        `Each zone is separated by colossal armoured bulkheads, blast doors, and deck-spanning structural ribs — visible as thick dark mechanical barriers within the ship.`,
+        `The ship is unimaginably vast, containing cathedral vaults, towering reactor chambers, kilometre-long corridors, shrine complexes, and weapon halls.`,
+        `The Command Bridge rises in a gothic tower structure filled with cogitator banks and tactical hololiths.`,
+        `The Navigator's Sanctum and Astropathic Choir chambers glow with eerie psychic light.`,
+        `The Plasma Reactors and Warp Drive sections dominate the stern half of the vessel — colossal cathedral-like machinery glowing with blue-white plasma energy.`,
+        `Weapon decks line the hull — macro cannon batteries, lance arrays, torpedo chambers, and launch bays embedded into the armoured sides of the ship.`,
+        `Void shield generators and augur arrays form massive machinery chambers surrounded by defensive infrastructure.`,
+        `Crew districts appear as dense industrial labyrinths of barracks, shrines, manufactorums, and gothic halls.`,
+        `Interior aesthetic: corroded iron deck plates, gothic arches, cathedral vaults, cogitator consoles glowing amber, incense braziers, servo skull stations, purity seals and devotional statues.`,
+        `Battle damage throughout the ship: breached decks exposing the void, fires, plasma leaks, collapsed corridors, shattered statues, blast marks and wreckage.`,
+        `Stars and nebula glow are visible beyond the hull outline where armor plates have been torn open.`,
+        `The stern engines burn with intense blue-white plasma light illuminating surrounding compartments.`,
+        `No blueprint diagrams, no dungeon grid layout, no UI overlays — this is a grimdark environment concept art tactical map.`,
+        `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
+        sharedStyle,
+        sharedLighting,
+      ].join(" ");
+    }
 
     default: {
       return [
@@ -199,6 +242,14 @@ const sharedLighting = [
       ].join(" ");
     }
   }
+}
+
+// ── Image size per layout ────────────────────────────────────────────────────
+// Ring uses 1024×1024 (square) so the aspect-square SVG overlay aligns 1:1.
+// Other layouts use 1536×1024 (landscape) for a wider cinematic feel.
+
+function imageSizeForLayout(layout: Layout): string {
+  return layout === "ring" ? "1024x1024" : "1536x1024";
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -256,8 +307,6 @@ serve(async (req) => {
     }
 
     // -- Create or reuse map record ------------------------------------------
-    // If no map_id provided (first generation from lead page modal), create one now.
-    // The returned map_id lets the modal confirm or cancel the map.
 
     let activeMapId = map_id ?? null;
 
@@ -308,6 +357,8 @@ serve(async (req) => {
       return json(500, { ok: false, error: "OpenAI API key not configured" });
     }
 
+    const imageSize = imageSizeForLayout(layout as Layout);
+
     const imageResp = await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST",
       headers: {
@@ -318,7 +369,7 @@ serve(async (req) => {
         model:   "gpt-image-1",
         prompt,
         n:       1,
-        size:    "1536x1024",
+        size:    imageSize,
         quality: "high",
       }),
     });
@@ -360,8 +411,7 @@ serve(async (req) => {
       return json(500, { ok: false, error: `Storage upload failed: ${uploadErr.message}` });
     }
 
-    // Update map record -- write both bg_image_path (correct schema column) and
-    // image_path (legacy, read by MapImageDisplay) so both are populated.
+    // Update map record
     const { error: updateErr } = await admin
       .from("maps")
       .update({
@@ -376,11 +426,12 @@ serve(async (req) => {
       return json(500, { ok: false, error: `Map update failed: ${updateErr.message}` });
     }
 
-    console.log(`[generate-map] Complete. map=${activeMapId} path=${storagePath}`);
+    console.log(`[generate-map] Complete. map=${activeMapId} path=${storagePath} size=${imageSize}`);
     return json(200, { ok: true, map_id: activeMapId, image_path: storagePath });
 
-  } catch (e: any) {
-    console.error("[generate-map] Unexpected error:", e?.message ?? String(e));
-    return json(500, { ok: false, error: e?.message ?? "Server error" });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[generate-map] Unexpected error:", msg);
+    return json(500, { ok: false, error: msg ?? "Server error" });
   }
 });

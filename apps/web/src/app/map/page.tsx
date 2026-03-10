@@ -2,6 +2,15 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-10 — INTEGRATION: CampaignMapOverlay replaces the side-by-side
+//                Tactical Hololith + AI Theatre Map for ring layout campaigns
+//                that have a generated AI map image. The new overlay renders
+//                the AI image with a live SVG ring-sector overlay on top,
+//                wired to the same toZone/toSector movement state. Non-ring
+//                layouts and campaigns without an AI image continue to use
+//                the original TacticalMap + MapImageDisplay 2-column layout.
+//                bg_image_path now fetched from maps table; signed URL stored
+//                in mapImageUrl state and passed to CampaignMapOverlay.
 //   2026-03-09 — LAYOUT: Tactical Hololith and AI Theatre Map placed side-by-side
 //                in a 2-column grid (lg:grid-cols-2). Hololith on the left, map
 //                image on the right. Single-column on mobile; right column hidden
@@ -32,6 +41,7 @@ import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 import { MapImageDisplay } from "@/components/MapImageDisplay";
+import { CampaignMapOverlay } from "@/components/CampaignMapOverlay";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -619,6 +629,7 @@ export default function MapPage() {
   const [hasRecon,      setHasRecon]      = useState(false);
   const [fogEnabled,    setFogEnabled]    = useState<boolean>(true);
   const [mapLayout,     setMapLayout]     = useState<string>("ring");
+  const [mapImageUrl,   setMapImageUrl]   = useState<string | null>(null);
   const [pageError,     setPageError]     = useState<string | null>(null);
   const [loading,       setLoading]       = useState(false);
 
@@ -673,7 +684,7 @@ export default function MapPage() {
       // Map zones
       if ((c as any)?.map_id) {
         const { data: mapRow } = await supabase
-          .from("maps").select("map_json,zone_count,layout")
+          .from("maps").select("map_json,zone_count,layout,bg_image_path")
           .eq("id", (c as any).map_id).maybeSingle();
         const zoneList: MapZone[] = (mapRow?.map_json as any)?.zones ?? [];
         setZones(zoneList);
@@ -681,6 +692,15 @@ export default function MapPage() {
         // Fall back to map table layout if rules_overrides doesn't set one
         if (!ro.map_layout && (mapRow as any)?.layout) {
           setMapLayout((mapRow as any).layout as string);
+        }
+        // Fetch signed URL for AI map image
+        if ((mapRow as any)?.bg_image_path) {
+          const { data: signed } = await supabase.storage
+            .from("campaign-maps")
+            .createSignedUrl((mapRow as any).bg_image_path, 3600);
+          setMapImageUrl(signed?.signedUrl ?? null);
+        } else {
+          setMapImageUrl(null);
         }
       }
 
@@ -764,6 +784,12 @@ export default function MapPage() {
   }, [effectiveZones, mapZoneCount]);
 
   const adj = useMemo(() => buildAdjacency(allZones, mapLayout), [allZones, mapLayout]);
+
+  // Ordered zone keys for CampaignMapOverlay (derived from effectiveZones which comes from map_json.zones)
+  const zoneKeys = useMemo(() => effectiveZones.map((z) => z.key), [effectiveZones]);
+
+  // Combined sector ID for CampaignMapOverlay ("zoneKey:sectorKey" format)
+  const selectedSectorId = toZone && toSector ? `${toZone}:${toSector}` : null;
 
   const memberById = useMemo(() => {
     const m = new Map<string, Member>();
@@ -908,8 +934,76 @@ export default function MapPage() {
           <p className="text-parchment/50 animate-pulse text-sm px-1">Loading tactical data…</p>
         )}
 
-        {/* ── Tactical Hololith + AI Theatre Map (side by side) ── */}
-        {!loading && (
+        {/* ── Map Display ── */}
+        {/* Ring layout with AI image: merged CampaignMapOverlay (image + SVG ring overlay) */}
+        {/* All other layouts: original side-by-side Tactical Hololith + AI Theatre Map */}
+        {!loading && mapLayout === "ring" && mapId && mapImageUrl ? (
+          <>
+            <CampaignMapOverlay
+              mapUrl={mapImageUrl}
+              layout="ring"
+              zoneCount={mapZoneCount ?? effectiveZones.length}
+              zoneKeys={zoneKeys}
+              sectors={sectors as any}
+              units={myUnits as any}
+              currentUserId={uid || null}
+              selectedSectorId={selectedSectorId}
+              onSectorClick={(zone, sector) => {
+                if (canMove && selectedUnit) {
+                  setToZone(zone);
+                  setToSector(sector);
+                }
+              }}
+              showZoneLabels
+            />
+
+            {/* Colour legend — kept below overlay */}
+            <div className="flex flex-wrap gap-x-5 gap-y-1 px-1 text-xs font-mono">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#5a3d08", borderColor: "#c9a84c" }} />
+                <span className="text-parchment/50">Unit present</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#221800", borderColor: "#7a5f22" }} />
+                <span className="text-parchment/50">Held (empty)</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#3a0a0a", borderColor: "#7a1515" }} />
+                <span className="text-parchment/50">Enemy</span>
+              </span>
+              {canMove && selectedUnit && (
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#1b2b1b", borderColor: "#3a6b3a" }} />
+                  <span className="text-green-400/70">Reachable — click to target</span>
+                </span>
+              )}
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#0a0a10", borderColor: "#181826" }} />
+                <span className="text-parchment/30">Fog / unknown</span>
+              </span>
+            </div>
+
+            {/* Sector intel panels */}
+            {targetIntel && (
+              <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
+            )}
+            {myUnits
+              .filter((u) => !(u.zone_key === toZone && u.sector_key === toSector))
+              .map((u) => {
+                const s = sectorAt(u.zone_key, u.sector_key);
+                if (!s) return null;
+                return (
+                  <SectorIntelPanel
+                    key={u.id}
+                    zoneKey={u.zone_key}
+                    sectorKey={u.sector_key}
+                    sector={s}
+                  />
+                );
+              })}
+          </>
+        ) : !loading ? (
+        /* Non-ring or no AI image: original side-by-side layout */
         <div className={`grid gap-4 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
 
         {/* LEFT: Tactical Hololith */}
@@ -997,7 +1091,7 @@ export default function MapPage() {
           )}
 
         </div>
-        )}
+        ) : null}
 
         {/* ── My Units ── */}
         {myUnits.length > 0 && (
