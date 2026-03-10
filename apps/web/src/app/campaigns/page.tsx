@@ -823,7 +823,7 @@ export default function CampaignsPage() {
                 disabled={loading || creating}
               />
               <p className="mt-1 text-xs text-parchment/40">
-                Selected existing players are added here automatically. Players auto-join when they sign in.
+                Selected existing players are added here automatically. Email will be sent to the player to join the fight.
               </p>
             </div>
 

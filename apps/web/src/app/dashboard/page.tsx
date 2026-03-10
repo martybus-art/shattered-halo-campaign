@@ -139,6 +139,7 @@ type Campaign = {
   round_number: number;
   instability:  number;
   map_id:       string | null;
+  campaign_narrative: string | null;
 };
 
 type PlayerState = {
@@ -327,7 +328,7 @@ export default function Dashboard() {
     // 1. Campaign basics
     const { data: c } = await supabase
       .from("campaigns")
-      .select("id,name,phase,round_number,instability,map_id")
+      .select("id,name,phase,round_number,instability,map_id,campaign_narrative")
       .eq("id", cid).single();
     if (!c) return;
     setCampaign(c as Campaign);
@@ -677,6 +678,17 @@ export default function Dashboard() {
   return (
     <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
       <div className="space-y-6">
+        {/* ── Single Column - Campaign Narrative────────────────────────────── */}
+        {campaign?.campaign_narrative && (
+          <Card title="Campaign Narrative">
+            <p className="text-brass text-xs uppercase tracking-widest mb-2">
+              Strategic Briefing
+            </p>
+            <p className="text-parchment/70 leading-relaxed whitespace-pre-wrap">
+              {campaign.campaign_narrative}
+            </p>
+          </Card>
+        )}
 
 
         {/* ── Main 2-column layout ─────────────────────────────────────────── */}

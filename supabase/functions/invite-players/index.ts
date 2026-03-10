@@ -105,6 +105,14 @@ serve(async (req) => {
       campaign_narrative: campaignNarrative ?? "",
     };
 
+    // ── Email Testing─────────────────────────────────────────────────────
+    // 
+    // This is testing the email send items
+    
+      console.log("invite-players body.campaign_id =", campaign_id);
+      console.log("invite-players campaign row =", JSON.stringify(campaign));
+      console.log("invite-players emailData =", JSON.stringify(emailData));
+
     // ── Send emails ──────────────────────────────────────────────────────────
     // NEW USERS:      inviteUserByEmail → sends Supabase "Invite User" template.
     //                 The OTP in that template registers the account and signs
