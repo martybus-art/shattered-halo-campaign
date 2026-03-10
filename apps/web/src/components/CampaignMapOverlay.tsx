@@ -648,7 +648,7 @@ const SLIDER_DEFS: SliderDef[] = [
   {
     key: "ringOuter",
     label: "Outer Radius",
-    min: 300, max: 560, step: 1,
+    min: 300, max: 700, step: 1,
     description: "Semi-major axis of the outer atmosphere ellipse (horizontal rx)",
   },
   {
