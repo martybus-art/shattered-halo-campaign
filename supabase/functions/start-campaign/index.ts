@@ -3,6 +3,13 @@
 // initial scout and occupation units, and seeds the sectors table.
 //
 // changelog:
+//   2026-03-11 -- FIX: map_json write-back. When map_json.zones is empty at
+//                 start time (generate-map only stores the image, not zone
+//                 definitions), the resolved MapDef (fallback or otherwise)
+//                 is now written back to maps.map_json before allocation
+//                 proceeds. This ensures map/page.tsx reads correct zone names
+//                 and the SVG overlay labels match the actual zone keys used
+//                 in sectors/units. Write failure is non-fatal (logged only).
 //   2026-03-08 -- Added createInitialSectors(): at campaign start, all sectors
 //                 in each player's starting zone are inserted into the sectors
 //                 table. The player's own starting sector is marked as owned
@@ -115,6 +122,10 @@ serve(async (req) => {
 
     const roundNumber = (camp as any)?.round_number;
 
+    // Track whether map_json.zones was already populated so we know whether
+    // to write the resolved map back to the DB after resolving it.
+    let mapJsonWasEmpty = true;
+
     if (camp?.map_id) {
       const { data: mapRow, error: mapErr } = await admin
         .from("maps")
@@ -124,8 +135,26 @@ serve(async (req) => {
       if (!mapErr && mapRow?.map_json) {
         try {
           const mj = mapRow.map_json as any;
-          if (mj?.zones?.length) map = mj as MapDef;
+          if (mj?.zones?.length) {
+            map = mj as MapDef;
+            mapJsonWasEmpty = false;
+          }
         } catch { /* use fallback */ }
+      }
+    }
+
+    // If map_json had no zones, persist the resolved definition (fallback or
+    // otherwise) back into the maps row so that map/page.tsx can read zone
+    // names and the overlay labels correctly. Without this write, map_json
+    // stays as '{}' forever and zone labels fall back to formatted keys.
+    if (mapJsonWasEmpty && camp?.map_id) {
+      const { error: writeErr } = await admin
+        .from("maps")
+        .update({ map_json: map })
+        .eq("id", camp.map_id);
+      if (writeErr) {
+        console.error("[start-campaign] map_json write-back error:", writeErr.message);
+        // Non-fatal: allocation can still proceed with the in-memory map
       }
     }
 
