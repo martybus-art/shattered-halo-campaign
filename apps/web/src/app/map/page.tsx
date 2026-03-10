@@ -33,6 +33,7 @@ import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 import { MapImageDisplay } from "@/components/MapImageDisplay";
+import { CampaignRingMergedMap } from "@/components/CampaignRingMergedMap";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -622,6 +623,7 @@ export default function MapPage() {
   const [mapLayout,     setMapLayout]     = useState<string>("ring");
   const [pageError,     setPageError]     = useState<string | null>(null);
   const [loading,       setLoading]       = useState(false);
+  const [imageUrl,      setImageUrl]      = useState<string | null>(null);
 
   // Movement order state
   const [selectedUnit,  setSelectedUnit]  = useState<Unit | null>(null);
@@ -674,7 +676,7 @@ export default function MapPage() {
       // Map zones
       if ((c as any)?.map_id) {
         const { data: mapRow } = await supabase
-          .from("maps").select("map_json,zone_count,layout")
+          .from("maps").select("map_json,zone_count,layout,image_path,bg_image_path")
           .eq("id", (c as any).map_id).maybeSingle();
         const zoneList: MapZone[] = (mapRow?.map_json as any)?.zones ?? [];
         setZones(zoneList);
@@ -682,6 +684,13 @@ export default function MapPage() {
         // Fall back to map table layout if rules_overrides doesn't set one
         if (!ro.map_layout && (mapRow as any)?.layout) {
           setMapLayout((mapRow as any).layout as string);
+        }
+        const imagePath = (mapRow as any)?.image_path ?? (mapRow as any)?.bg_image_path ?? null;
+        if (imagePath) {
+          const { data: signed } = await supabase.storage.from("campaign-maps").createSignedUrl(imagePath, 60 * 60);
+          setImageUrl(signed?.signedUrl ?? null);
+        } else {
+          setImageUrl(null);
         }
       }
 
@@ -778,6 +787,13 @@ export default function MapPage() {
   const inReconPhase    = stage === "recon";
   const canMove         = inMovementPhase || (inReconPhase && hasRecon);
   const inSpendPhase    = stage === "spend";
+
+
+  const validZones = useMemo(() => {
+    if (!selectedUnit || !canMove) return new Set<string>();
+    if (hasDeepStrike) return new Set(allZones.map((z) => z.key));
+    return adj.get(selectedUnit.zone_key) ?? new Set<string>();
+  }, [selectedUnit, canMove, hasDeepStrike, allZones, adj]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -953,22 +969,45 @@ export default function MapPage() {
             </div>
 
             {/* SVG layout */}
-            <TacticalMap
-              zones={allZones}
-              layout={mapLayout}
-              adj={adj}
-              sectors={sectors}
-              uid={uid}
-              memberById={memberById}
-              myUnits={myUnits}
-              selectedUnit={selectedUnit}
-              toZone={toZone}
-              toSector={toSector}
-              fogEnabled={fogEnabled}
-              canMove={canMove}
-              hasDeepStrike={hasDeepStrike}
-              onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
-            />
+            {mapId && mapLayout === "ring" ? (
+              <div className="space-y-3">
+                <CampaignRingMergedMap
+                  imageUrl={imageUrl ?? "/placeholder-map.jpg"}
+                  zones={allZones}
+                  sectors={sectors}
+                  uid={uid}
+                  myUnits={myUnits}
+                  selectedUnit={selectedUnit}
+                  toZone={toZone}
+                  toSector={toSector}
+                  fogEnabled={fogEnabled}
+                  canMove={canMove}
+                  hasDeepStrike={hasDeepStrike}
+                  validZones={validZones}
+                  onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
+                />
+                <p className="text-xs text-parchment/35 italic">
+                  Ring layout active — tactical state now overlays the theatre map directly.
+                </p>
+              </div>
+            ) : (
+              <TacticalMap
+                zones={allZones}
+                layout={mapLayout}
+                adj={adj}
+                sectors={sectors}
+                uid={uid}
+                memberById={memberById}
+                myUnits={myUnits}
+                selectedUnit={selectedUnit}
+                toZone={toZone}
+                toSector={toSector}
+                fogEnabled={fogEnabled}
+                canMove={canMove}
+                hasDeepStrike={hasDeepStrike}
+                onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
+              />
+            )}
 
             {/* Sector intel for the targeted sector (occupation-gated) */}
             {targetIntel && (
@@ -1125,7 +1164,7 @@ export default function MapPage() {
           <div className="space-y-4">
 
             {/* AI Theatre Map */}
-            {mapId && (
+            {mapId && mapLayout !== "ring" && (
               <div className="min-w-0">
                 <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
               </div>
