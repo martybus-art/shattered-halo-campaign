@@ -33,7 +33,7 @@ import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 import { MapImageDisplay } from "@/components/MapImageDisplay";
-import { CampaignRingMergedMap } from "@/components/CampaignRingMergedMap";
+import CampaignRingMergedMap from "@/components/CampaignRingMergedMap";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
