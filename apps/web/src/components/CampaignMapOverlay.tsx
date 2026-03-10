@@ -167,11 +167,23 @@ type SectorGeometry = {
 // ringMid is always derived as (ringInner + ringOuter) / 2 — not stored.
 
 export type RingConfig = {
-  cx:           number;
-  cy:           number;
-  perspectiveY: number;
-  ringInner:    number;
-  ringOuter:    number;
+  cx:             number;
+  cy:             number;
+  perspectiveY:   number;
+  ringInner:      number;
+  ringOuter:      number;
+  /**
+   * Independent vertical centre offsets for the inner and outer ellipses.
+   * In a perspective view the outer edge ellipse centre sits lower than the
+   * inner edge — these offsets let you dial that in independently.
+   * Positive = shift that ellipse centre downward.
+   *
+   * Effect on band width:
+   *   outerCyOffset > innerCyOffset  =>  bottom band wider, top band narrower
+   *   outerCyOffset < innerCyOffset  =>  top band wider, bottom band narrower
+   */
+  innerCyOffset:  number;
+  outerCyOffset:  number;
 };
 
 /** Derives the mid-band radius — computed from config, never stored. */
@@ -185,11 +197,13 @@ function ringMid(cfg: RingConfig): number {
  * even for users who have never opened the calibration panel.
  */
 export const DEFAULT_RING_CONFIG: RingConfig = {
-  cx:           500,
-  cy:           410,   // ring visual centre sits above canvas midpoint
-  perspectiveY: 0.55,  // Y-axis compression (1.0 = circle)
-  ringInner:    275,   // inner void edge rx
-  ringOuter:    480,   // outer atmosphere edge rx
+  cx:             500,
+  cy:             410,   // ring visual centre sits above canvas midpoint
+  perspectiveY:   0.55,  // Y-axis compression (1.0 = circle)
+  ringInner:      275,   // inner void edge rx
+  ringOuter:      480,   // outer atmosphere edge rx
+  innerCyOffset:  0,     // inner ellipse cy nudge (positive = down)
+  outerCyOffset:  0,     // outer ellipse cy nudge (positive = down)
 };
 
 const CALIB_STORAGE_PREFIX = "shattered-halo:map-calib:";
@@ -242,20 +256,23 @@ function polarToCartesian(
 /**
  * Builds an SVG path for a ring wedge (annular sector) using elliptical arcs
  * so horizontal and vertical radii differ by perspectiveY.
+ * innerCy / outerCy allow the two ellipses to have independent vertical centres,
+ * which is necessary to match perspective foreshortening on the ring band.
  */
 function wedgePath(
   cx: number,
-  cy: number,
+  innerCy: number,
+  outerCy: number,
   innerR: number,
   outerR: number,
   startAngle: number,
   endAngle: number,
   perspectiveY: number,
 ): string {
-  const p1 = polarToCartesian(cx, cy, outerR, startAngle, perspectiveY);
-  const p2 = polarToCartesian(cx, cy, outerR, endAngle,   perspectiveY);
-  const p3 = polarToCartesian(cx, cy, innerR, endAngle,   perspectiveY);
-  const p4 = polarToCartesian(cx, cy, innerR, startAngle, perspectiveY);
+  const p1 = polarToCartesian(cx, outerCy, outerR, startAngle, perspectiveY);
+  const p2 = polarToCartesian(cx, outerCy, outerR, endAngle,   perspectiveY);
+  const p3 = polarToCartesian(cx, innerCy, innerR, endAngle,   perspectiveY);
+  const p4 = polarToCartesian(cx, innerCy, innerR, startAngle, perspectiveY);
   const largeArc = endAngle - startAngle > 180 ? 1 : 0;
   // Elliptical arc: rx = r (horizontal), ry = r * perspectiveY (compressed vertical)
   const outerRy = (outerR * perspectiveY).toFixed(2);
@@ -271,7 +288,8 @@ function wedgePath(
 
 function wedgeCentroid(
   cx: number,
-  cy: number,
+  innerCy: number,
+  outerCy: number,
   innerR: number,
   outerR: number,
   startAngle: number,
@@ -280,7 +298,8 @@ function wedgeCentroid(
 ): { x: number; y: number } {
   const midAngle = (startAngle + endAngle) / 2;
   const midR = (innerR + outerR) / 2;
-  return polarToCartesian(cx, cy, midR, midAngle, perspectiveY);
+  const midCy = (innerCy + outerCy) / 2;
+  return polarToCartesian(cx, midCy, midR, midAngle, perspectiveY);
 }
 
 // ── State derivation ──────────────────────────────────────────────────────────
@@ -343,8 +362,14 @@ function useRingGeometry(
   cfg: RingConfig,
 ): SectorGeometry[] {
   const { zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId } = props;
-  const { cx, cy, perspectiveY, ringInner, ringOuter } = cfg;
+  const { cx, cy, perspectiveY, ringInner, ringOuter, innerCyOffset, outerCyOffset } = cfg;
   const mid = ringMid(cfg);
+
+  // Effective vertical centres for each ellipse — inner and outer can be offset
+  // independently so the band width differs at the top vs bottom of the image.
+  const innerCy = cy + innerCyOffset;
+  const outerCy = cy + outerCyOffset;
+  const midCy   = (innerCy + outerCy) / 2;
 
   return useMemo(() => {
     const zoneSweep = 360 / Math.max(zoneCount, 1);
@@ -371,7 +396,7 @@ function useRingGeometry(
 
       // Midpoint of the full zone for label placement (outer band centroid)
       const zoneLabelPoint = wedgeCentroid(
-        cx, cy, mid, ringOuter,
+        cx, midCy, outerCy, mid, ringOuter,
         zoneStart, zoneStart + zoneSweep,
         perspectiveY
       );
@@ -389,6 +414,12 @@ function useRingGeometry(
 
         const innerR = isInnerBand ? ringInner : mid;
         const outerR = isInnerBand ? mid : ringOuter;
+        // Use the appropriate cy pair for each band:
+        //   inner band: innerCy (void edge) -> midCy (mid ring)
+        //   outer band: midCy (mid ring)    -> outerCy (atmosphere edge)
+        const bandInnerCy = isInnerBand ? innerCy : midCy;
+        const bandOuterCy = isInnerBand ? midCy   : outerCy;
+
         const startAngle = zoneStart + localHalf * halfSweep;
         const endAngle = startAngle + halfSweep;
 
@@ -404,8 +435,8 @@ function useRingGeometry(
           state,
           fortified: dbSector?.fortified ?? false,
           hasUnit,
-          path:     wedgePath(cx, cy, innerR, outerR, startAngle, endAngle, perspectiveY),
-          centroid: wedgeCentroid(cx, cy, innerR, outerR, startAngle, endAngle, perspectiveY),
+          path:     wedgePath(cx, bandInnerCy, bandOuterCy, innerR, outerR, startAngle, endAngle, perspectiveY),
+          centroid: wedgeCentroid(cx, bandInnerCy, bandOuterCy, innerR, outerR, startAngle, endAngle, perspectiveY),
           zoneLabelPoint,
         });
       }
@@ -415,7 +446,7 @@ function useRingGeometry(
   // cfg values included individually so the memo invalidates on slider change
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId,
-      cx, cy, perspectiveY, ringInner, ringOuter]);
+      cx, cy, perspectiveY, ringInner, ringOuter, innerCyOffset, outerCyOffset]);
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
@@ -467,7 +498,9 @@ function RingOverlay({
   cfg: RingConfig;
 }) {
   const { zoneCount, onSectorClick, showZoneLabels } = props;
-  const { cx, cy, perspectiveY, ringInner, ringOuter } = cfg;
+  const { cx, cy, perspectiveY, ringInner, ringOuter, innerCyOffset, outerCyOffset } = cfg;
+  const innerCy = cy + innerCyOffset;
+  const outerCy = cy + outerCyOffset;
   const zoneSweep = 360 / Math.max(zoneCount, 1);
 
   // Deduplicated zone label points (one per zone)
@@ -500,7 +533,7 @@ function RingOverlay({
         return (
           <path
             key={`zone-outline-${zi}`}
-            d={wedgePath(cx, cy, ringInner, ringOuter, zoneStart, zoneEnd, perspectiveY)}
+            d={wedgePath(cx, innerCy, outerCy, ringInner, ringOuter, zoneStart, zoneEnd, perspectiveY)}
             fill="none"
             stroke={zoneColour(zi)}
             strokeWidth={2.5}
@@ -618,6 +651,18 @@ const SLIDER_DEFS: SliderDef[] = [
     min: 300, max: 560, step: 1,
     description: "Semi-major axis of the outer atmosphere ellipse (horizontal rx)",
   },
+  {
+    key: "innerCyOffset",
+    label: "Inner Centre Y Offset",
+    min: -80, max: 80, step: 1,
+    description: "Shifts inner ellipse centre up (negative) or down (positive) — adjusts band width at top/bottom",
+  },
+  {
+    key: "outerCyOffset",
+    label: "Outer Centre Y Offset",
+    min: -80, max: 80, step: 1,
+    description: "Shifts outer ellipse centre up (negative) or down (positive) — move this to fix bottom OD alignment",
+  },
 ];
 
 function CalibrationPanel({
@@ -637,11 +682,13 @@ function CalibrationPanel({
     const snippet = [
       "// Map Calibration — paste into DEFAULT_RING_CONFIG in CampaignMapOverlay.tsx",
       "export const DEFAULT_RING_CONFIG: RingConfig = {",
-      `  cx:           ${cfg.cx},`,
-      `  cy:           ${cfg.cy},`,
-      `  perspectiveY: ${cfg.perspectiveY.toFixed(2)},`,
-      `  ringInner:    ${cfg.ringInner},`,
-      `  ringOuter:    ${cfg.ringOuter},`,
+      `  cx:             ${cfg.cx},`,
+      `  cy:             ${cfg.cy},`,
+      `  perspectiveY:   ${cfg.perspectiveY.toFixed(2)},`,
+      `  ringInner:      ${cfg.ringInner},`,
+      `  ringOuter:      ${cfg.ringOuter},`,
+      `  innerCyOffset:  ${cfg.innerCyOffset},`,
+      `  outerCyOffset:  ${cfg.outerCyOffset},`,
       "};",
     ].join("\n");
     navigator.clipboard.writeText(snippet).then(() => {
@@ -712,10 +759,10 @@ function CalibrationPanel({
       {/* Derived values — useful for manual verification */}
       <div className="pt-2 border-t border-zinc-800 flex flex-wrap gap-x-6 gap-y-1 text-xs font-mono text-zinc-600">
         <span>ringMid: {ringMid(cfg).toFixed(1)}</span>
+        <span>innerCy: {(cfg.cy + cfg.innerCyOffset).toFixed(0)}</span>
+        <span>outerCy: {(cfg.cy + cfg.outerCyOffset).toFixed(0)}</span>
         <span>innerRy: {(cfg.ringInner * cfg.perspectiveY).toFixed(1)}</span>
         <span>outerRy: {(cfg.ringOuter * cfg.perspectiveY).toFixed(1)}</span>
-        <span>innerBottom: {(cfg.cy + cfg.ringInner * cfg.perspectiveY).toFixed(1)}</span>
-        <span>outerBottom: {(cfg.cy + cfg.ringOuter * cfg.perspectiveY).toFixed(1)}</span>
       </div>
     </div>
   );
