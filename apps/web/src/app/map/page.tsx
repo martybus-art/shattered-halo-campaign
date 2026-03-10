@@ -2,6 +2,10 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-11 — LAYOUT: For ring/spokes layouts, restructured to 2-column grid:
+//                left col = My Units / Movement / Deploy / Pending Orders cards,
+//                right col = CampaignMapOverlay map card. Non-ring layouts keep
+//                existing single-column stacked layout.
 //   2026-03-11 — FIX: Overlay condition was ring-only (mapLayout === "ring").
 //                Changed to (mapLayout === "ring" || mapLayout === "spokes") so
 //                spokes campaigns also use CampaignMapOverlay instead of falling
@@ -931,9 +935,13 @@ export default function MapPage() {
     );
   }
 
+  // True when the AI map image + SVG overlay should be used (ring or spokes with image present).
+  // Controls whether to render a 2-column grid (map right, action cards left) vs stacked layout.
+  const isOverlayLayout = !loading && (mapLayout === "ring" || mapLayout === "spokes") && !!mapId && !!mapImageUrl;
+
   return (
     <Frame title="Tactical Hololith" campaignId={campaignId} role={role} currentPage="map">
-      <div className="space-y-6">
+      <div className="space-y-4">
 
         {pageError && (
           <Card title="Error"><p className="text-blood text-sm">{pageError}</p></Card>
@@ -942,385 +950,374 @@ export default function MapPage() {
           <p className="text-parchment/50 animate-pulse text-sm px-1">Loading tactical data…</p>
         )}
 
-        {/* ── Map Display ── */}
-        {/* Ring/spokes layout with AI image: merged CampaignMapOverlay (image + SVG overlay) */}
-        {/* All other layouts: original side-by-side Tactical Hololith + AI Theatre Map */}
-        {!loading && (mapLayout === "ring" || mapLayout === "spokes") && mapId && mapImageUrl ? (
-          <div className="max-w-xl mx-auto w-full space-y-3">
-            <CampaignMapOverlay
-              mapUrl={mapImageUrl}
-              layout={mapLayout as any}
-              zoneCount={mapZoneCount ?? effectiveZones.length}
-              zoneKeys={zoneKeys}
-              zoneNames={zoneNames}   
-              sectors={sectors as any}
-              units={myUnits as any}
-              currentUserId={uid || null}
-              selectedSectorId={selectedSectorId}
-              onSectorClick={(zone, sector) => {
-                if (canMove && selectedUnit) {
-                  setToZone(zone);
-                  setToSector(sector);
-                }
-              }}
-              showZoneLabels
-                isLead={role === "lead"}        // +++ shows calibration panel to lead only
-                campaignId={campaignId}   // +++ namespaces localStorage per map
-            />
+        {/* ── Main layout: 2-col for overlay maps, stacked for others ── */}
+        {/* Left / full-width col always has action cards.             */}
+        {/* Right col has the SVG overlay map for ring/spokes layouts. */}
+        <div className={isOverlayLayout
+          ? "grid lg:grid-cols-[1fr_minmax(0,520px)] gap-6 items-start"
+          : "space-y-4"
+        }>
 
-            {/* Colour legend — kept below overlay */}
-            <div className="flex flex-wrap gap-x-5 gap-y-1 px-1 text-xs font-mono">
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#5a3d08", borderColor: "#c9a84c" }} />
-                <span className="text-parchment/50">Unit present</span>
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#221800", borderColor: "#7a5f22" }} />
-                <span className="text-parchment/50">Held (empty)</span>
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#3a0a0a", borderColor: "#7a1515" }} />
-                <span className="text-parchment/50">Enemy</span>
-              </span>
-              {canMove && selectedUnit && (
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#1b2b1b", borderColor: "#3a6b3a" }} />
-                  <span className="text-green-400/70">Reachable — click to target</span>
-                </span>
-              )}
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#0a0a10", borderColor: "#181826" }} />
-                <span className="text-parchment/30">Fog / unknown</span>
-              </span>
-            </div>
+          {/* ── LEFT / single col ──────────────────────────────────────── */}
+          <div className="space-y-4">
 
-            {/* Sector intel panels */}
-            {targetIntel && (
-              <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
-            )}
-            {myUnits
-              .filter((u) => !(u.zone_key === toZone && u.sector_key === toSector))
-              .map((u) => {
-                const s = sectorAt(u.zone_key, u.sector_key);
-                if (!s) return null;
-                return (
-                  <SectorIntelPanel
-                    key={u.id}
-                    zoneKey={u.zone_key}
-                    sectorKey={u.sector_key}
-                    sector={s}
-                  />
-                );
-              })}
-          </div>
-        ) : !loading ? (
-        /* Non-ring or no AI image: original side-by-side layout */
-        <div className={`grid gap-4 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
+            {/* Non-overlay layouts: side-by-side Tactical Hololith + AI image */}
+            {!isOverlayLayout && !loading && (
+              <div className={`grid gap-4 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
 
-        {/* LEFT: Tactical Hololith */}
-        <Card title={
-            allZones.length > 0 && mapZoneCount
-              ? `Tactical Hololith — ${effectiveZones.length} / ${mapZoneCount} Zones Surveyed`
-              : "Tactical Hololith"
-          }>
-            {/* Colour legend */}
-            <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-xs font-mono">
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#5a3d08", borderColor: "#c9a84c" }} />
-                <span className="text-parchment/50">Unit present</span>
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#221800", borderColor: "#7a5f22" }} />
-                <span className="text-parchment/50">Held (empty)</span>
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#3a0a0a", borderColor: "#7a1515" }} />
-                <span className="text-parchment/50">Enemy</span>
-              </span>
-              {canMove && selectedUnit && (
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#1b2b1b", borderColor: "#3a6b3a" }} />
-                  <span className="text-green-400/70">Reachable — click to target</span>
-                </span>
-              )}
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#0a0a10", borderColor: "#181826" }} />
-                <span className="text-parchment/30">Fog / unknown</span>
-              </span>
-              <span className="ml-auto text-parchment/25 hidden sm:flex items-center gap-2">
-                <span style={{ color: "#f5c842" }}>●</span>unit
-                <span className="text-blood/50">⬡</span>fort
-              </span>
-            </div>
+                {/* LEFT: Tactical Hololith */}
+                <Card title={
+                    allZones.length > 0 && mapZoneCount
+                      ? `Tactical Hololith — ${effectiveZones.length} / ${mapZoneCount} Zones Surveyed`
+                      : "Tactical Hololith"
+                  }>
+                    {/* Colour legend */}
+                    <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-xs font-mono">
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#5a3d08", borderColor: "#c9a84c" }} />
+                        <span className="text-parchment/50">Unit present</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#221800", borderColor: "#7a5f22" }} />
+                        <span className="text-parchment/50">Held (empty)</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#3a0a0a", borderColor: "#7a1515" }} />
+                        <span className="text-parchment/50">Enemy</span>
+                      </span>
+                      {canMove && selectedUnit && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#1b2b1b", borderColor: "#3a6b3a" }} />
+                          <span className="text-green-400/70">Reachable — click to target</span>
+                        </span>
+                      )}
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#0a0a10", borderColor: "#181826" }} />
+                        <span className="text-parchment/30">Fog / unknown</span>
+                      </span>
+                      <span className="ml-auto text-parchment/25 hidden sm:flex items-center gap-2">
+                        <span style={{ color: "#f5c842" }}>●</span>unit
+                        <span className="text-blood/50">⬡</span>fort
+                      </span>
+                    </div>
 
-            {/* SVG layout */}
-            <TacticalMap
-              zones={allZones}
-              layout={mapLayout}
-              adj={adj}
-              sectors={sectors}
-              uid={uid}
-              memberById={memberById}
-              myUnits={myUnits}
-              selectedUnit={selectedUnit}
-              toZone={toZone}
-              toSector={toSector}
-              fogEnabled={fogEnabled}
-              canMove={canMove}
-              hasDeepStrike={hasDeepStrike}
-              onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
-            />
+                    {/* SVG layout */}
+                    <TacticalMap
+                      zones={allZones}
+                      layout={mapLayout}
+                      adj={adj}
+                      sectors={sectors}
+                      uid={uid}
+                      memberById={memberById}
+                      myUnits={myUnits}
+                      selectedUnit={selectedUnit}
+                      toZone={toZone}
+                      toSector={toSector}
+                      fogEnabled={fogEnabled}
+                      canMove={canMove}
+                      hasDeepStrike={hasDeepStrike}
+                      onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
+                    />
 
-            {/* Sector intel for the targeted sector (occupation-gated) */}
-            {targetIntel && (
-              <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
+                    {/* Sector intel for the targeted sector (occupation-gated) */}
+                    {targetIntel && (
+                      <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
+                    )}
+
+                    {/* Sector intel for all other occupied sectors */}
+                    {myUnits
+                      .filter((u) => !(u.zone_key === toZone && u.sector_key === toSector))
+                      .map((u) => {
+                        const s = sectorAt(u.zone_key, u.sector_key);
+                        if (!s) return null;
+                        return (
+                          <SectorIntelPanel
+                            key={u.id}
+                            zoneKey={u.zone_key}
+                            sectorKey={u.sector_key}
+                            sector={s}
+                          />
+                        );
+                      })}
+                </Card>
+
+                {/* RIGHT: AI Theatre Map (generated image) */}
+                {mapId && (
+                  <div className="min-w-0">
+                    <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
+                  </div>
+                )}
+
+              </div>
             )}
 
-            {/* Sector intel for all other occupied sectors with tags */}
-            {myUnits
-              .filter((u) => !(u.zone_key === toZone && u.sector_key === toSector))
-              .map((u) => {
-                const s = sectorAt(u.zone_key, u.sector_key);
-                if (!s) return null;
-                return (
-                  <SectorIntelPanel
-                    key={u.id}
-                    zoneKey={u.zone_key}
-                    sectorKey={u.sector_key}
-                    sector={s}
-                  />
-                );
-              })}
-          </Card>
-        {/* end LEFT */}
+            {/* ── My Units ── */}
+            {myUnits.length > 0 && (
+              <Card title="My Units">
+                <div className="space-y-2">
+                  {myUnits.map((u) => {
+                    const pending = unitMoveThisRound(u.id);
+                    return (
+                      <div key={u.id}
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded border transition-colors ${
+                          selectedUnit?.id === u.id
+                            ? "bg-brass/15 border-brass/50"
+                            : "bg-void border-parchment/15 hover:border-brass/30"
+                        }`}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase ${
+                              u.unit_type === "scout"
+                                ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
+                                : "bg-brass/15 border-brass/40 text-brass"
+                            }`}>{u.unit_type}</span>
+                            <span className="text-parchment/70 text-sm">{fmtKey(u.zone_key)} / {u.sector_key.toUpperCase()}</span>
+                            <span className="text-parchment/30 text-xs font-mono">R{u.round_deployed}</span>
+                          </div>
+                          {pending && (
+                            <p className="text-xs text-brass/70 mt-0.5 font-mono">
+                              → {fmtKey(pending.to_zone_key)} / {pending.to_sector_key.toUpperCase()} ({pending.move_type})
+                            </p>
+                          )}
+                        </div>
+                        {canMove && !pending && (
+                          <button
+                            onClick={() => { setSelectedUnit(u); setToZone(u.zone_key); setToSector(u.sector_key); setMoveResult(null); }}
+                            className="shrink-0 px-3 py-1 rounded text-xs border border-brass/40 hover:bg-brass/20 text-parchment/60 hover:text-parchment/90 transition-colors">
+                            Select
+                          </button>
+                        )}
+                        {canMove && pending && (
+                          <button
+                            onClick={() => { setSelectedUnit(u); setToZone(pending.to_zone_key); setToSector(pending.to_sector_key); setMoveResult(null); }}
+                            className="shrink-0 px-3 py-1 rounded text-xs border border-parchment/20 hover:bg-parchment/10 text-parchment/40 transition-colors">
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
 
-          {/* RIGHT: AI Theatre Map (generated image) */}
-          {mapId && (
-            <div className="min-w-0">
-              <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
+                {/* Token row */}
+                <div className="mt-3 pt-3 border-t border-parchment/10 flex gap-3 flex-wrap">
+                  <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasDeepStrike ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/10 text-parchment/25"}`}>
+                    {hasDeepStrike ? "✓ Deep Strike" : "No Deep Strike"}
+                  </span>
+                  <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasRecon ? "bg-blue-500/15 border-blue-400/40 text-blue-300" : "bg-void border-parchment/10 text-parchment/25"}`}>
+                    {hasRecon ? "✓ Recon Token" : "No Recon Token"}
+                  </span>
+                  {!fogEnabled && (
+                    <span className="text-xs px-2 py-0.5 rounded border font-mono bg-parchment/10 border-parchment/30 text-parchment/50">Fog Off</span>
+                  )}
+                  <span className="text-xs px-2 py-0.5 rounded border border-parchment/10 text-parchment/35 font-mono ml-auto">{myNip} NIP</span>
+                </div>
+              </Card>
+            )}
+
+            {/* ── Movement Order ── */}
+            {selectedUnit && canMove && (
+              <Card title={`Movement Order — ${fmtKey(selectedUnit.unit_type)} Unit`}>
+                <div className="space-y-4">
+                  <div className="text-sm text-parchment/60">
+                    <span>Moving from: <span className="text-parchment/85">{fmtKey(selectedUnit.zone_key)} / {selectedUnit.sector_key.toUpperCase()}</span></span>
+                    {toZone && toSector
+                      ? <span className="ml-3 text-brass/80">→ <span className="font-semibold">{fmtKey(toZone)} / {toSector.toUpperCase()}</span></span>
+                      : <span className="block mt-1 text-parchment/35 text-xs">Click a highlighted sector on the map to set your destination.</span>
+                    }
+                    {hasDeepStrike && <span className="ml-2 text-brass text-xs font-mono">Deep Strike — any zone valid</span>}
+                  </div>
+
+                  {targetThreat && (
+                    <div className="px-3 py-2 rounded border border-blood/30 bg-blood/10 text-sm text-blood/80">
+                      ⚠️ <span className="font-semibold">{targetThreat.owner.label}</span> controls this sector.
+                      {targetThreat.fortified && " Fortified."}
+                      {selectedUnit.unit_type === "occupation"
+                        ? " Triggers a conflict if defended, or captures if undefended."
+                        : " Scouting gathers intel and may trigger a conflict."}
+                    </div>
+                  )}
+
+                  {moveResult && (
+                    <p className={`text-sm px-3 py-2 rounded border ${
+                      moveResult.startsWith("Error") ? "border-blood/30 bg-blood/10 text-blood/80" : "border-brass/30 bg-brass/10 text-brass/80"
+                    }`}>{moveResult}</p>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={submitMove}
+                      disabled={submitting || !toZone || !toSector}
+                      className="flex-1 px-4 py-2.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
+                      {submitting ? "Submitting…" : "Confirm Order"}
+                    </button>
+                    <button
+                      onClick={() => { setSelectedUnit(null); setToZone(""); setToSector(""); setMoveResult(null); }}
+                      className="px-4 py-2.5 rounded bg-void border border-parchment/20 hover:border-parchment/40 text-parchment/50 text-sm transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* ── No movement phase message ── */}
+            {myUnits.length > 0 && !canMove && stage && (
+              <Card title="Movement Orders">
+                <p className="text-parchment/40 text-sm italic">
+                  {stage === "spend"
+                    ? "Movement orders open in the movement phase. Use this phase to purchase Deep Strike or Recon tokens."
+                    : stage === "recon" && !hasRecon
+                    ? "You need a Recon token to move during this phase. Purchase one during the next spend phase."
+                    : `Movement is not available during the ${stage} phase.`}
+                </p>
+              </Card>
+            )}
+
+            {/* ── Deploy New Unit ── */}
+            {inSpendPhase && mySectors.length > 0 && (
+              <Card title="Deploy New Unit">
+                <div className="space-y-4">
+                  <p className="text-parchment/60 text-sm">
+                    Deploy a new unit to one of your held sectors. Deducted from your NIP balance ({myNip} available).
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Unit Type</label>
+                      <div className="flex gap-2">
+                        {(["scout", "occupation"] as const).map((ut) => (
+                          <button key={ut} onClick={() => setDeployType(ut)}
+                            className={`flex-1 px-3 py-2 rounded border text-sm font-semibold transition-colors ${
+                              deployType === ut ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/20 text-parchment/50 hover:border-brass/30"
+                            }`}>
+                            {fmtKey(ut)}
+                            <span className="block text-xs font-mono mt-0.5 opacity-70">{UNIT_NIP_COST[ut]} NIP</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-parchment/35 mt-1.5">
+                        {deployType === "scout"
+                          ? "Explores territory, gains intel. Can move in recon phase."
+                          : "Holds territory. Required to defend sectors you own."}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Zone</label>
+                        <select className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
+                          value={deployZone} onChange={(e) => { setDeployZone(e.target.value); setDeploySector(""); }}>
+                          <option value="">-- select --</option>
+                          {Array.from(new Set(mySectors.map((s) => s.zone_key))).map((zk) => (
+                            <option key={zk} value={zk}>{fmtKey(zk)}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Sector</label>
+                        <select className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
+                          value={deploySector} disabled={!deployZone} onChange={(e) => setDeploySector(e.target.value)}>
+                          <option value="">-- select --</option>
+                          {mySectors.filter((s) => s.zone_key === deployZone).map((s) => (
+                            <option key={s.sector_key} value={s.sector_key}>{s.sector_key.toUpperCase()}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  {deployResult && (
+                    <p className={`text-sm px-3 py-2 rounded border ${
+                      deployResult.startsWith("Error") ? "border-blood/30 bg-blood/10 text-blood/80" : "border-brass/30 bg-brass/10 text-brass/80"
+                    }`}>{deployResult}</p>
+                  )}
+                  <button onClick={deployUnit}
+                    disabled={deploying || !deployZone || !deploySector || (myNip < UNIT_NIP_COST[deployType]!)}
+                    className="w-full px-4 py-2.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/35 disabled:opacity-40 text-parchment/80 font-semibold text-sm transition-colors">
+                    {deploying ? "Deploying…" : `Deploy ${fmtKey(deployType)} — ${UNIT_NIP_COST[deployType]} NIP`}
+                  </button>
+                  {myNip < UNIT_NIP_COST[deployType]! && (
+                    <p className="text-blood/60 text-xs">Insufficient NIP ({myNip} available, need {UNIT_NIP_COST[deployType]}).</p>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {/* ── Pending Orders ── */}
+            {myMoves.length > 0 && (
+              <Card title={`Round ${roundNumber} Orders`}>
+                <div className="space-y-1.5">
+                  {myMoves.map((m) => {
+                    const unit = myUnits.find((u) => u.id === m.unit_id);
+                    return (
+                      <div key={m.id} className="flex items-center gap-3 text-sm px-2 py-1.5 rounded bg-parchment/5 border border-parchment/10">
+                        {unit && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${
+                            unit.unit_type === "scout" ? "bg-blue-500/15 border-blue-400/30 text-blue-300" : "bg-brass/15 border-brass/30 text-brass"
+                          }`}>{unit.unit_type}</span>
+                        )}
+                        <span className="text-parchment/50 text-xs font-mono">{fmtKey(m.from_zone_key)}/{m.from_sector_key.toUpperCase()}</span>
+                        <span className="text-parchment/25">→</span>
+                        <span className="text-parchment/75 text-xs font-mono">{fmtKey(m.to_zone_key)}/{m.to_sector_key.toUpperCase()}</span>
+                        <span className={`ml-auto text-xs font-mono px-1.5 py-0.5 rounded border ${
+                          m.move_type === "deep_strike" ? "border-brass/40 text-brass/70"
+                          : m.move_type === "recon"     ? "border-blue-400/30 text-blue-300/70"
+                          :                               "border-parchment/15 text-parchment/30"
+                        }`}>{m.move_type}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+          </div>{/* end LEFT col */}
+
+          {/* ── RIGHT col: overlay map (ring / spokes only) ───────────── */}
+          {isOverlayLayout && (
+            <div className="space-y-3 lg:sticky lg:top-4">
+              <CampaignMapOverlay
+                mapUrl={mapImageUrl!}
+                layout={mapLayout as any}
+                zoneCount={mapZoneCount ?? effectiveZones.length}
+                zoneKeys={zoneKeys}
+                zoneNames={zoneNames}
+                sectors={sectors as any}
+                units={myUnits as any}
+                currentUserId={uid || null}
+                selectedSectorId={selectedSectorId}
+                onSectorClick={(zone, sector) => {
+                  if (canMove && selectedUnit) {
+                    setToZone(zone);
+                    setToSector(sector);
+                  }
+                }}
+                showZoneLabels
+                isLead={role === "lead"}
+                campaignId={campaignId}
+              />
+
+              {/* Sector intel panels — shown next to map */}
+              {targetIntel && (
+                <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
+              )}
+              {myUnits
+                .filter((u) => !(u.zone_key === toZone && u.sector_key === toSector))
+                .map((u) => {
+                  const s = sectorAt(u.zone_key, u.sector_key);
+                  if (!s) return null;
+                  return (
+                    <SectorIntelPanel
+                      key={u.id}
+                      zoneKey={u.zone_key}
+                      sectorKey={u.sector_key}
+                      sector={s}
+                    />
+                  );
+                })}
             </div>
           )}
 
-        </div>
-        ) : null}
+        </div>{/* end main layout grid */}
 
-        {/* ── My Units ── */}
-        {myUnits.length > 0 && (
-          <Card title="My Units">
-            <div className="space-y-2">
-              {myUnits.map((u) => {
-                const pending = unitMoveThisRound(u.id);
-                return (
-                  <div key={u.id}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded border transition-colors ${
-                      selectedUnit?.id === u.id
-                        ? "bg-brass/15 border-brass/50"
-                        : "bg-void border-parchment/15 hover:border-brass/30"
-                    }`}>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase ${
-                          u.unit_type === "scout"
-                            ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
-                            : "bg-brass/15 border-brass/40 text-brass"
-                        }`}>{u.unit_type}</span>
-                        <span className="text-parchment/70 text-sm">{fmtKey(u.zone_key)} / {u.sector_key.toUpperCase()}</span>
-                        <span className="text-parchment/30 text-xs font-mono">R{u.round_deployed}</span>
-                      </div>
-                      {pending && (
-                        <p className="text-xs text-brass/70 mt-0.5 font-mono">
-                          → {fmtKey(pending.to_zone_key)} / {pending.to_sector_key.toUpperCase()} ({pending.move_type})
-                        </p>
-                      )}
-                    </div>
-                    {canMove && !pending && (
-                      <button
-                        onClick={() => { setSelectedUnit(u); setToZone(u.zone_key); setToSector(u.sector_key); setMoveResult(null); }}
-                        className="shrink-0 px-3 py-1 rounded text-xs border border-brass/40 hover:bg-brass/20 text-parchment/60 hover:text-parchment/90 transition-colors">
-                        Select
-                      </button>
-                    )}
-                    {canMove && pending && (
-                      <button
-                        onClick={() => { setSelectedUnit(u); setToZone(pending.to_zone_key); setToSector(pending.to_sector_key); setMoveResult(null); }}
-                        className="shrink-0 px-3 py-1 rounded text-xs border border-parchment/20 hover:bg-parchment/10 text-parchment/40 transition-colors">
-                        Edit
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Token row */}
-            <div className="mt-3 pt-3 border-t border-parchment/10 flex gap-3 flex-wrap">
-              <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasDeepStrike ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/10 text-parchment/25"}`}>
-                {hasDeepStrike ? "✓ Deep Strike" : "No Deep Strike"}
-              </span>
-              <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasRecon ? "bg-blue-500/15 border-blue-400/40 text-blue-300" : "bg-void border-parchment/10 text-parchment/25"}`}>
-                {hasRecon ? "✓ Recon Token" : "No Recon Token"}
-              </span>
-              {!fogEnabled && (
-                <span className="text-xs px-2 py-0.5 rounded border font-mono bg-parchment/10 border-parchment/30 text-parchment/50">Fog Off</span>
-              )}
-              <span className="text-xs px-2 py-0.5 rounded border border-parchment/10 text-parchment/35 font-mono ml-auto">{myNip} NIP</span>
-            </div>
-          </Card>
-        )}
-
-        {/* ── Movement Order ── */}
-        {selectedUnit && canMove && (
-          <Card title={`Movement Order — ${fmtKey(selectedUnit.unit_type)} Unit`}>
-            <div className="space-y-4">
-              <div className="text-sm text-parchment/60">
-                <span>Moving from: <span className="text-parchment/85">{fmtKey(selectedUnit.zone_key)} / {selectedUnit.sector_key.toUpperCase()}</span></span>
-                {toZone && toSector
-                  ? <span className="ml-3 text-brass/80">→ <span className="font-semibold">{fmtKey(toZone)} / {toSector.toUpperCase()}</span></span>
-                  : <span className="block mt-1 text-parchment/35 text-xs">Click a highlighted sector on the map to set your destination.</span>
-                }
-                {hasDeepStrike && <span className="ml-2 text-brass text-xs font-mono">Deep Strike — any zone valid</span>}
-              </div>
-
-              {targetThreat && (
-                <div className="px-3 py-2 rounded border border-blood/30 bg-blood/10 text-sm text-blood/80">
-                  ⚠️ <span className="font-semibold">{targetThreat.owner.label}</span> controls this sector.
-                  {targetThreat.fortified && " Fortified."}
-                  {selectedUnit.unit_type === "occupation"
-                    ? " Triggers a conflict if defended, or captures if undefended."
-                    : " Scouting gathers intel and may trigger a conflict."}
-                </div>
-              )}
-
-              {moveResult && (
-                <p className={`text-sm px-3 py-2 rounded border ${
-                  moveResult.startsWith("Error") ? "border-blood/30 bg-blood/10 text-blood/80" : "border-brass/30 bg-brass/10 text-brass/80"
-                }`}>{moveResult}</p>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={submitMove}
-                  disabled={submitting || !toZone || !toSector}
-                  className="flex-1 px-4 py-2.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
-                  {submitting ? "Submitting…" : "Confirm Order"}
-                </button>
-                <button
-                  onClick={() => { setSelectedUnit(null); setToZone(""); setToSector(""); setMoveResult(null); }}
-                  className="px-4 py-2.5 rounded bg-void border border-parchment/20 hover:border-parchment/40 text-parchment/50 text-sm transition-colors">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </Card>
-        )}
-
-        {/* ── No movement phase message ── */}
-        {myUnits.length > 0 && !canMove && stage && (
-          <Card title="Movement Orders">
-            <p className="text-parchment/40 text-sm italic">
-              {stage === "spend"
-                ? "Movement orders open in the movement phase. Use this phase to purchase Deep Strike or Recon tokens."
-                : stage === "recon" && !hasRecon
-                ? "You need a Recon token to move during this phase. Purchase one during the next spend phase."
-                : `Movement is not available during the ${stage} phase.`}
-            </p>
-          </Card>
-        )}
-
-        {/* ── Deploy New Unit ── */}
-        {inSpendPhase && mySectors.length > 0 && (
-          <Card title="Deploy New Unit">
-            <div className="space-y-4">
-              <p className="text-parchment/60 text-sm">
-                Deploy a new unit to one of your held sectors. Deducted from your NIP balance ({myNip} available).
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Unit Type</label>
-                  <div className="flex gap-2">
-                    {(["scout", "occupation"] as const).map((ut) => (
-                      <button key={ut} onClick={() => setDeployType(ut)}
-                        className={`flex-1 px-3 py-2 rounded border text-sm font-semibold transition-colors ${
-                          deployType === ut ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/20 text-parchment/50 hover:border-brass/30"
-                        }`}>
-                        {fmtKey(ut)}
-                        <span className="block text-xs font-mono mt-0.5 opacity-70">{UNIT_NIP_COST[ut]} NIP</span>
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-xs text-parchment/35 mt-1.5">
-                    {deployType === "scout"
-                      ? "Explores territory, gains intel. Can move in recon phase."
-                      : "Holds territory. Required to defend sectors you own."}
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <div>
-                    <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Zone</label>
-                    <select className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
-                      value={deployZone} onChange={(e) => { setDeployZone(e.target.value); setDeploySector(""); }}>
-                      <option value="">-- select --</option>
-                      {Array.from(new Set(mySectors.map((s) => s.zone_key))).map((zk) => (
-                        <option key={zk} value={zk}>{fmtKey(zk)}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Sector</label>
-                    <select className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
-                      value={deploySector} disabled={!deployZone} onChange={(e) => setDeploySector(e.target.value)}>
-                      <option value="">-- select --</option>
-                      {mySectors.filter((s) => s.zone_key === deployZone).map((s) => (
-                        <option key={s.sector_key} value={s.sector_key}>{s.sector_key.toUpperCase()}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-              {deployResult && (
-                <p className={`text-sm px-3 py-2 rounded border ${
-                  deployResult.startsWith("Error") ? "border-blood/30 bg-blood/10 text-blood/80" : "border-brass/30 bg-brass/10 text-brass/80"
-                }`}>{deployResult}</p>
-              )}
-              <button onClick={deployUnit}
-                disabled={deploying || !deployZone || !deploySector || (myNip < UNIT_NIP_COST[deployType]!)}
-                className="w-full px-4 py-2.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/35 disabled:opacity-40 text-parchment/80 font-semibold text-sm transition-colors">
-                {deploying ? "Deploying…" : `Deploy ${fmtKey(deployType)} — ${UNIT_NIP_COST[deployType]} NIP`}
-              </button>
-              {myNip < UNIT_NIP_COST[deployType]! && (
-                <p className="text-blood/60 text-xs">Insufficient NIP ({myNip} available, need {UNIT_NIP_COST[deployType]}).</p>
-              )}
-            </div>
-          </Card>
-        )}
-
-        {/* ── Pending Orders ── */}
-        {myMoves.length > 0 && (
-          <Card title={`Round ${roundNumber} Orders`}>
-            <div className="space-y-1.5">
-              {myMoves.map((m) => {
-                const unit = myUnits.find((u) => u.id === m.unit_id);
-                return (
-                  <div key={m.id} className="flex items-center gap-3 text-sm px-2 py-1.5 rounded bg-parchment/5 border border-parchment/10">
-                    {unit && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${
-                        unit.unit_type === "scout" ? "bg-blue-500/15 border-blue-400/30 text-blue-300" : "bg-brass/15 border-brass/30 text-brass"
-                      }`}>{unit.unit_type}</span>
-                    )}
-                    <span className="text-parchment/50 text-xs font-mono">{fmtKey(m.from_zone_key)}/{m.from_sector_key.toUpperCase()}</span>
-                    <span className="text-parchment/25">→</span>
-                    <span className="text-parchment/75 text-xs font-mono">{fmtKey(m.to_zone_key)}/{m.to_sector_key.toUpperCase()}</span>
-                    <span className={`ml-auto text-xs font-mono px-1.5 py-0.5 rounded border ${
-                      m.move_type === "deep_strike" ? "border-brass/40 text-brass/70"
-                      : m.move_type === "recon"     ? "border-blue-400/30 text-blue-300/70"
-                      :                               "border-parchment/15 text-parchment/30"
-                    }`}>{m.move_type}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        )}
 
       </div>
     </Frame>
