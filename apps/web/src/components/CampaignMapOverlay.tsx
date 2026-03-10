@@ -96,6 +96,13 @@ export type CampaignMapOverlayProps = {
    */
   zoneKeys: string[];
 
+  /**
+   * Display names for each zone, parallel to zoneKeys.
+   * If omitted, zone labels fall back to the key with underscores replaced by spaces.
+   * Pass effectiveZones.map(z => z.name) from page.tsx.
+   */
+  zoneNames?: string[];
+
   /** All sector rows for this campaign (from the `sectors` table). */
   sectors: DbSector[];
 
@@ -184,6 +191,8 @@ export type RingConfig = {
    */
   innerCyOffset:  number;
   outerCyOffset:  number;
+  /** Master opacity for the SVG overlay (0 = invisible, 1 = fully opaque). */
+  overlayOpacity: number;
 };
 
 /** Derives the mid-band radius — computed from config, never stored. */
@@ -204,6 +213,7 @@ export const DEFAULT_RING_CONFIG: RingConfig = {
   ringOuter:      480,   // outer atmosphere edge rx
   innerCyOffset:  0,     // inner ellipse cy nudge (positive = down)
   outerCyOffset:  0,     // outer ellipse cy nudge (positive = down)
+  overlayOpacity: 1.0,   // SVG overlay master opacity (0–1)
 };
 
 const CALIB_STORAGE_PREFIX = "shattered-halo:map-calib:";
@@ -497,7 +507,7 @@ function RingOverlay({
   geometry: SectorGeometry[];
   cfg: RingConfig;
 }) {
-  const { zoneCount, onSectorClick, showZoneLabels } = props;
+  const { zoneCount, onSectorClick, showZoneLabels, zoneNames } = props;
   const { cx, cy, perspectiveY, ringInner, ringOuter, innerCyOffset, outerCyOffset } = cfg;
   const innerCy = cy + innerCyOffset;
   const outerCy = cy + outerCyOffset;
@@ -525,6 +535,7 @@ function RingOverlay({
       viewBox="0 0 1000 1000"
       className="absolute inset-0 h-full w-full"
       aria-label="Tactical map overlay"
+      style={{ opacity: cfg.overlayOpacity }}
     >
       {/* ── Zone boundary outlines (always visible, zone colour) ── */}
       {Array.from({ length: zoneCount }, (_, zi) => {
@@ -602,7 +613,8 @@ function RingOverlay({
             pointerEvents="none"
             style={{ fontFamily: "sans-serif", letterSpacing: "-0.3px" }}
           >
-            {zoneKey.replace(/_/g, " ")}
+            {/* Use provided display name, fall back to key with underscores replaced */}
+            {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
     </svg>
@@ -663,6 +675,12 @@ const SLIDER_DEFS: SliderDef[] = [
     min: -80, max: 80, step: 1,
     description: "Shifts outer ellipse centre up (negative) or down (positive) — move this to fix bottom OD alignment",
   },
+  {
+    key: "overlayOpacity",
+    label: "Overlay Opacity",
+    min: 0.0, max: 1.0, step: 0.01,
+    description: "Master transparency of the SVG overlay (0 = invisible, 1 = fully opaque)",
+  },
 ];
 
 function CalibrationPanel({
@@ -689,6 +707,7 @@ function CalibrationPanel({
       `  ringOuter:      ${cfg.ringOuter},`,
       `  innerCyOffset:  ${cfg.innerCyOffset},`,
       `  outerCyOffset:  ${cfg.outerCyOffset},`,
+      `  overlayOpacity: ${cfg.overlayOpacity.toFixed(2)},`,
       "};",
     ].join("\n");
     navigator.clipboard.writeText(snippet).then(() => {
@@ -732,7 +751,9 @@ function CalibrationPanel({
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {SLIDER_DEFS.map(({ key, label, min, max, step, description }) => {
           const value = cfg[key] as number;
-          const displayValue = key === "perspectiveY" ? value.toFixed(2) : String(value);
+          const displayValue = (key === "perspectiveY" || key === "overlayOpacity")
+            ? value.toFixed(2)
+            : String(value);
           return (
             <div key={key} className="space-y-1.5">
               <div className="flex items-center justify-between">

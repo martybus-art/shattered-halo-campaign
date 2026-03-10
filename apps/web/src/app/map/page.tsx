@@ -787,6 +787,7 @@ export default function MapPage() {
 
   // Ordered zone keys for CampaignMapOverlay (derived from effectiveZones which comes from map_json.zones)
   const zoneKeys = useMemo(() => effectiveZones.map((z) => z.key), [effectiveZones]);
+  const zoneNames = useMemo(() => effectiveZones.map((z) => z.name), [effectiveZones]); 
 
   // Combined sector ID for CampaignMapOverlay ("zoneKey:sectorKey" format)
   const selectedSectorId = toZone && toSector ? `${toZone}:${toSector}` : null;
@@ -944,6 +945,7 @@ export default function MapPage() {
               layout="ring"
               zoneCount={mapZoneCount ?? effectiveZones.length}
               zoneKeys={zoneKeys}
+              zoneNames={zoneNames}   
               sectors={sectors as any}
               units={myUnits as any}
               currentUserId={uid || null}
