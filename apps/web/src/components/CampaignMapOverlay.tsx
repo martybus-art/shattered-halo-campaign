@@ -19,10 +19,33 @@
  *   "c" = outer band, first angular half  (outer-leading)
  *   "d" = outer band, second angular half (outer-trailing)
  *
+ * Map Calibration (lead only):
+ *   When isLead=true a "Calibrate Overlay" toggle appears below the map.
+ *   The panel exposes 5 sliders that control how the SVG ellipse aligns to
+ *   the background image. Values are saved to localStorage keyed by mapId so
+ *   each map remembers its own settings independently. A "Copy Config" button
+ *   outputs a ready-to-paste TypeScript snippet for hardcoding the values once
+ *   calibration is complete.
+ *
  * Deploy to: apps/web/src/components/CampaignMapOverlay.tsx
+ *
+ * changelog:
+ *   2026-03-10 — FEATURE: Map Calibration panel (lead only). RingConfig type
+ *                replaces all module-level geometry constants. All geometry
+ *                functions (polarToCartesian, wedgePath, wedgeCentroid,
+ *                useRingGeometry, RingOverlay) now accept cfg: RingConfig
+ *                so slider values flow through to every path without reload.
+ *                New props: isLead?: boolean, mapId?: string.
+ *                useCalibConfig hook handles localStorage init/persist/reset.
+ *                CalibrationPanel component renders sliders + Copy Config.
+ *   2026-03-10 — TUNE: RING_INNER 250->275, RING_OUTER 430->480,
+ *                PERSPECTIVE_Y 0.60->0.55, CY 415->410 (pass 2 alignment).
+ *   2026-03-10 — FIX: Elliptical arc perspective correction. polarToCartesian
+ *                applies PERSPECTIVE_Y to Y axis; wedgePath uses separate
+ *                rx/ry in SVG arc commands. CY shifted 500->415.
  */
 
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -96,6 +119,18 @@ export type CampaignMapOverlayProps = {
    * Off by default to keep the map clean.
    */
   showZoneLabels?: boolean;
+
+  /**
+   * When true, the Map Calibration panel is shown below the map.
+   * Only the lead player should receive this as true.
+   */
+  isLead?: boolean;
+
+  /**
+   * Campaign map ID — used to namespace calibration config in localStorage
+   * so each map remembers its own alignment settings independently.
+   */
+  mapId?: string;
 };
 
 // ── Internal types ─────────────────────────────────────────────────────────────
@@ -116,30 +151,48 @@ type SectorGeometry = {
   zoneLabelPoint: { x: number; y: number };
 };
 
-// ── Geometry constants (ring layout) ─────────────────────────────────────────
+// ── Ring geometry config ──────────────────────────────────────────────────────
 //
-// SVG viewBox: 0 0 1000 1000.
-// The ring's inner void edge sits at radius 250 (~50% of frame).
-// The ring's outer atmosphere edge sits at radius 430 (~86% of frame).
-// These match the proportions requested in the AI generation prompt so the
-// terrain detail roughly aligns with the sector division lines.
+// RingConfig holds all five constants that control how the SVG ellipse aligns
+// to the AI-generated map image. All geometry functions accept cfg: RingConfig
+// instead of reading module-level globals, so the lead player's calibration
+// slider values flow through to every path without a page reload.
 //
-// Perspective correction:
-//   The AI-generated map image is shot from a slight elevation angle, making
-//   the ring appear as a compressed ellipse rather than a perfect circle.
-//   CY is shifted upward so the overlay centre matches the image's visual
-//   ring centre (which sits above the canvas midpoint).
-//   PERSPECTIVE_Y compresses the Y axis of every arc and radial point —
-//   1.0 = perfect circle, ~0.60 = typical AI overhead-angle compression.
-//   Tweak these two values if a new map image has a different camera angle.
+//   perspectiveY — Y-axis compression ratio (1.0 = perfect circle,
+//                  lower = more squashed; ~0.55 matches typical AI overhead shot)
+//   cx / cy      — SVG viewBox centre of the ellipse; cy < 500 shifts ring upward
+//   ringInner    — inner void edge semi-major axis (horizontal rx)
+//   ringOuter    — outer atmosphere edge semi-major axis (horizontal rx)
+//
+// ringMid is always derived as (ringInner + ringOuter) / 2 — not stored.
 
-const CX = 500;
-const CY = 415;             // shifted up from 500 — ring centre in image is above midpoint
-const PERSPECTIVE_Y = 0.60; // Y-axis compression factor (1.0 = circle, lower = more elliptical)
+export type RingConfig = {
+  cx:           number;
+  cy:           number;
+  perspectiveY: number;
+  ringInner:    number;
+  ringOuter:    number;
+};
 
-const RING_INNER = 250;
-const RING_OUTER = 430;
-const RING_MID = (RING_INNER + RING_OUTER) / 2;   // 340 — inner/outer band boundary
+/** Derives the mid-band radius — computed from config, never stored. */
+function ringMid(cfg: RingConfig): number {
+  return (cfg.ringInner + cfg.ringOuter) / 2;
+}
+
+/**
+ * Tuned defaults for the current Shattered Halo AI map image.
+ * Once calibration is finalised, update these values so the overlay is correct
+ * even for users who have never opened the calibration panel.
+ */
+export const DEFAULT_RING_CONFIG: RingConfig = {
+  cx:           500,
+  cy:           410,   // ring visual centre sits above canvas midpoint
+  perspectiveY: 0.55,  // Y-axis compression (1.0 = circle)
+  ringInner:    275,   // inner void edge rx
+  ringOuter:    480,   // outer atmosphere edge rx
+};
+
+const CALIB_STORAGE_PREFIX = "shattered-halo:map-calib:";
 
 const SECTOR_KEYS = ["a", "b", "c", "d"] as const;
 
@@ -166,39 +219,47 @@ function zoneColour(zoneIndex: number): string {
 
 // ── SVG path helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Converts polar coordinates to SVG cartesian, applying perspectiveY
+ * compression on the Y axis so the ring appears as a foreshortened ellipse
+ * matching the AI map camera angle.
+ */
 function polarToCartesian(
   cx: number,
   cy: number,
   r: number,
-  angleDeg: number
+  angleDeg: number,
+  perspectiveY: number,
 ): { x: number; y: number } {
-  // Subtract 90° so angle 0 = top (north) instead of right (east).
-  // PERSPECTIVE_Y compresses the Y component so the overlay matches the
-  // elliptical ring shape produced by the AI map's camera angle.
+  // Subtract 90 deg so angle 0 = top (north) instead of right (east).
   const rad = ((angleDeg - 90) * Math.PI) / 180;
   return {
     x: cx + r * Math.cos(rad),
-    y: cy + r * Math.sin(rad) * PERSPECTIVE_Y,
+    y: cy + r * Math.sin(rad) * perspectiveY,
   };
 }
 
+/**
+ * Builds an SVG path for a ring wedge (annular sector) using elliptical arcs
+ * so horizontal and vertical radii differ by perspectiveY.
+ */
 function wedgePath(
   cx: number,
   cy: number,
   innerR: number,
   outerR: number,
   startAngle: number,
-  endAngle: number
+  endAngle: number,
+  perspectiveY: number,
 ): string {
-  const p1 = polarToCartesian(cx, cy, outerR, startAngle);
-  const p2 = polarToCartesian(cx, cy, outerR, endAngle);
-  const p3 = polarToCartesian(cx, cy, innerR, endAngle);
-  const p4 = polarToCartesian(cx, cy, innerR, startAngle);
+  const p1 = polarToCartesian(cx, cy, outerR, startAngle, perspectiveY);
+  const p2 = polarToCartesian(cx, cy, outerR, endAngle,   perspectiveY);
+  const p3 = polarToCartesian(cx, cy, innerR, endAngle,   perspectiveY);
+  const p4 = polarToCartesian(cx, cy, innerR, startAngle, perspectiveY);
   const largeArc = endAngle - startAngle > 180 ? 1 : 0;
-  // Use elliptical arcs: rx = r (full), ry = r * PERSPECTIVE_Y (compressed).
-  // This ensures the arc curves match the compressed-ellipse ring in the image.
-  const outerRy = (outerR * PERSPECTIVE_Y).toFixed(2);
-  const innerRy = (innerR * PERSPECTIVE_Y).toFixed(2);
+  // Elliptical arc: rx = r (horizontal), ry = r * perspectiveY (compressed vertical)
+  const outerRy = (outerR * perspectiveY).toFixed(2);
+  const innerRy = (innerR * perspectiveY).toFixed(2);
   return [
     `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`,
     `A ${outerR} ${outerRy} 0 ${largeArc} 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
@@ -214,11 +275,12 @@ function wedgeCentroid(
   innerR: number,
   outerR: number,
   startAngle: number,
-  endAngle: number
+  endAngle: number,
+  perspectiveY: number,
 ): { x: number; y: number } {
   const midAngle = (startAngle + endAngle) / 2;
   const midR = (innerR + outerR) / 2;
-  return polarToCartesian(cx, cy, midR, midAngle);
+  return polarToCartesian(cx, cy, midR, midAngle, perspectiveY);
 }
 
 // ── State derivation ──────────────────────────────────────────────────────────
@@ -276,8 +338,13 @@ function sectorStrokeWidth(state: SectorState): number {
 
 // ── Ring geometry hook ────────────────────────────────────────────────────────
 
-function useRingGeometry(props: CampaignMapOverlayProps): SectorGeometry[] {
+function useRingGeometry(
+  props: CampaignMapOverlayProps,
+  cfg: RingConfig,
+): SectorGeometry[] {
   const { zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId } = props;
+  const { cx, cy, perspectiveY, ringInner, ringOuter } = cfg;
+  const mid = ringMid(cfg);
 
   return useMemo(() => {
     const zoneSweep = 360 / Math.max(zoneCount, 1);
@@ -302,9 +369,11 @@ function useRingGeometry(props: CampaignMapOverlayProps): SectorGeometry[] {
       const zoneKey = zoneKeys[zi] ?? `zone_${zi}`;
       const zoneStart = zi * zoneSweep;
 
-      // Midpoint of the full zone for label placement (outer band)
+      // Midpoint of the full zone for label placement (outer band centroid)
       const zoneLabelPoint = wedgeCentroid(
-        CX, CY, RING_MID, RING_OUTER, zoneStart, zoneStart + zoneSweep
+        cx, cy, mid, ringOuter,
+        zoneStart, zoneStart + zoneSweep,
+        perspectiveY
       );
 
       for (let si = 0; si < 4; si++) {
@@ -313,13 +382,13 @@ function useRingGeometry(props: CampaignMapOverlayProps): SectorGeometry[] {
         const isSelected = selectedSectorId === id;
 
         // Sector geometry within the zone:
-        // si 0,1 = inner band (RING_INNER → RING_MID)
-        // si 2,3 = outer band (RING_MID  → RING_OUTER)
+        //   si 0,1 = inner band (ringInner -> mid)
+        //   si 2,3 = outer band (mid -> ringOuter)
         const isInnerBand = si < 2;
         const localHalf = si % 2; // 0 = leading half, 1 = trailing half
 
-        const innerR = isInnerBand ? RING_INNER : RING_MID;
-        const outerR = isInnerBand ? RING_MID : RING_OUTER;
+        const innerR = isInnerBand ? ringInner : mid;
+        const outerR = isInnerBand ? mid : ringOuter;
         const startAngle = zoneStart + localHalf * halfSweep;
         const endAngle = startAngle + halfSweep;
 
@@ -335,15 +404,18 @@ function useRingGeometry(props: CampaignMapOverlayProps): SectorGeometry[] {
           state,
           fortified: dbSector?.fortified ?? false,
           hasUnit,
-          path: wedgePath(CX, CY, innerR, outerR, startAngle, endAngle),
-          centroid: wedgeCentroid(CX, CY, innerR, outerR, startAngle, endAngle),
+          path:     wedgePath(cx, cy, innerR, outerR, startAngle, endAngle, perspectiveY),
+          centroid: wedgeCentroid(cx, cy, innerR, outerR, startAngle, endAngle, perspectiveY),
           zoneLabelPoint,
         });
       }
     }
 
     return result;
-  }, [zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId]);
+  // cfg values included individually so the memo invalidates on slider change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId,
+      cx, cy, perspectiveY, ringInner, ringOuter]);
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
@@ -388,11 +460,14 @@ function MapLegend() {
 function RingOverlay({
   props,
   geometry,
+  cfg,
 }: {
   props: CampaignMapOverlayProps;
   geometry: SectorGeometry[];
+  cfg: RingConfig;
 }) {
-  const { zoneCount, zoneKeys, onSectorClick, showZoneLabels } = props;
+  const { zoneCount, onSectorClick, showZoneLabels } = props;
+  const { cx, cy, perspectiveY, ringInner, ringOuter } = cfg;
   const zoneSweep = 360 / Math.max(zoneCount, 1);
 
   // Deduplicated zone label points (one per zone)
@@ -425,7 +500,7 @@ function RingOverlay({
         return (
           <path
             key={`zone-outline-${zi}`}
-            d={wedgePath(CX, CY, RING_INNER, RING_OUTER, zoneStart, zoneEnd)}
+            d={wedgePath(cx, cy, ringInner, ringOuter, zoneStart, zoneEnd, perspectiveY)}
             fill="none"
             stroke={zoneColour(zi)}
             strokeWidth={2.5}
@@ -435,7 +510,7 @@ function RingOverlay({
         );
       })}
 
-      {/* ── Sector fills, sector boundary lines, and icons ── */}
+      {/* ── Sector fills, boundary lines, and icons ── */}
       {geometry.map((sg) => (
         <g key={sg.id}>
           {/* Sector fill (state-driven colour) */}
@@ -501,12 +576,213 @@ function RingOverlay({
   );
 }
 
+// ── Calibration panel (lead only) ─────────────────────────────────────────────
+
+type SliderDef = {
+  key: keyof RingConfig;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  description: string;
+};
+
+const SLIDER_DEFS: SliderDef[] = [
+  {
+    key: "cx",
+    label: "Centre X",
+    min: 300, max: 700, step: 1,
+    description: "Horizontal centre of the ring ellipse (500 = canvas midpoint)",
+  },
+  {
+    key: "cy",
+    label: "Centre Y",
+    min: 200, max: 600, step: 1,
+    description: "Vertical centre — lower value shifts the ring upward",
+  },
+  {
+    key: "perspectiveY",
+    label: "Y Compression",
+    min: 0.30, max: 1.00, step: 0.01,
+    description: "1.0 = circle, lower = more squashed (matches camera elevation angle)",
+  },
+  {
+    key: "ringInner",
+    label: "Inner Radius",
+    min: 150, max: 400, step: 1,
+    description: "Semi-major axis of the inner void ellipse (horizontal rx)",
+  },
+  {
+    key: "ringOuter",
+    label: "Outer Radius",
+    min: 300, max: 560, step: 1,
+    description: "Semi-major axis of the outer atmosphere ellipse (horizontal rx)",
+  },
+];
+
+function CalibrationPanel({
+  cfg,
+  onChange,
+  onReset,
+  mapId,
+}: {
+  cfg: RingConfig;
+  onChange: (key: keyof RingConfig, value: number) => void;
+  onReset: () => void;
+  mapId?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copyConfig = useCallback(() => {
+    const snippet = [
+      "// Map Calibration — paste into DEFAULT_RING_CONFIG in CampaignMapOverlay.tsx",
+      "export const DEFAULT_RING_CONFIG: RingConfig = {",
+      `  cx:           ${cfg.cx},`,
+      `  cy:           ${cfg.cy},`,
+      `  perspectiveY: ${cfg.perspectiveY.toFixed(2)},`,
+      `  ringInner:    ${cfg.ringInner},`,
+      `  ringOuter:    ${cfg.ringOuter},`,
+      "};",
+    ].join("\n");
+    navigator.clipboard.writeText(snippet).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    });
+  }, [cfg]);
+
+  return (
+    <div className="rounded-lg border border-brass/30 bg-black/85 p-4 space-y-4 text-sm">
+      {/* Header row */}
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
+            Map Calibration
+          </p>
+          <p className="text-zinc-500 text-xs mt-0.5">
+            Adjust sliders until the overlay aligns with the background image.
+            {mapId
+              ? " Values are saved automatically."
+              : " Values apply this session only (no mapId supplied)."}
+          </p>
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button
+            onClick={onReset}
+            className="px-2.5 py-1 rounded border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+          >
+            Reset
+          </button>
+          <button
+            onClick={copyConfig}
+            className="px-3 py-1 rounded border border-brass/40 hover:border-brass/70 bg-brass/10 hover:bg-brass/20 text-brass text-xs font-mono transition-colors"
+          >
+            {copied ? "✓ Copied!" : "Copy Config"}
+          </button>
+        </div>
+      </div>
+
+      {/* Sliders */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {SLIDER_DEFS.map(({ key, label, min, max, step, description }) => {
+          const value = cfg[key] as number;
+          const displayValue = key === "perspectiveY" ? value.toFixed(2) : String(value);
+          return (
+            <div key={key} className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-zinc-300 text-xs font-mono">{label}</label>
+                <span className="text-brass font-mono text-xs tabular-nums">
+                  {displayValue}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={(e) => onChange(key, parseFloat(e.target.value))}
+                className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+              />
+              <p className="text-zinc-600 text-xs leading-tight">{description}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Derived values — useful for manual verification */}
+      <div className="pt-2 border-t border-zinc-800 flex flex-wrap gap-x-6 gap-y-1 text-xs font-mono text-zinc-600">
+        <span>ringMid: {ringMid(cfg).toFixed(1)}</span>
+        <span>innerRy: {(cfg.ringInner * cfg.perspectiveY).toFixed(1)}</span>
+        <span>outerRy: {(cfg.ringOuter * cfg.perspectiveY).toFixed(1)}</span>
+        <span>innerBottom: {(cfg.cy + cfg.ringInner * cfg.perspectiveY).toFixed(1)}</span>
+        <span>outerBottom: {(cfg.cy + cfg.ringOuter * cfg.perspectiveY).toFixed(1)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Calibration config hook ───────────────────────────────────────────────────
+
+/**
+ * Loads calibration config from localStorage (keyed by mapId), returns it as
+ * state, and provides a setter that persists on every change plus a reset fn.
+ */
+function useCalibConfig(
+  mapId?: string
+): [RingConfig, (cfg: RingConfig) => void, () => void] {
+  const storageKey = CALIB_STORAGE_PREFIX + (mapId ?? "default");
+
+  const [cfg, setCfgState] = useState<RingConfig>(() => {
+    try {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        // Merge over defaults so new fields added in future won't be missing
+        return { ...DEFAULT_RING_CONFIG, ...JSON.parse(stored) };
+      }
+    } catch {
+      // localStorage unavailable (SSR, private browsing) — fall back silently
+    }
+    return { ...DEFAULT_RING_CONFIG };
+  });
+
+  const setCfg = useCallback(
+    (next: RingConfig) => {
+      setCfgState(next);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        // Storage write failed — ignore (overlay still works, just won't persist)
+      }
+    },
+    [storageKey]
+  );
+
+  const reset = useCallback(() => {
+    setCfg({ ...DEFAULT_RING_CONFIG });
+    try {
+      localStorage.removeItem(storageKey);
+    } catch { /* ignore */ }
+  }, [setCfg, storageKey]);
+
+  return [cfg, setCfg, reset];
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
-  const { mapUrl, layout } = props;
+  const { mapUrl, layout, isLead, mapId } = props;
 
-  const ringGeometry = useRingGeometry(props);
+  const [cfg, setCfg, resetCfg] = useCalibConfig(mapId);
+  const [calibOpen, setCalibOpen] = useState(false);
+
+  const handleSliderChange = useCallback(
+    (key: keyof RingConfig, value: number) => {
+      setCfg({ ...cfg, [key]: value });
+    },
+    [cfg, setCfg]
+  );
+
+  const ringGeometry = useRingGeometry(props, cfg);
 
   // Non-ring layouts: show image with a "coming soon" stub overlay.
   // Extend this block with new layout renderers as they are implemented.
@@ -533,6 +809,8 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
   return (
     <div className="space-y-2">
       <MapLegend />
+
+      {/* Map image + SVG overlay */}
       <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
         {/* AI-generated background map */}
         <img
@@ -545,8 +823,36 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
         <div className="absolute inset-0 bg-black/15" />
 
         {/* Tactical SVG overlay */}
-        <RingOverlay props={props} geometry={ringGeometry} />
+        <RingOverlay props={props} geometry={ringGeometry} cfg={cfg} />
       </div>
+
+      {/* Calibration panel — lead only */}
+      {isLead && (
+        <div className="space-y-2 pt-1">
+          <button
+            onClick={() => setCalibOpen((prev) => !prev)}
+            className="flex items-center gap-2 text-xs font-mono text-zinc-500 hover:text-brass/80 transition-colors px-1 select-none"
+          >
+            <span
+              className="text-zinc-600 transition-transform duration-200 inline-block"
+              style={{ transform: calibOpen ? "rotate(90deg)" : "rotate(0deg)" }}
+            >
+              ▶
+            </span>
+            {calibOpen ? "Hide Calibration" : "◈ Calibrate Overlay"}
+            <span className="text-zinc-700 italic ml-0.5">Lead only</span>
+          </button>
+
+          {calibOpen && (
+            <CalibrationPanel
+              cfg={cfg}
+              onChange={handleSliderChange}
+              onReset={resetCfg}
+              mapId={mapId}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
