@@ -2,11 +2,10 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
-//   2026-03-09 — LAYOUT v2: Full two-column card layout.
-//                LEFT  — Tactical Hololith → Movement Order → No-move msg → Deploy Unit
-//                RIGHT — AI Theatre Map → My Units → Round Orders
-//                Both columns stack vertically on mobile (below lg breakpoint).
-//                Right column suppressed entirely when no mapId present.
+//   2026-03-09 — LAYOUT: Tactical Hololith and AI Theatre Map placed side-by-side
+//                in a 2-column grid (lg:grid-cols-2). Hololith on the left, map
+//                image on the right. Single-column on mobile; right column hidden
+//                when no mapId is present.
 //   2026-03-08 — FEATURE: Replaced zone/sector dropdowns with an interactive
 //                SVG Tactical Layout Map. Design rules:
 //                  • ALL zones always visible — layout shape reflects map type
@@ -33,7 +32,6 @@ import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 import { MapImageDisplay } from "@/components/MapImageDisplay";
-import CampaignRingMergedMap from "@/components/CampaignRingMergedMap";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -623,7 +621,6 @@ export default function MapPage() {
   const [mapLayout,     setMapLayout]     = useState<string>("ring");
   const [pageError,     setPageError]     = useState<string | null>(null);
   const [loading,       setLoading]       = useState(false);
-  const [imageUrl,      setImageUrl]      = useState<string | null>(null);
 
   // Movement order state
   const [selectedUnit,  setSelectedUnit]  = useState<Unit | null>(null);
@@ -676,7 +673,7 @@ export default function MapPage() {
       // Map zones
       if ((c as any)?.map_id) {
         const { data: mapRow } = await supabase
-          .from("maps").select("map_json,zone_count,layout,image_path,bg_image_path")
+          .from("maps").select("map_json,zone_count,layout")
           .eq("id", (c as any).map_id).maybeSingle();
         const zoneList: MapZone[] = (mapRow?.map_json as any)?.zones ?? [];
         setZones(zoneList);
@@ -684,13 +681,6 @@ export default function MapPage() {
         // Fall back to map table layout if rules_overrides doesn't set one
         if (!ro.map_layout && (mapRow as any)?.layout) {
           setMapLayout((mapRow as any).layout as string);
-        }
-        const imagePath = (mapRow as any)?.image_path ?? (mapRow as any)?.bg_image_path ?? null;
-        if (imagePath) {
-          const { data: signed } = await supabase.storage.from("campaign-maps").createSignedUrl(imagePath, 60 * 60);
-          setImageUrl(signed?.signedUrl ?? null);
-        } else {
-          setImageUrl(null);
         }
       }
 
@@ -787,13 +777,6 @@ export default function MapPage() {
   const inReconPhase    = stage === "recon";
   const canMove         = inMovementPhase || (inReconPhase && hasRecon);
   const inSpendPhase    = stage === "spend";
-
-
-  const validZones = useMemo(() => {
-    if (!selectedUnit || !canMove) return new Set<string>();
-    if (hasDeepStrike) return new Set(allZones.map((z) => z.key));
-    return adj.get(selectedUnit.zone_key) ?? new Set<string>();
-  }, [selectedUnit, canMove, hasDeepStrike, allZones, adj]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -925,14 +908,11 @@ export default function MapPage() {
           <p className="text-parchment/50 animate-pulse text-sm px-1">Loading tactical data…</p>
         )}
 
-
-        {/* ── Main two-column layout ── */}
+        {/* ── Tactical Hololith + AI Theatre Map (side by side) ── */}
         {!loading && (
-        <div className={`grid gap-6 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
+        <div className={`grid gap-4 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
 
-          {/* ══ LEFT COLUMN: Hololith · Movement · Deploy ══ */}
-          <div className="space-y-4">
-
+        {/* LEFT: Tactical Hololith */}
         <Card title={
             allZones.length > 0 && mapZoneCount
               ? `Tactical Hololith — ${effectiveZones.length} / ${mapZoneCount} Zones Surveyed`
@@ -969,45 +949,22 @@ export default function MapPage() {
             </div>
 
             {/* SVG layout */}
-            {mapId && mapLayout === "ring" ? (
-              <div className="space-y-3">
-                <CampaignRingMergedMap
-                  imageUrl={imageUrl ?? "/placeholder-map.jpg"}
-                  zones={allZones.length}
-                  sectors={sectors}
-                  uid={uid}
-                  myUnits={myUnits}
-                  selectedUnit={selectedUnit}
-                  toZone={toZone}
-                  toSector={toSector}
-                  fogEnabled={fogEnabled}
-                  canMove={canMove}
-                  hasDeepStrike={hasDeepStrike}
-                  validZones={validZones}
-                  onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
-                />
-                <p className="text-xs text-parchment/35 italic">
-                  Ring layout active — tactical state now overlays the theatre map directly.
-                </p>
-              </div>
-            ) : (
-              <TacticalMap
-                zones={allZones}
-                layout={mapLayout}
-                adj={adj}
-                sectors={sectors}
-                uid={uid}
-                memberById={memberById}
-                myUnits={myUnits}
-                selectedUnit={selectedUnit}
-                toZone={toZone}
-                toSector={toSector}
-                fogEnabled={fogEnabled}
-                canMove={canMove}
-                hasDeepStrike={hasDeepStrike}
-                onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
-              />
-            )}
+            <TacticalMap
+              zones={allZones}
+              layout={mapLayout}
+              adj={adj}
+              sectors={sectors}
+              uid={uid}
+              memberById={memberById}
+              myUnits={myUnits}
+              selectedUnit={selectedUnit}
+              toZone={toZone}
+              toSector={toSector}
+              fogEnabled={fogEnabled}
+              canMove={canMove}
+              hasDeepStrike={hasDeepStrike}
+              onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
+            />
 
             {/* Sector intel for the targeted sector (occupation-gated) */}
             {targetIntel && (
@@ -1030,6 +987,81 @@ export default function MapPage() {
                 );
               })}
           </Card>
+        {/* end LEFT */}
+
+          {/* RIGHT: AI Theatre Map (generated image) */}
+          {mapId && (
+            <div className="min-w-0">
+              <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
+            </div>
+          )}
+
+        </div>
+        )}
+
+        {/* ── My Units ── */}
+        {myUnits.length > 0 && (
+          <Card title="My Units">
+            <div className="space-y-2">
+              {myUnits.map((u) => {
+                const pending = unitMoveThisRound(u.id);
+                return (
+                  <div key={u.id}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded border transition-colors ${
+                      selectedUnit?.id === u.id
+                        ? "bg-brass/15 border-brass/50"
+                        : "bg-void border-parchment/15 hover:border-brass/30"
+                    }`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase ${
+                          u.unit_type === "scout"
+                            ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
+                            : "bg-brass/15 border-brass/40 text-brass"
+                        }`}>{u.unit_type}</span>
+                        <span className="text-parchment/70 text-sm">{fmtKey(u.zone_key)} / {u.sector_key.toUpperCase()}</span>
+                        <span className="text-parchment/30 text-xs font-mono">R{u.round_deployed}</span>
+                      </div>
+                      {pending && (
+                        <p className="text-xs text-brass/70 mt-0.5 font-mono">
+                          → {fmtKey(pending.to_zone_key)} / {pending.to_sector_key.toUpperCase()} ({pending.move_type})
+                        </p>
+                      )}
+                    </div>
+                    {canMove && !pending && (
+                      <button
+                        onClick={() => { setSelectedUnit(u); setToZone(u.zone_key); setToSector(u.sector_key); setMoveResult(null); }}
+                        className="shrink-0 px-3 py-1 rounded text-xs border border-brass/40 hover:bg-brass/20 text-parchment/60 hover:text-parchment/90 transition-colors">
+                        Select
+                      </button>
+                    )}
+                    {canMove && pending && (
+                      <button
+                        onClick={() => { setSelectedUnit(u); setToZone(pending.to_zone_key); setToSector(pending.to_sector_key); setMoveResult(null); }}
+                        className="shrink-0 px-3 py-1 rounded text-xs border border-parchment/20 hover:bg-parchment/10 text-parchment/40 transition-colors">
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Token row */}
+            <div className="mt-3 pt-3 border-t border-parchment/10 flex gap-3 flex-wrap">
+              <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasDeepStrike ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/10 text-parchment/25"}`}>
+                {hasDeepStrike ? "✓ Deep Strike" : "No Deep Strike"}
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasRecon ? "bg-blue-500/15 border-blue-400/40 text-blue-300" : "bg-void border-parchment/10 text-parchment/25"}`}>
+                {hasRecon ? "✓ Recon Token" : "No Recon Token"}
+              </span>
+              {!fogEnabled && (
+                <span className="text-xs px-2 py-0.5 rounded border font-mono bg-parchment/10 border-parchment/30 text-parchment/50">Fog Off</span>
+              )}
+              <span className="text-xs px-2 py-0.5 rounded border border-parchment/10 text-parchment/35 font-mono ml-auto">{myNip} NIP</span>
+            </div>
+          </Card>
+        )}
 
         {/* ── Movement Order ── */}
         {selectedUnit && canMove && (
@@ -1157,82 +1189,6 @@ export default function MapPage() {
           </Card>
         )}
 
-          </div>
-          {/* end LEFT COLUMN */}
-
-          {/* ══ RIGHT COLUMN: Theatre Map · My Units · Round Orders ══ */}
-          <div className="space-y-4">
-
-            {/* AI Theatre Map */}
-            {mapId && mapLayout !== "ring" && (
-              <div className="min-w-0">
-                <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
-              </div>
-            )}
-
-        {myUnits.length > 0 && (
-          <Card title="My Units">
-            <div className="space-y-2">
-              {myUnits.map((u) => {
-                const pending = unitMoveThisRound(u.id);
-                return (
-                  <div key={u.id}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded border transition-colors ${
-                      selectedUnit?.id === u.id
-                        ? "bg-brass/15 border-brass/50"
-                        : "bg-void border-parchment/15 hover:border-brass/30"
-                    }`}>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase ${
-                          u.unit_type === "scout"
-                            ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
-                            : "bg-brass/15 border-brass/40 text-brass"
-                        }`}>{u.unit_type}</span>
-                        <span className="text-parchment/70 text-sm">{fmtKey(u.zone_key)} / {u.sector_key.toUpperCase()}</span>
-                        <span className="text-parchment/30 text-xs font-mono">R{u.round_deployed}</span>
-                      </div>
-                      {pending && (
-                        <p className="text-xs text-brass/70 mt-0.5 font-mono">
-                          → {fmtKey(pending.to_zone_key)} / {pending.to_sector_key.toUpperCase()} ({pending.move_type})
-                        </p>
-                      )}
-                    </div>
-                    {canMove && !pending && (
-                      <button
-                        onClick={() => { setSelectedUnit(u); setToZone(u.zone_key); setToSector(u.sector_key); setMoveResult(null); }}
-                        className="shrink-0 px-3 py-1 rounded text-xs border border-brass/40 hover:bg-brass/20 text-parchment/60 hover:text-parchment/90 transition-colors">
-                        Select
-                      </button>
-                    )}
-                    {canMove && pending && (
-                      <button
-                        onClick={() => { setSelectedUnit(u); setToZone(pending.to_zone_key); setToSector(pending.to_sector_key); setMoveResult(null); }}
-                        className="shrink-0 px-3 py-1 rounded text-xs border border-parchment/20 hover:bg-parchment/10 text-parchment/40 transition-colors">
-                        Edit
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Token row */}
-            <div className="mt-3 pt-3 border-t border-parchment/10 flex gap-3 flex-wrap">
-              <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasDeepStrike ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/10 text-parchment/25"}`}>
-                {hasDeepStrike ? "✓ Deep Strike" : "No Deep Strike"}
-              </span>
-              <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasRecon ? "bg-blue-500/15 border-blue-400/40 text-blue-300" : "bg-void border-parchment/10 text-parchment/25"}`}>
-                {hasRecon ? "✓ Recon Token" : "No Recon Token"}
-              </span>
-              {!fogEnabled && (
-                <span className="text-xs px-2 py-0.5 rounded border font-mono bg-parchment/10 border-parchment/30 text-parchment/50">Fog Off</span>
-              )}
-              <span className="text-xs px-2 py-0.5 rounded border border-parchment/10 text-parchment/35 font-mono ml-auto">{myNip} NIP</span>
-            </div>
-          </Card>
-        )}
-
         {/* ── Pending Orders ── */}
         {myMoves.length > 0 && (
           <Card title={`Round ${roundNumber} Orders`}>
@@ -1259,12 +1215,6 @@ export default function MapPage() {
               })}
             </div>
           </Card>
-        )}
-
-          </div>
-          {/* end RIGHT COLUMN */}
-
-        </div>
         )}
 
       </div>
