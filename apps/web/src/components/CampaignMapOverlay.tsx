@@ -22,7 +22,7 @@
  * Map Calibration (lead only):
  *   When isLead=true a "Calibrate Overlay" toggle appears below the map.
  *   The panel exposes 5 sliders that control how the SVG ellipse aligns to
- *   the background image. Values are saved to localStorage keyed by mapId so
+ *   the background image. Values are saved to localStorage keyed by campaignId so
  *   each map remembers its own settings independently. A "Copy Config" button
  *   outputs a ready-to-paste TypeScript snippet for hardcoding the values once
  *   calibration is complete.
@@ -35,7 +35,7 @@
  *                functions (polarToCartesian, wedgePath, wedgeCentroid,
  *                useRingGeometry, RingOverlay) now accept cfg: RingConfig
  *                so slider values flow through to every path without reload.
- *                New props: isLead?: boolean, mapId?: string.
+ *                New props: isLead?: boolean, campaignId?: string.
  *                useCalibConfig hook handles localStorage init/persist/reset.
  *                CalibrationPanel component renders sliders + Copy Config.
  *   2026-03-10 — TUNE: RING_INNER 250->275, RING_OUTER 430->480,
@@ -137,7 +137,7 @@ export type CampaignMapOverlayProps = {
    * Campaign map ID — used to namespace calibration config in localStorage
    * so each map remembers its own alignment settings independently.
    */
-  mapId?: string;
+  campaignId?: string;
 };
 
 // ── Internal types ─────────────────────────────────────────────────────────────
@@ -687,12 +687,12 @@ function CalibrationPanel({
   cfg,
   onChange,
   onReset,
-  mapId,
+  campaignId,
 }: {
   cfg: RingConfig;
   onChange: (key: keyof RingConfig, value: number) => void;
   onReset: () => void;
-  mapId?: string;
+  campaignId?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -726,9 +726,9 @@ function CalibrationPanel({
           </p>
           <p className="text-zinc-500 text-xs mt-0.5">
             Adjust sliders until the overlay aligns with the background image.
-            {mapId
+            {campaignId
               ? " Values are saved automatically."
-              : " Values apply this session only (no mapId supplied)."}
+              : " Values apply this session only (no campaignId supplied)."}
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
@@ -792,13 +792,13 @@ function CalibrationPanel({
 // ── Calibration config hook ───────────────────────────────────────────────────
 
 /**
- * Loads calibration config from localStorage (keyed by mapId), returns it as
+ * Loads calibration config from localStorage (keyed by campaignId), returns it as
  * state, and provides a setter that persists on every change plus a reset fn.
  */
 function useCalibConfig(
-  mapId?: string
+  campaignId?: string
 ): [RingConfig, (cfg: RingConfig) => void, () => void] {
-  const storageKey = CALIB_STORAGE_PREFIX + (mapId ?? "default");
+  const storageKey = CALIB_STORAGE_PREFIX + (campaignId ?? "default");
 
   const [cfg, setCfgState] = useState<RingConfig>(() => {
     try {
@@ -838,9 +838,9 @@ function useCalibConfig(
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
-  const { mapUrl, layout, isLead, mapId } = props;
+  const { mapUrl, layout, isLead, campaignId } = props;
 
-  const [cfg, setCfg, resetCfg] = useCalibConfig(mapId);
+  const [cfg, setCfg, resetCfg] = useCalibConfig(campaignId);
   const [calibOpen, setCalibOpen] = useState(false);
 
   const handleSliderChange = useCallback(
@@ -916,7 +916,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
               cfg={cfg}
               onChange={handleSliderChange}
               onReset={resetCfg}
-              mapId={mapId}
+              campaignId={campaignId}
             />
           )}
         </div>

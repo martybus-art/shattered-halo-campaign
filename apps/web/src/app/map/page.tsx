@@ -958,7 +958,7 @@ export default function MapPage() {
               }}
               showZoneLabels
                 isLead={role === "lead"}        // +++ shows calibration panel to lead only
-                mapId={mapId ?? undefined}      // +++ namespaces localStorage per map
+                campaignId={campaignId}   // +++ namespaces localStorage per map
             />
 
             {/* Colour legend — kept below overlay */}
