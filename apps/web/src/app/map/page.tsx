@@ -973,7 +973,7 @@ export default function MapPage() {
               <div className="space-y-3">
                 <CampaignRingMergedMap
                   imageUrl={imageUrl ?? "/placeholder-map.jpg"}
-                  zones={allZones}
+                  zones={allZones.length}
                   sectors={sectors}
                   uid={uid}
                   myUnits={myUnits}
