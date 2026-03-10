@@ -118,14 +118,25 @@ type SectorGeometry = {
 
 // ── Geometry constants (ring layout) ─────────────────────────────────────────
 //
-// SVG viewBox: 0 0 1000 1000, centre at (500, 500).
+// SVG viewBox: 0 0 1000 1000.
 // The ring's inner void edge sits at radius 250 (~50% of frame).
 // The ring's outer atmosphere edge sits at radius 430 (~86% of frame).
 // These match the proportions requested in the AI generation prompt so the
 // terrain detail roughly aligns with the sector division lines.
+//
+// Perspective correction:
+//   The AI-generated map image is shot from a slight elevation angle, making
+//   the ring appear as a compressed ellipse rather than a perfect circle.
+//   CY is shifted upward so the overlay centre matches the image's visual
+//   ring centre (which sits above the canvas midpoint).
+//   PERSPECTIVE_Y compresses the Y axis of every arc and radial point —
+//   1.0 = perfect circle, ~0.60 = typical AI overhead-angle compression.
+//   Tweak these two values if a new map image has a different camera angle.
 
 const CX = 500;
-const CY = 500;
+const CY = 415;             // shifted up from 500 — ring centre in image is above midpoint
+const PERSPECTIVE_Y = 0.60; // Y-axis compression factor (1.0 = circle, lower = more elliptical)
+
 const RING_INNER = 250;
 const RING_OUTER = 430;
 const RING_MID = (RING_INNER + RING_OUTER) / 2;   // 340 — inner/outer band boundary
@@ -161,9 +172,14 @@ function polarToCartesian(
   r: number,
   angleDeg: number
 ): { x: number; y: number } {
-  // Subtract 90° so angle 0 = top (north) instead of right (east)
+  // Subtract 90° so angle 0 = top (north) instead of right (east).
+  // PERSPECTIVE_Y compresses the Y component so the overlay matches the
+  // elliptical ring shape produced by the AI map's camera angle.
   const rad = ((angleDeg - 90) * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  return {
+    x: cx + r * Math.cos(rad),
+    y: cy + r * Math.sin(rad) * PERSPECTIVE_Y,
+  };
 }
 
 function wedgePath(
@@ -179,11 +195,15 @@ function wedgePath(
   const p3 = polarToCartesian(cx, cy, innerR, endAngle);
   const p4 = polarToCartesian(cx, cy, innerR, startAngle);
   const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+  // Use elliptical arcs: rx = r (full), ry = r * PERSPECTIVE_Y (compressed).
+  // This ensures the arc curves match the compressed-ellipse ring in the image.
+  const outerRy = (outerR * PERSPECTIVE_Y).toFixed(2);
+  const innerRy = (innerR * PERSPECTIVE_Y).toFixed(2);
   return [
     `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`,
-    `A ${outerR} ${outerR} 0 ${largeArc} 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
+    `A ${outerR} ${outerRy} 0 ${largeArc} 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
     `L ${p3.x.toFixed(2)} ${p3.y.toFixed(2)}`,
-    `A ${innerR} ${innerR} 0 ${largeArc} 0 ${p4.x.toFixed(2)} ${p4.y.toFixed(2)}`,
+    `A ${innerR} ${innerRy} 0 ${largeArc} 0 ${p4.x.toFixed(2)} ${p4.y.toFixed(2)}`,
     "Z",
   ].join(" ");
 }
