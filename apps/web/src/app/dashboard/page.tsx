@@ -1,1083 +1,823 @@
-"use client";
 // apps/web/src/app/dashboard/page.tsx
-// Player dashboard: status, war bulletin, faction resources, campaign map.
+// Player command throne — campaign status, mission preference (NIP-gated),
+// movement submission, underdog choice, and AI recap prompt builder.
+// Subscribes to round stage changes in real-time so the UI stays current.
 //
 // changelog:
-//   2026-03-09 — FEATURE: War Bulletin now shows private + public posts.
-//                Private posts (🔒) are visible only to audience_user_id.
-//                Public posts visible to all members. Merged & sorted newest-first.
-//                NIP purchases now auto-post a private "Resources Acquired" entry.
-//                PostTagBadge expanded: instability, battle_log, purchase, relic,
-//                dispatch, alliance, chronicle, phase.
-//   2026-03-09 — FEATURE: Round Purchases now shows Used/Available badge on
-//                trackable tokens (Deep Strike, Recon). Fetches this round's
-//                moves in load() and builds a usedTokens Set. safe_passage has
-//                no move_type counterpart so no badge is shown for it.
-//   2026-03-09 — LAYOUT: Restructured from 2 stacked rows to a single 2-column grid.
-//                LEFT col: Your Status + War Bulletin.
-//                RIGHT col: Faction Resources + Theatre Map (directly stacked, no gap).
-//              — UX: Removed "Fog of war" disclaimer text from the Theatre Map
-//                territory legend (both the visible-territory and no-territory variants).
-//   2026-03-08 — SECURITY: authChecked state added. load() now redirects
-//                unauthenticated users to / immediately rather than silently
-//                rendering an empty page. Spinner shown while auth resolves.
-//   2026-03-08 — FEATURE: War Bulletin now shows the 5 most recent public posts
-//                rather than just the latest one. Posts tagged "chronicle" show
-//                a ✦ Chronicle badge; posts tagged "alliance" show a ⚜ Pact badge.
-//                Post type updated to include `tags` field.
-//   2026-03-08 — FEATURE: Realtime subscription on player_state for the current
-//                user. NIP and NCP balances in the Faction Resources card update
-//                live when resolve-conflict (or any other edge function) writes
-//                to player_state — no page refresh required.
-//   2026-03-07 -- FIX: Dashboard now also queries player_state_secret for
-//                 secret_location. Location card shows the player's real
-//                 starting location (zone:sector from secret_location) when
-//                 current_zone_key is still "unknown". Once movement begins
-//                 and submit-move updates current_zone_key, that takes over.
-//   2026-03-06 -- Added inline ToastContainer + addToast (consistent with
-//                 campaigns/page.tsx and lead/page.tsx patterns). Replaced all
-//                 alert() calls and bare addToast references with the proper
-//                 toast hook. Fixed TS compile error: "Cannot find name
-//                 'addToast'" at line 247.
-//   2026-03-05 -- Removed My Campaigns card (campaignId from URL param).
-//                 Removed Catch-up Choice card (now a conditional card driven
-//                 by lead offer). Status (top-left) + War Bulletin (top-right).
-//                 Added stage strip to Status card. Added Faction Resources
-//                 card with NIP/NCP balances and spend-phase shopping cart.
-//                 Added Campaign Map preview card with territory legend.
-//                 Underdog catchup offer appears as dedicated card when pending.
-//                 Removed prompt-copy helper functions. Cleaned up debug code.
-//                 Removed Quick Links card. Nav fixed: Frame now receives
-//                 campaignId and role props so all nav links render correctly.
-//                 Theatre Map image is now a link to /map page.
-
+//   2026-03-12 -- Added War Bulletin card visible to ALL players (public + own
+//                 private posts). All/Public/Private filter buttons matching
+//                 lead/page.tsx design. Posts loaded on campaign load and kept
+//                 updated via real-time subscription. Lead-only prompt builder
+//                 moved inside the bulletin card.
+"use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
-import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 
-// -- Stage order (must match advance-round edge function) -------------------
-const STAGE_ORDER = ["spend", "recon", "movement", "conflicts", "missions", "results", "publish"] as const;
-type Stage = typeof STAGE_ORDER[number];
-
-// -- NIP shop items ---------------------------------------------------------
-// These are the purchasable abilities in the spend phase.
-const SHOP_ITEMS = [
-  { id: "deep_strike",       label: "Deep Strike",       nip: 1,
-    desc: "Move to any unoccupied sector this round, ignoring adjacency." },
-  { id: "recon",             label: "Recon",             nip: 1,
-    desc: "Reveal the zone of one enemy commander in range." },
-  { id: "mission_selection", label: "Mission Selection", nip: 2,
-    desc: "Choose or veto your mission in the next conflict." },
-  { id: "safe_passage",      label: "Safe Passage",      nip: 1,
-    desc: "Your movement this round cannot be intercepted." },
-] as const;
-
-// -- Catchup options (shown to the underdog player) ------------------------
-const CATCHUP_OPTIONS = [
-  "+2 NIP",
-  "+1 NCP next battle",
-  "Free Recon",
-  "Safe Passage (1 move cannot be intercepted)",
-] as const;
-
-// -- Toast system (consistent with campaigns/page.tsx + lead/page.tsx) ------
-
-type ToastType = "success" | "error" | "info";
-interface Toast { id: number; type: ToastType; title: string; body?: string }
-let _toastId = 0;
-
-function ToastContainer({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
-  if (!toasts.length) return null;
-  return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={`pointer-events-auto rounded border px-4 py-3 shadow-2xl shadow-black/60 backdrop-blur-sm
-            ${t.type === "success" ? "bg-void border-brass/60" : ""}
-            ${t.type === "error"   ? "bg-void border-blood/60" : ""}
-            ${t.type === "info"    ? "bg-void border-brass/30" : ""}
-          `}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className={`text-sm font-semibold uppercase tracking-widest
-                ${t.type === "success" ? "text-brass"    : ""}
-                ${t.type === "error"   ? "text-blood"    : ""}
-                ${t.type === "info"    ? "text-brass/70" : ""}
-              `}>
-                {t.type === "success" && "⚙ "}
-                {t.type === "error"   && "☠ "}
-                {t.type === "info"    && "✦ "}
-                {t.title}
-              </p>
-              {t.body && (
-                <p className="mt-1 text-xs text-parchment/60 leading-relaxed">{t.body}</p>
-              )}
-            </div>
-            <button
-              onClick={() => dismiss(t.id)}
-              className="text-parchment/30 hover:text-parchment/70 text-lg leading-none mt-0.5 shrink-0"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// -- Types ------------------------------------------------------------------
-
-type Campaign = {
-  id:           string;
-  name:         string;
-  phase:        number;
-  round_number: number;
-  instability:  number;
-  map_id:       string | null;
-  campaign_narrative: string | null;
-};
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type PlayerState = {
-  nip:                number;
-  ncp:                number;
-  status:             string;
-  current_zone_key:   string;
+  campaign_id: string;
+  user_id: string;
+  current_zone_key: string;
   current_sector_key: string;
+  nip: number;
+  ncp: number;
+  status: string;
+  public_location: string;
 };
 
-type Round  = { stage: string };
-
-// tags is a jsonb array from the DB — typed as string[] for our purposes.
-type Post   = {
-  id:               string;
-  title:            string;
-  body:             string;
-  round_number:     number;
-  created_at:       string;
-  tags:             string[];
-  visibility:       string;        // 'public' | 'private'
-  audience_user_id: string | null; // set on private posts — the recipient
+type Campaign = {
+  id: string;
+  name: string;
+  phase: number;
+  round_number: number;
+  instability: number;
+  map_id: string | null;
 };
 
-type Spend  = { spend_type: string; nip_spent: number };
-type Member = { user_id: string; commander_name: string | null; faction_name: string | null; role: string };
-type Sector = { zone_key: string; sector_key: string; owner_user_id: string | null; revealed_public: boolean };
-
-type UnderdogChoice = {
-  id:            string;
-  chosen_option: string | null;
-  status:        string;
+type Membership = {
+  campaign_id: string;
+  role: string;
+  campaign_name: string;
 };
 
-// -- Helpers ----------------------------------------------------------------
+type Round = {
+  stage: string;
+  round_number: number;
+};
 
-function fmtKey(key: string): string {
-  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+type MapZone = { key: string; name: string };
+
+type Post = {
+  id: string;
+  title: string;
+  body: string;
+  round_number: number;
+  created_at: string;
+  tags: string[];
+  visibility: string;         // "public" | "private"
+  audience_user_id: string | null;
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function getQueryParam(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  return new URL(window.location.href).searchParams.get(name);
 }
 
-// Stable colour per player index for territory display
-const PLAYER_COLOURS = [
-  "bg-brass/30 border-brass/60 text-brass",
-  "bg-blood/30 border-blood/60 text-blood/90",
-  "bg-blue-500/25 border-blue-400/50 text-blue-300",
-  "bg-green-600/25 border-green-500/50 text-green-300",
-  "bg-purple-500/25 border-purple-400/50 text-purple-300",
-  "bg-orange-500/25 border-orange-400/50 text-orange-300",
-  "bg-pink-500/25 border-pink-400/50 text-pink-300",
-  "bg-teal-500/25 border-teal-400/50 text-teal-300",
+/** Format a UTC ISO timestamp as "DD/MM/YYYY HH:MM" (24-hour, local time). */
+function fmtTimestamp(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const STARTING_NIP = 1;
+const SECTORS      = ["A", "B", "C", "D"];
+
+const MISSION_PREF_OPTIONS = [
+  { value: "",               label: "— No preference —"  },
+  { value: "assassination",  label: "Assassination"       },
+  { value: "sabotage",       label: "Sabotage"            },
+  { value: "border_clash",   label: "Border Clash"        },
+  { value: "supply_raid",    label: "Supply Raid"         },
+  { value: "recon_in_force", label: "Recon in Force"      },
+  { value: "zone_mortalis",  label: "Zone Mortalis"       },
+  { value: "siege",          label: "Siege"               },
+  { value: "ambush",         label: "Ambush"              },
 ];
 
-// Post tag badge — visual indicator for post category
-function PostTagBadge({ tags }: { tags: string[] }) {
-  if (tags.includes("instability")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/40 bg-blood/10 text-blood/70 font-mono uppercase tracking-wider">
-        ⚡ Instability
-      </span>
-    );
-  }
-  if (tags.includes("battle_log")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/25 bg-parchment/5 text-parchment/50 font-mono uppercase tracking-wider">
-        ⚔ Battle
-      </span>
-    );
-  }
-  if (tags.includes("purchase")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/25 bg-brass/8 text-brass/60 font-mono uppercase tracking-wider">
-        ◈ Purchase
-      </span>
-    );
-  }
-  if (tags.includes("relic")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/40 bg-brass/15 text-brass/80 font-mono uppercase tracking-wider">
-        ✸ Relic
-      </span>
-    );
-  }
-  if (tags.includes("dispatch")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
-        📡 Dispatch
-      </span>
-    );
-  }
-  if (tags.includes("alliance")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/30 bg-brass/10 text-brass/70 font-mono uppercase tracking-wider">
-        ⚜ Pact
-      </span>
-    );
-  }
-  if (tags.includes("chronicle")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
-        ✦ Chronicle
-      </span>
-    );
-  }
-  if (tags.includes("phase")) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/30 bg-blood/8 text-blood/60 font-mono uppercase tracking-wider">
-        ◉ Phase Shift
-      </span>
-    );
-  }
-  return null;
-}
+// Tag badge config — maps tag string → display label + colour class
+const TAG_STYLES: Record<string, { label: string; cls: string }> = {
+  purchase:      { label: "Purchase",      cls: "border-brass/30 text-brass/60"        },
+  movement:      { label: "Movement",      cls: "border-blue-400/30 text-blue-300/60"  },
+  stage_advance: { label: "Stage",         cls: "border-parchment/25 text-parchment/40"},
+  conflict:      { label: "Conflict",      cls: "border-blood/30 text-blood/60"        },
+  income:        { label: "Income",        cls: "border-green-400/30 text-green-300/60"},
+};
 
-// -- Main Component ---------------------------------------------------------
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const supabase = useMemo(() => supabaseBrowser(), []);
 
-  // campaignId is read directly from URL so nav links are always populated
-  const [campaignId] = useState<string>(() => bootstrapCampaignId());
+  const [uid, setUid]                     = useState<string>("");
+  const [campaignId, setCampaignId]       = useState<string>("");
+  const [campaign, setCampaign]           = useState<Campaign | null>(null);
+  const [state, setState]                 = useState<PlayerState | null>(null);
+  const [role, setRole]                   = useState<string>("player");
+  const [memberships, setMemberships]     = useState<Membership[]>([]);
+  const [currentRound, setCurrentRound]   = useState<Round | null>(null);
+  const [mapZones, setMapZones]           = useState<MapZone[]>([]);
+  const [loadingCampaign, setLoadingCampaign] = useState(false);
+  const [pageError, setPageError]         = useState<string | null>(null);
 
-  const [authChecked,     setAuthChecked]     = useState(false);
-  const [campaign,        setCampaign]        = useState<Campaign | null>(null);
-  const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
-  const [round,           setRound]           = useState<Round | null>(null);
-  const [role,            setRole]            = useState<string>("player");
-  // Bulletin now holds the 5 most recent public posts instead of just the latest
-  const [bulletinPosts,   setBulletinPosts]   = useState<Post[]>([]);
-  const [spends,          setSpends]          = useState<Spend[]>([]);
-  const [usedTokens,      setUsedTokens]      = useState<Set<string>>(new Set());
-  const [mapUrl,          setMapUrl]          = useState<string | null>(null);
-  const [sectors,         setSectors]         = useState<Sector[]>([]);
-  const [members,         setMembers]         = useState<Member[]>([]);
-  const [underdogChoice,  setUnderdogChoice]  = useState<UnderdogChoice | null>(null);
-  const [cart,            setCart]            = useState<Record<string, boolean>>({});
-  const [secretLocation,  setSecretLocation]  = useState<string | null>(null);
-  const [myUnits,         setMyUnits]         = useState<{ id: string; unit_type: string; zone_key: string; sector_key: string }[]>([]);
-  const [purchasing,      setPurchasing]      = useState(false);
-  const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
-  const [accepting,       setAccepting]       = useState(false);
-  const [uid,             setUid]             = useState<string>("");
+  // Underdog
+  const [underdogChoice, setUnderdogChoice] = useState<string>("+2 NIP");
 
-  // -- Toast state ----------------------------------------------------------
-  const [toasts,    setToasts]    = useState<Toast[]>([]);
+  // Mission preference
+  const [missionPref, setMissionPref]             = useState<string>("");
+  const [missionPrefSaved, setMissionPrefSaved]   = useState<string>("");
+  const [missionPrefStatus, setMissionPrefStatus] = useState<string>("");
+  const [submittingPref, setSubmittingPref]       = useState(false);
 
-  const addToast = useCallback((type: ToastType, title: string, body?: string) => {
-    const id = ++_toastId;
-    setToasts((prev) => [...prev, { id, type, title, body }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
-  }, []);
+  // Movement (legacy dashboard movement — kept for dashboard/movement stage)
+  const [moveToZone, setMoveToZone]         = useState<string>("");
+  const [moveToSector, setMoveToSector]     = useState<string>("A");
+  const [isDeepStrike, setIsDeepStrike]     = useState(false);
+  const [moveStatus, setMoveStatus]         = useState<string>("");
+  const [submittingMove, setSubmittingMove] = useState(false);
+  const [moveSubmitted, setMoveSubmitted]   = useState(false);
 
-  const dismissToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+  // War Bulletin
+  const [posts, setPosts]                     = useState<Post[]>([]);
+  const [bulletinFilter, setBulletinFilter]   = useState<"all" | "public" | "private">("all");
 
-  // -- Accept invites on load -----------------------------------------------
-  const acceptInvites = async (token: string) => {
+  // ── Accept pending invites ────────────────────────────────────────────────
+
+  const acceptInvites = async () => {
     try {
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({}),
-        }
-      );
-      if (!resp.ok) console.warn("[dashboard] accept-invites returned", resp.status);
-    } catch (e) {
-      console.warn("[dashboard] accept-invites failed:", e);
-    }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      await supabase.functions.invoke("accept-invites", { body: {} });
+    } catch { /* non-fatal */ }
   };
 
-  // -- Load all dashboard data ----------------------------------------------
-  const load = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { window.location.href = "/"; return; }
-    setAuthChecked(true);
-    setUid(user.id);
-    const cid = campaignId;
-    if (!cid) return;
+  // ── Load memberships ──────────────────────────────────────────────────────
 
-    // 1. Campaign basics
-    const { data: c } = await supabase
-      .from("campaigns")
-      .select("id,name,phase,round_number,instability,map_id,campaign_narrative")
-      .eq("id", cid).single();
-    if (!c) return;
-    setCampaign(c as Campaign);
+  const loadMemberships = useCallback(async (userId: string) => {
+    const { data: mem, error } = await supabase
+      .from("campaign_members")
+      .select("campaign_id, role, campaigns(name)")
+      .eq("user_id", userId);
+    if (error) { setPageError(error.message); return; }
 
-    // 2. My role
-    const { data: mem } = await supabase
-      .from("campaign_members").select("role")
-      .eq("campaign_id", cid).eq("user_id", user.id).single();
-    setRole(mem?.role ?? "player");
+    const rows = (mem ?? []).map(m => ({
+      campaign_id:   m.campaign_id,
+      role:          m.role,
+      campaign_name: (m.campaigns as any)?.name ?? m.campaign_id,
+    }));
+    setMemberships(rows);
 
-    // 3. My player state
-    const { data: ps } = await supabase
-      .from("player_state").select("nip,ncp,status,current_zone_key,current_sector_key")
-      .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
-    setPlayerState(ps ?? null);
+    const q = getQueryParam("campaign");
+    if (q)               setCampaignId(q);
+    else if (rows.length) setCampaignId(rows[0].campaign_id);
+  }, [supabase]);
 
-    // 3b. My secret location (real starting/current position, fog-of-war safe)
-    // current_zone_key in player_state is "unknown" until submit-move runs.
-    // secret_location is the authoritative source for the player's own position.
-    const { data: pss } = await supabase
-      .from("player_state_secret").select("secret_location")
-      .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
-    setSecretLocation(pss?.secret_location ?? null);
+  // ── Load campaign ─────────────────────────────────────────────────────────
 
-    // 4. Current round / stage
-    const { data: r } = await supabase
-      .from("rounds").select("stage")
-      .eq("campaign_id", cid).eq("round_number", c.round_number).maybeSingle();
-    setRound(r ?? null);
+  const loadCampaign = useCallback(async (userId: string, cid: string) => {
+    setLoadingCampaign(true);
+    setPageError(null);
+    try {
+      // Campaign row
+      const { data: c, error: ce } = await supabase
+        .from("campaigns")
+        .select("id,name,phase,round_number,instability,map_id")
+        .eq("id", cid)
+        .single();
+      if (ce) throw new Error(ce.message);
+      setCampaign(c as Campaign);
 
-    // 5. War bulletin — last 10 posts visible to this player:
-    //    • All public posts in the campaign
-    //    • Private posts where audience_user_id = this player
-    //    Merged, deduplicated, and sorted newest-first.
-    const [{ data: publicPosts }, { data: privatePosts }] = await Promise.all([
-      supabase.from("posts")
-        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
-        .eq("campaign_id", cid).eq("visibility", "public")
-        .order("created_at", { ascending: false }).limit(10),
-      supabase.from("posts")
-        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
-        .eq("campaign_id", cid).eq("visibility", "private").eq("audience_user_id", user.id)
-        .order("created_at", { ascending: false }).limit(10),
-    ]);
-    const allPosts = [...(publicPosts ?? []), ...(privatePosts ?? [])]
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 10);
-    setBulletinPosts(allPosts as Post[]);
+      // Membership / role
+      const { data: mem, error: me } = await supabase
+        .from("campaign_members")
+        .select("role")
+        .eq("campaign_id", cid)
+        .eq("user_id", userId)
+        .single();
+      if (me) throw new Error("You are not a member of this campaign.");
+      setRole(mem.role);
 
-    // 6. My spends this round
-    const { data: spendRows } = await supabase
-      .from("round_spends").select("spend_type,nip_spent")
-      .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
-    setSpends(spendRows ?? []);
+      // Current round stage
+      const { data: roundRow } = await supabase
+        .from("rounds")
+        .select("stage, round_number")
+        .eq("campaign_id", cid)
+        .eq("round_number", c.round_number)
+        .maybeSingle();
+      setCurrentRound(roundRow as Round | null);
 
-    // 6b. My moves this round — used to show which purchased tokens have been spent
-    const { data: moveRows } = await supabase
-      .from("moves").select("move_type")
-      .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
-    setUsedTokens(new Set((moveRows ?? []).map((m: { move_type: string }) => m.move_type)));
-
-    // 7. Map signed URL (if campaign has a map)
-    if (c.map_id) {
-      const { data: mapRow } = await supabase
-        .from("maps").select("bg_image_path,image_path")
-        .eq("id", c.map_id).single();
-      const path = mapRow?.bg_image_path ?? mapRow?.image_path;
-      if (path) {
-        const { data: urlData } = await supabase.storage
-          .from("campaign-maps").createSignedUrl(path, 3600);
-        setMapUrl(urlData?.signedUrl ?? null);
+      // Map zones (for movement selection)
+      if ((c as any).map_id) {
+        const { data: mapRow } = await supabase
+          .from("maps")
+          .select("map_json")
+          .eq("id", (c as any).map_id)
+          .maybeSingle();
+        const zones = (mapRow?.map_json as any)?.zones ?? [];
+        setMapZones(zones as MapZone[]);
       }
+
+      // Player state — upsert default if missing
+      const { data: existing, error: pe } = await supabase
+        .from("player_state")
+        .select("*")
+        .eq("campaign_id", cid)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (pe) throw new Error(pe.message);
+
+      let ps: PlayerState;
+      if (existing) {
+        ps = existing as PlayerState;
+      } else {
+        const { data: inserted, error: insErr } = await supabase
+          .from("player_state")
+          .insert({
+            campaign_id:        cid,
+            user_id:            userId,
+            nip:                STARTING_NIP,
+            ncp:                0,
+            current_zone_key:   "unknown",
+            current_sector_key: "unknown",
+            public_location:    "Unknown",
+            status:             "active",
+          })
+          .select("*")
+          .single();
+        if (insErr) throw new Error(insErr.message);
+        ps = inserted as PlayerState;
+      }
+      setState(ps);
+
+      // Check if player already moved this round
+      if (roundRow?.stage === "movement") {
+        const { data: existingMove } = await supabase
+          .from("moves")
+          .select("id,to_zone_key,to_sector_key")
+          .eq("campaign_id", cid)
+          .eq("user_id", userId)
+          .eq("round_number", c.round_number)
+          .maybeSingle();
+        if (existingMove) {
+          setMoveSubmitted(true);
+          setMoveToZone((existingMove as any).to_zone_key ?? "");
+          setMoveToSector((existingMove as any).to_sector_key ?? "A");
+        } else {
+          setMoveSubmitted(false);
+        }
+      }
+
+      // Load mission preference
+      if (roundRow) {
+        const { data: prefRow } = await supabase
+          .from("round_spends")
+          .select("spend_type, payload")
+          .eq("campaign_id", cid)
+          .eq("user_id", userId)
+          .eq("round_number", roundRow.round_number)
+          .eq("spend_type", "mission_pref")
+          .maybeSingle();
+        const saved = (prefRow as any)?.payload?.mission_pref ?? "";
+        setMissionPrefSaved(saved);
+        setMissionPref(saved);
+      }
+
+      // ── War Bulletin posts ──────────────────────────────────────────────────
+      // RLS grants: public posts (all members) + private posts where audience=uid
+      // Players only see what they're supposed to see — no extra filtering needed.
+      const { data: postRows } = await supabase
+        .from("posts")
+        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
+        .eq("campaign_id", cid)
+        .order("created_at", { ascending: false })
+        .limit(100);
+      setPosts((postRows ?? []) as Post[]);
+
+    } catch (e: any) {
+      setPageError(e?.message ?? String(e));
+    } finally {
+      setLoadingCampaign(false);
     }
+  }, [supabase]);
 
-    // 8. Sectors visible to this player (RLS: own + revealed_public).
-    //    Client-side filter applied as defense-in-depth — ensures no unrevealed
-    //    enemy sectors are ever displayed even if RLS were misconfigured.
-    const { data: sectorRows } = await supabase
-      .from("sectors").select("zone_key,sector_key,owner_user_id,revealed_public")
-      .eq("campaign_id", cid);
-    const visibleSectors = ((sectorRows ?? []) as Sector[]).filter(
-      (s) => s.owner_user_id === user.id || s.revealed_public
-    );
-    setSectors(visibleSectors);
-
-    // 9. Members (for territory display and commander names)
-    const { data: memberRows } = await supabase
-      .from("campaign_members").select("user_id,commander_name,faction_name,role")
-      .eq("campaign_id", cid);
-    setMembers((memberRows ?? []) as Member[]);
-
-    // 10. Pending underdog choice for this player
-    const { data: udChoice } = await supabase
-      .from("underdog_choices").select("id,chosen_option,status")
-      .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "pending")
-      .maybeSingle();
-    setUnderdogChoice(udChoice ?? null);
-
-    // 11. My active units (for Current Troop Locations display)
-    const { data: unitRows } = await supabase
-      .from("units").select("id,unit_type,zone_key,sector_key")
-      .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "active");
-    setMyUnits(unitRows ?? []);
-  };
+  // ── Effects ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) await acceptInvites(session.access_token);
-      await load();
+      const { data: userResp } = await supabase.auth.getUser();
+      const userId = userResp.user?.id;
+      if (!userId) return;
+      setUid(userId);
+      await acceptInvites();
+      await loadMemberships(userId);
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // -- Realtime: player_state NIP/NCP live updates --------------------------
-  // Subscribes once uid is available (set inside load()). Updates the
-  // playerState balance in-place so the Faction Resources card reflects
-  // changes from resolve-conflict and any other edge function immediately,
-  // without needing a page refresh.
   useEffect(() => {
-    if (!uid || !campaignId) return;
+    if (!campaignId) return;
+    (async () => {
+      const { data: userResp } = await supabase.auth.getUser();
+      const userId = userResp.user?.id;
+      if (!userId) return;
+      setUid(userId);
+      await loadCampaign(userId, campaignId);
+    })();
+  }, [campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Real-time stage + posts subscription ─────────────────────────────────
+
+  useEffect(() => {
+    if (!campaignId) return;
 
     const channel = supabase
-      .channel(`player_state_live_${uid}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "player_state",
-          filter: `user_id=eq.${uid}`,
-        },
-        (payload) => {
-          const updated = payload.new as any;
-          // Only apply if this update is for our campaign
-          if (updated.campaign_id !== campaignId) return;
-          setPlayerState((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  nip:    updated.nip    ?? prev.nip,
-                  ncp:    updated.ncp    ?? prev.ncp,
-                  status: updated.status ?? prev.status,
-                }
-              : null
-          );
-        }
-      )
+      .channel(`dashboard:${campaignId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rounds",
+          filter: `campaign_id=eq.${campaignId}` },
+        async () => {
+          const { data: userResp } = await supabase.auth.getUser();
+          const userId = userResp.user?.id;
+          if (userId) await loadCampaign(userId, campaignId);
+        })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "posts",
+          filter: `campaign_id=eq.${campaignId}` },
+        async () => {
+          // Reload posts when a new one is inserted (e.g. from an edge function)
+          const { data: postRows } = await supabase
+            .from("posts")
+            .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
+            .eq("campaign_id", campaignId)
+            .order("created_at", { ascending: false })
+            .limit(100);
+          setPosts((postRows ?? []) as Post[]);
+        })
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [uid, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { supabase.removeChannel(channel); };
+  }, [campaignId, supabase, loadCampaign]);
 
-  // -- Purchase cart --------------------------------------------------------
+  // ── Submit movement ───────────────────────────────────────────────────────
 
-  const toggleCart = (itemId: string) => {
-    setCart((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
-  };
-
-  const cartItems     = SHOP_ITEMS.filter((i) => cart[i.id]);
-  const cartTotal     = cartItems.reduce((sum, i) => sum + i.nip, 0);
-  const alreadyBought = new Set(spends.map((s) => s.spend_type));
-
-  const purchaseCart = async () => {
-    if (!cartItems.length || !campaign || !playerState) return;
-    if (cartTotal > playerState.nip) {
-      addToast("error", "Insufficient NIP", "Not enough NIP to complete this purchase.");
-      return;
-    }
-    setPurchasing(true);
+  const submitMove = async () => {
+    if (!campaignId || submittingMove || !moveToZone) return;
+    setSubmittingMove(true);
+    setMoveStatus("");
     try {
-      // Insert spend records
-      const { error: spendErr } = await supabase.from("round_spends").insert(
-        cartItems.map((i) => ({
-          campaign_id:  campaign.id,
-          round_number: campaign.round_number,
-          user_id:      uid,
-          spend_type:   i.id,
-          nip_spent:    i.nip,
-        }))
-      );
-      if (spendErr) throw spendErr;
-      // Deduct NIP from player state (player_state_update_self RLS allows this)
-      const { error: nipErr } = await supabase
-        .from("player_state")
-        .update({ nip: playerState.nip - cartTotal })
-        .eq("campaign_id", campaign.id)
-        .eq("user_id", uid);
-      if (nipErr) throw nipErr;
-      // Post a private bulletin entry for this player only
-      const itemNames = cartItems.map((i) => i.label).join(", ");
-      await supabase.from("posts").insert({
-        campaign_id:      campaign.id,
-        round_number:     campaign.round_number,
-        visibility:       "private",
-        audience_user_id: uid,
-        title:            `Resources Acquired — Round ${campaign.round_number}`,
-        body:             `Spent ${cartTotal} NIP to activate: ${itemNames}.`,
-        tags:             ["purchase"],
-        created_by:       uid,
+      const { data, error } = await supabase.functions.invoke("submit-move", {
+        body: {
+          campaign_id:    campaignId,
+          to_zone_key:    moveToZone,
+          to_sector_key:  moveToSector,
+          is_deep_strike: isDeepStrike,
+        },
       });
-      setCart({});
-      addToast("success", "Purchase complete", `${cartItems.length} ability${cartItems.length !== 1 ? "s" : ""} activated for this round.`);
-      await load();
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
+
+      setMoveSubmitted(true);
+      setMoveStatus("Move submitted.");
+      const { data: userResp } = await supabase.auth.getUser();
+      if (userResp.user) await loadCampaign(userResp.user.id, campaignId);
     } catch (e: any) {
-      addToast("error", "Purchase failed", e?.message ?? String(e));
+      setMoveStatus(`Error: ${e?.message ?? String(e)}`);
     } finally {
-      setPurchasing(false);
+      setSubmittingMove(false);
     }
   };
 
-  // -- Accept catchup choice ------------------------------------------------
+  // ── Mission preference submit ─────────────────────────────────────────────
 
-  const acceptCatchup = async () => {
-    if (!underdogChoice || !campaign) return;
-    setAccepting(true);
+  const submitMissionPref = async () => {
+    if (!campaignId || !currentRound || submittingPref) return;
+    if ((state?.nip ?? 0) < 1) return;
+    setSubmittingPref(true);
+    setMissionPrefStatus("");
     try {
-      // Record the choice
-      const { error: choiceErr } = await supabase
-        .from("underdog_choices")
-        .update({ chosen_option: catchupOption, chosen_at: new Date().toISOString(), status: "accepted" })
-        .eq("id", underdogChoice.id);
-      if (choiceErr) throw choiceErr;
-
-      // Apply the benefit directly where possible
-      if (catchupOption === "+2 NIP" && playerState) {
-        await supabase.from("player_state")
-          .update({ nip: playerState.nip + 2 })
-          .eq("campaign_id", campaign.id).eq("user_id", uid);
-      }
-      if (catchupOption === "Free Recon") {
-        // Insert a zero-cost recon spend for this round
-        await supabase.from("round_spends").insert({
-          campaign_id:  campaign.id,
-          round_number: campaign.round_number,
-          user_id:      uid,
-          spend_type:   "recon",
-          nip_spent:    0,
-          payload:      { source: "underdog_bonus" },
-        });
-      }
-      if (catchupOption === "Safe Passage (1 move cannot be intercepted)") {
-        await supabase.from("round_spends").insert({
-          campaign_id:  campaign.id,
-          round_number: campaign.round_number,
-          user_id:      uid,
-          spend_type:   "safe_passage",
-          nip_spent:    0,
-          payload:      { source: "underdog_bonus" },
-        });
-      }
-      // "+1 NCP next battle" is recorded in the choice and applied by lead manually.
-
-      setUnderdogChoice(null);
-      addToast("success", "Bonus accepted", `${catchupOption} has been applied to your faction.`);
-      await load();
+      const { data, error } = await supabase.functions.invoke("spend-nip", {
+        body: { campaign_id: campaignId, mode: "mission_pref", mission_pref: missionPref },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Unknown error");
+      setMissionPrefSaved(missionPref);
+      setMissionPrefStatus("Preference saved.");
+      const { data: userResp } = await supabase.auth.getUser();
+      if (userResp.user) await loadCampaign(userResp.user.id, campaignId);
     } catch (e: any) {
-      addToast("error", "Failed to accept", e?.message ?? String(e));
+      setMissionPrefStatus(`Error: ${e?.message ?? String(e)}`);
     } finally {
-      setAccepting(false);
+      setSubmittingPref(false);
     }
   };
 
-  // -- Derived state --------------------------------------------------------
+  // ── Recap prompt builder ──────────────────────────────────────────────────
 
-  const campaignStarted = round !== null;
-  const currentStage    = (round?.stage ?? null) as Stage | null;
-  const stageIndex      = currentStage ? STAGE_ORDER.indexOf(currentStage) : -1;
-  const inSpendPhase    = currentStage === "spend";
+  const makePublicRecapPrompt = async () => {
+    if (!campaign) return;
+    const { data: publicPosts } = await supabase
+      .from("posts")
+      .select("round_number,title,body,tags,created_at")
+      .eq("campaign_id", campaign.id)
+      .eq("visibility", "public")
+      .order("round_number", { ascending: false })
+      .limit(40);
 
-  // Build member colour index for territory display
-  const memberColour = useMemo(() => {
-    const map = new Map<string, string>();
-    members.forEach((m, i) => map.set(m.user_id, PLAYER_COLOURS[i % PLAYER_COLOURS.length]));
-    return map;
-  }, [members]);
+    const prompt = [
+      `Campaign: ${campaign.name}`,
+      `Phase: ${campaign.phase}`,
+      `Current Round: ${campaign.round_number}`,
+      `Halo Instability: ${campaign.instability}/10`,
+      "",
+      "PUBLIC CONTEXT (no secrets):",
+      JSON.stringify(publicPosts ?? [], null, 2),
+      "",
+      "Task:",
+      "1) Write a 300–600 word grimdark 'Halo War Bulletin' summarizing recent public events.",
+      "2) Include paranoia, disputed sightings, and ominous references to the Ashen King.",
+      "3) Suggest 3 bounties for next round tied to public tensions.",
+      "Tone: 40K grimdark, cosmic horror, military dispatch.",
+    ].join("\n");
 
-  // Group visible sectors by zone_key, then by owner
-  const territoryByZone = useMemo(() => {
-    const zones = new Map<string, Map<string, number>>();
-    for (const s of sectors) {
-      if (!s.owner_user_id) continue;
-      if (!zones.has(s.zone_key)) zones.set(s.zone_key, new Map());
-      const owners = zones.get(s.zone_key)!;
-      owners.set(s.owner_user_id, (owners.get(s.owner_user_id) ?? 0) + 1);
-    }
-    return zones;
-  }, [sectors]);
+    await navigator.clipboard.writeText(prompt);
+    alert("War Bulletin prompt copied to clipboard.");
+  };
 
-  const mySectorCount = sectors.filter((s) => s.owner_user_id === uid).length;
+  // ── Derived ───────────────────────────────────────────────────────────────
 
-  // Zone control: player with strictly more sectors than any other controls the zone.
-  // Rule: majority wins; if tied at the top (e.g. 2v2 in a 4-sector zone) = contested.
-  const zoneController = useMemo(() => {
-    const result = new Map<string, string | null>(); // zone_key -> uid or null (contested)
-    for (const [zoneKey, owners] of territoryByZone.entries()) {
-      const ranked = Array.from(owners.entries()).sort((a, b) => b[1] - a[1]);
-      if (ranked.length === 0) {
-        result.set(zoneKey, null);
-      } else if (ranked.length === 1 || ranked[0][1] > ranked[1][1]) {
-        result.set(zoneKey, ranked[0][0]); // strict winner
-      } else {
-        result.set(zoneKey, null); // tied — contested
-      }
-    }
-    return result;
-  }, [territoryByZone]);
+  const hasNip        = (state?.nip ?? 0) >= 1;
+  const isSpendStage  = currentRound?.stage === "spend";
+  const isMoveStage   = currentRound?.stage === "movement";
+  const canSubmitPref = hasNip && isSpendStage && !submittingPref;
+  const prefChanged   = missionPref !== missionPrefSaved;
+  const isLead        = role === "lead" || role === "admin";
 
-  const myZoneCount = Array.from(zoneController.values()).filter((uid_) => uid_ === uid).length;
+  const filteredPosts = posts.filter(
+    (p) => bulletinFilter === "all" || p.visibility === bulletinFilter
+  );
 
-  const memberById = useMemo(() => {
-    const m = new Map<string, Member>();
-    members.forEach((mem) => m.set(mem.user_id, mem));
-    return m;
-  }, [members]);
-
-  // -- Render ----------------------------------------------------------------
-
-  const isLeadOrAdmin = role === "lead" || role === "admin";
-
-  // Auth loading gate — show spinner until getUser() resolves
-  if (!authChecked) {
-    return (
-      <Frame title="Command Throne" currentPage="dashboard" hideNewCampaign>
-        <div className="flex items-center justify-center py-24">
-          <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
-        </div>
-      </Frame>
-    );
-  }
-
-  // No campaign in session (e.g. opened in a new tab without a ?campaign= link)
-  if (!campaignId) {
-    return (
-      <Frame title="Command Throne" currentPage="dashboard" hideNewCampaign>
-        <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
-          <p className="text-parchment/50">No campaign selected.</p>
-          <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">
-            Return to Home
-          </a>
-        </div>
-      </Frame>
-    );
-  }
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
+    <Frame
+      title="Command Throne"
+      campaignId={campaignId}
+      role={role}
+      currentPage="dashboard"
+    >
       <div className="space-y-6">
-        {/* ── Single Column - Campaign Narrative────────────────────────────── */}
-        {campaign?.campaign_narrative && (
-          <Card title="Campaign Narrative">
-            <p className="text-brass text-xs uppercase tracking-widest mb-2">
-              Strategic Briefing
+
+        {/* ── Campaign selector ── */}
+        <Card title="My Campaigns">
+          {memberships.length ? (
+            <select
+              className="w-full px-3 py-2 rounded bg-void border border-brass/30"
+              value={campaignId}
+              onChange={(e) => setCampaignId(e.target.value)}
+            >
+              {memberships.map(m => (
+                <option key={m.campaign_id} value={m.campaign_id}>
+                  {m.campaign_name} ({m.role})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-parchment/70">
+              No campaigns found. Create one in{" "}
+              <a className="underline text-brass" href="/campaigns">Campaigns</a>.
             </p>
-            <p className="text-parchment/70 leading-relaxed whitespace-pre-wrap">
-              {campaign.campaign_narrative}
-            </p>
+          )}
+        </Card>
+
+        {loadingCampaign && (
+          <p className="text-parchment/50 animate-pulse text-sm px-1">Loading…</p>
+        )}
+        {pageError && (
+          <Card title="Error">
+            <p className="text-blood text-sm">{pageError}</p>
           </Card>
         )}
 
+        {/* ── Player cards ── */}
+        {campaign && state && !loadingCampaign && (
+          <div className="grid md:grid-cols-2 gap-6">
 
-        {/* ── Main 2-column layout ─────────────────────────────────────────── */}
-        <div className="grid md:grid-cols-2 gap-6 items-start">
-
-          {/* ══ LEFT COLUMN: Your Status + War Bulletin ══ */}
-          <div className="space-y-6">
-
-          {/* Your Status */}
-          <Card title="Your Status">
-            {campaign && playerState ? (
-              <div className="space-y-3">
-                <div className="space-y-0.5">
-                  <p className="text-parchment font-semibold">{campaign.name}</p>
-                  <p className="text-parchment/50 text-xs">
-                    Phase {campaign.phase} &bull; Round {campaign.round_number} &bull; Instability {campaign.instability}/10
-                  </p>
-                  <p className="text-parchment/40 text-xs">Role: {role}</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-brass/10 text-sm">
-                  <div>
-                    <p className="text-parchment/40 text-xs">Status</p>
-                    <p className="text-parchment/80 capitalize">{playerState.status}</p>
-                    <p className="text-parchment/40 text-xs">
-                      {mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held
-                      {myZoneCount > 0 && (
-                        <span className="ml-1.5 text-brass">· {myZoneCount} zone{myZoneCount !== 1 ? "s" : ""} controlled</span>
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Current Troop Locations */}
-                <div className="pt-2 border-t border-brass/10">
-                  <p className="text-xs text-parchment/40 mb-2">Current Troop Locations</p>
-                  {myUnits.length > 0 ? (
-                    <div className="space-y-1.5">
-                      {myUnits.map((u) => (
-                        <div key={u.id} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded bg-void border border-brass/10">
-                          <span className={`text-xs px-1.5 py-0.5 rounded border font-mono uppercase shrink-0 ${
-                            u.unit_type === "scout"
-                              ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
-                              : "bg-brass/15 border-brass/40 text-brass"
-                          }`}>
-                            {u.unit_type === "scout" ? "◈ Scout" : "⬡ Occ."}
-                          </span>
-                          <span className="text-parchment/80 text-sm">{fmtKey(u.zone_key)}</span>
-                          <span className="text-parchment/40 text-xs font-mono">/ {u.sector_key.toUpperCase()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    (() => {
-                      // No active units yet — show starting location from secret_location or player_state
-                      const useSecret =
-                        (!playerState.current_zone_key || playerState.current_zone_key === "unknown") &&
-                        !!secretLocation;
-                      const [dispZone, dispSector] = useSecret
-                        ? secretLocation!.split(":")
-                        : [playerState.current_zone_key, playerState.current_sector_key];
-                      return (
-                        <div className="px-2.5 py-1.5 rounded bg-void border border-brass/10">
-                          <p className="text-parchment/40 text-xs mb-0.5">Starting Position</p>
-                          <span className="text-parchment/70 text-sm">{fmtKey(dispZone ?? "unknown")}</span>
-                          <span className="text-parchment/40 text-xs font-mono ml-2">/ {(dispSector ?? "—").toUpperCase()}</span>
-                        </div>
-                      );
-                    })()
+            {/* ── Status ── */}
+            <Card title="Your Status">
+              <div className="space-y-2 text-sm text-parchment/85">
+                <div><span className="text-brass">Campaign:</span> {campaign.name}</div>
+                <div>
+                  <span className="text-brass">Phase:</span> {campaign.phase}
+                  &nbsp;&nbsp;
+                  <span className="text-brass">Round:</span> {campaign.round_number}
+                  {currentRound && (
+                    <span className="ml-2 text-xs text-parchment/40 uppercase tracking-wider">
+                      [{currentRound.stage}]
+                    </span>
                   )}
                 </div>
-
-                {/* Stage strip */}
-                {campaignStarted && (
-                  <div className="pt-1 border-t border-brass/10">
-                    <p className="text-xs text-parchment/40 mb-1.5">Current Stage</p>
-                    <div className="flex gap-1 flex-wrap">
-                      {STAGE_ORDER.map((s, i) => (
-                        <span key={s} className={`px-2 py-0.5 rounded text-xs font-mono uppercase ${
-                          s === currentStage
-                            ? "bg-brass/30 border border-brass/60 text-brass font-bold"
-                            : i < stageIndex
-                              ? "bg-void border border-parchment/10 text-parchment/25 line-through"
-                              : "bg-void border border-parchment/10 text-parchment/35"
-                        }`}>{s}</span>
-                      ))}
-                    </div>
+                <div>
+                  <span className="text-brass">Instability:</span>{" "}
+                  <span className={
+                    campaign.instability >= 8 ? "text-blood font-semibold" :
+                    campaign.instability >= 4 ? "text-yellow-500/80" :
+                    "text-parchment/80"
+                  }>
+                    {campaign.instability}/10
+                  </span>
+                </div>
+                <div><span className="text-brass">Role:</span> {role}</div>
+                <div className="pt-2 border-t border-brass/20 space-y-1">
+                  <div>
+                    <span className="text-brass">NIP:</span> {state.nip}
+                    &nbsp;&nbsp;
+                    <span className="text-brass">NCP:</span> {state.ncp}
                   </div>
+                  <div>
+                    <span className="text-brass">Location:</span>{" "}
+                    {state.current_zone_key === "unknown"
+                      ? <span className="text-parchment/40 italic">Undeployed</span>
+                      : `${state.current_zone_key} – ${state.current_sector_key}`
+                    }
+                  </div>
+                  <div><span className="text-brass">Status:</span> {state.status}</div>
+                </div>
+              </div>
+            </Card>
+
+            {/* ── Mission Preference (spend stage, NIP-gated) ── */}
+            <Card title="Mission Preference">
+              <div className="space-y-3">
+                <p className="text-xs text-parchment/60 leading-relaxed">
+                  Spend 1 NIP during the Spend phase to influence which mission
+                  is assigned this round.
+                </p>
+
+                <div className={!hasNip || !isSpendStage ? "opacity-40 pointer-events-none select-none" : ""}>
+                  <select
+                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                    value={missionPref}
+                    onChange={(e) => setMissionPref(e.target.value)}
+                    disabled={!canSubmitPref}
+                  >
+                    {MISSION_PREF_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {!hasNip && (
+                  <p className="text-xs text-blood/70 italic">
+                    ☠ No NIP — mission preference locked this round.
+                  </p>
+                )}
+                {hasNip && !isSpendStage && (
+                  <p className="text-xs text-parchment/40 italic">
+                    Available during the Spend phase only.
+                    {currentRound ? ` Current: ${currentRound.stage}.` : ""}
+                  </p>
                 )}
 
-                {!campaignStarted && (
-                  <p className="text-parchment/30 text-xs italic">Campaign not yet started.</p>
+                <button
+                  onClick={submitMissionPref}
+                  disabled={!canSubmitPref || !prefChanged || !missionPref}
+                  className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold transition-colors disabled:opacity-40"
+                >
+                  {submittingPref ? "Submitting…" : missionPrefSaved ? "Update preference (1 NIP)" : "Submit preference (1 NIP)"}
+                </button>
+
+                {missionPrefSaved && (
+                  <p className="text-xs text-brass/70">
+                    ✓ {MISSION_PREF_OPTIONS.find(o => o.value === missionPrefSaved)?.label ?? missionPrefSaved}
+                  </p>
+                )}
+                {missionPrefStatus && (
+                  <p className={`text-xs ${missionPrefStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
+                    {missionPrefStatus}
+                  </p>
                 )}
               </div>
-            ) : (
-              <p className="text-parchment/40 text-sm italic">Loading status...</p>
-            )}
-          </Card>
+            </Card>
 
-          {/* War Bulletin — public + private posts for this player */}
+            {/* ── Movement (movement stage only) ── */}
+            {isMoveStage && (
+              <Card title="Submit Movement">
+                <div className="space-y-3">
+                  {moveSubmitted ? (
+                    <div className="space-y-2">
+                      <p className="text-sm text-brass">
+                        ✓ Move submitted — {moveToZone} / Sector {moveToSector}
+                      </p>
+                      <p className="text-xs text-parchment/45 italic">
+                        Conflicts will be detected when the Lead advances to the Conflicts stage.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-parchment/60 leading-relaxed">
+                        Choose your destination zone and sector. You may only move to an adjacent zone
+                        unless you pay {3} NIP for a Deep Strike to any zone.
+                      </p>
+
+                      <div>
+                        <label className="block text-xs text-parchment/60 mb-1">Destination zone</label>
+                        <select
+                          className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                          value={moveToZone}
+                          onChange={(e) => setMoveToZone(e.target.value)}
+                          disabled={submittingMove}
+                        >
+                          <option value="">— Select zone —</option>
+                          {mapZones.length > 0
+                            ? mapZones.map((z) => (
+                                <option key={z.key} value={z.key}>{z.name}</option>
+                              ))
+                            : [
+                                "vault_ruins","ash_wastes","halo_spire","sunken_manufactorum",
+                                "warp_scar_basin","obsidian_fields","signal_crater","xenos_forest",
+                              ].map(k => (
+                                <option key={k} value={k}>
+                                  {k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                                </option>
+                              ))
+                          }
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-parchment/60 mb-1">Sector</label>
+                        <div className="grid grid-cols-4 gap-2">
+                          {SECTORS.map((s) => (
+                            <button
+                              key={s}
+                              onClick={() => setMoveToSector(s)}
+                              disabled={submittingMove}
+                              className={`py-2 rounded border text-sm font-mono transition-colors disabled:opacity-40
+                                ${moveToSector === s
+                                  ? "border-brass bg-brass/20 text-brass"
+                                  : "border-brass/25 bg-void hover:border-brass/40 text-parchment/55"
+                                }`}
+                            >
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isDeepStrike}
+                          onChange={(e) => setIsDeepStrike(e.target.checked)}
+                          disabled={submittingMove}
+                        />
+                        <span className="text-sm">
+                          Deep Strike <span className="text-parchment/40 text-xs">(costs 3 NIP, reach any zone)</span>
+                        </span>
+                      </label>
+
+                      <button
+                        onClick={submitMove}
+                        disabled={submittingMove || !moveToZone}
+                        className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold transition-colors disabled:opacity-40"
+                      >
+                        {submittingMove ? "Submitting…" : "Submit Move"}
+                      </button>
+
+                      {moveStatus && (
+                        <p className={`text-xs ${moveStatus.startsWith("Error") ? "text-blood/70" : "text-parchment/50"}`}>
+                          {moveStatus}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {/* ── Catch-up / Underdog ── */}
+            <Card title="Catch-up Choice (Underdog)">
+              <p className="text-parchment/80 text-sm">
+                If flagged as <span className="text-brass">Underdog</span> this round, choose one benefit:
+              </p>
+              <select
+                className="mt-3 w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                value={underdogChoice}
+                onChange={(e) => setUnderdogChoice(e.target.value)}
+              >
+                <option>+2 NIP</option>
+                <option>+1 NCP next battle</option>
+                <option>Free Recon</option>
+                <option>Safe Passage (1 move cannot be intercepted)</option>
+              </select>
+              <p className="mt-2 text-parchment/50 text-xs">
+                Underdog status is assigned by the Lead at the start of each round.
+              </p>
+            </Card>
+
+          </div>
+        )}
+
+        {/* ── War Bulletin ─────────────────────────────────────────────────── */}
+        {/* Visible to all players: public posts + own private posts (RLS enforced). */}
+        {campaign && !loadingCampaign && (
           <Card title="War Bulletin">
-            {bulletinPosts.length > 0 ? (
-              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
-                {bulletinPosts.map((post, idx) => {
-                  const tags: string[]    = Array.isArray(post.tags) ? post.tags : [];
-                  const isPrivate         = post.visibility === "private";
+
+            {/* Filter bar */}
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <span className="text-xs text-parchment/40 uppercase tracking-widest font-semibold">Show:</span>
+              {(["all", "public", "private"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setBulletinFilter(f)}
+                  className={`px-3 py-1 rounded text-xs font-semibold border transition-colors ${
+                    bulletinFilter === f
+                      ? "bg-brass/25 border-brass/50 text-brass"
+                      : "bg-void border-parchment/15 text-parchment/50 hover:border-brass/30"
+                  }`}
+                >
+                  {f === "all" ? "All" : f === "public" ? "🌐 Public" : "🔒 Private"}
+                </button>
+              ))}
+              <span className="ml-auto text-xs text-parchment/25 font-mono">
+                {filteredPosts.length} post{filteredPosts.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
+            {/* Post list */}
+            {filteredPosts.length === 0 ? (
+              <p className="text-parchment/30 text-sm italic">
+                {posts.length === 0 ? "No dispatches yet." : "No posts match this filter."}
+              </p>
+            ) : (
+              <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
+                {filteredPosts.map((post) => {
+                  const isPrivate = post.visibility === "private";
+                  const tags: string[] = Array.isArray(post.tags) ? post.tags : [];
                   return (
                     <div
                       key={post.id}
-                      className={`${idx > 0 ? "pt-4 border-t border-brass/10" : ""} ${isPrivate ? "rounded px-2 py-1 bg-void/60 border border-parchment/8" : ""}`}
+                      className={`px-3 py-2.5 rounded border ${
+                        isPrivate
+                          ? "border-parchment/12 bg-parchment/3"
+                          : "border-brass/12 bg-brass/3"
+                      }`}
                     >
-                      {/* Title row */}
-                      <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
-                        <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
-                        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                          {isPrivate && (
-                            <span className="text-xs px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/35 font-mono">
-                              🔒 Private
-                            </span>
-                          )}
-                          <PostTagBadge tags={tags} />
+                      {/* Header row */}
+                      <div className="flex items-start justify-between gap-2 mb-1 flex-wrap">
+                        <p className="text-parchment/90 font-semibold text-sm flex-1 leading-snug">{post.title}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${
+                            isPrivate
+                              ? "border-parchment/15 text-parchment/35"
+                              : "border-brass/30 bg-brass/10 text-brass/60"
+                          }`}>
+                            {isPrivate ? "🔒" : "🌐"}
+                          </span>
                           <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
                         </div>
                       </div>
+
+                      {/* Tags */}
+                      {tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-1.5">
+                          {tags.map((t) => {
+                            const style = TAG_STYLES[t] ?? { label: t, cls: "border-parchment/15 text-parchment/30" };
+                            return (
+                              <span key={t} className={`text-xs px-1.5 py-0.5 rounded bg-void border font-mono ${style.cls}`}>
+                                {style.label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+
                       {/* Body */}
-                      <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
-                        {idx === 0
-                          ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
-                          : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
-                        }
+                      <p className="text-parchment/55 text-xs leading-relaxed">
+                        {post.body.length > 300 ? post.body.slice(0, 300) + "…" : post.body}
                       </p>
-                      <p className="text-parchment/25 text-xs mt-1">
-                        {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+
+                      {/* Timestamp */}
+                      <p className="text-parchment/20 text-xs mt-1.5 font-mono">
+                        {fmtTimestamp(post.created_at)}
                       </p>
                     </div>
                   );
                 })}
               </div>
-            ) : (
-              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
             )}
-          </Card>
 
-
-
-          </div>
-          {/* end LEFT COLUMN */}
-
-          {/* ══ RIGHT COLUMN: Faction Resources + Theatre Map ══ */}
-          <div className="space-y-6">
-
-          {/* Faction Resources */}
-          <Card title="Faction Resources">
-            {playerState ? (
-              <div className="space-y-4">
-
-                {/* NIP / NCP balances — updated live via realtime subscription */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="px-3 py-2.5 rounded bg-brass/10 border border-brass/25 text-center">
-                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NIP</p>
-                    <p className="text-2xl font-bold text-brass">{playerState.nip}</p>
-                    <p className="text-xs text-parchment/30">Influence Points</p>
-                  </div>
-                  <div className="px-3 py-2.5 rounded bg-parchment/5 border border-parchment/15 text-center">
-                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NCP</p>
-                    <p className="text-2xl font-bold text-parchment/80">{playerState.ncp}</p>
-                    <p className="text-xs text-parchment/30">Campaign Points</p>
-                  </div>
-                </div>
-
-                {/* Purchased abilities this round -- always visible after spend */}
-                {spends.length > 0 && (
-                  <div>
-                    <p className="text-xs text-parchment/40 mb-1.5 font-semibold uppercase tracking-widest">
-                      Round {campaign?.round_number} Purchases
-                    </p>
-                    <div className="space-y-1">
-                      {spends.map((s, i) => {
-                        const item = SHOP_ITEMS.find((x) => x.id === s.spend_type);
-                        // Tokens that are consumed by a move get a used/available status.
-                        // safe_passage has no move_type counterpart so no status shown.
-                        const isTrackable = s.spend_type === "deep_strike" || s.spend_type === "recon";
-                        const wasUsed     = isTrackable && usedTokens.has(s.spend_type);
-                        return (
-                          <div key={i} className="flex items-center justify-between px-2.5 py-1.5 rounded bg-brass/5 border border-brass/15 text-sm">
-                            <span className="text-parchment/75">{item?.label ?? fmtKey(s.spend_type)}</span>
-                            <div className="flex items-center gap-2">
-                              {isTrackable && (
-                                wasUsed
-                                  ? <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/30">Used</span>
-                                  : <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-brass/35 bg-brass/10 text-brass/70">Available</span>
-                              )}
-                              {s.nip_spent > 0
-                                ? <span className="text-parchment/35 text-xs font-mono">{s.nip_spent} NIP</span>
-                                : <span className="text-brass/60 text-xs font-mono">Free</span>
-                              }
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Shopping cart -- spend phase only */}
-                {inSpendPhase && (
-                  <div className="border-t border-brass/10 pt-3 space-y-3">
-                    <p className="text-xs text-parchment/40 font-semibold uppercase tracking-widest">Spend NIP</p>
-                    <div className="space-y-2">
-                      {SHOP_ITEMS.filter((i) => !alreadyBought.has(i.id)).map((item) => {
-                        const inCart    = !!cart[item.id];
-                        const canAfford = cart[item.id]
-                          ? true
-                          : playerState.nip - cartTotal >= item.nip;
-                        return (
-                          <div key={item.id}
-                            className={`flex items-start gap-3 px-3 py-2 rounded border transition-colors ${
-                              inCart
-                                ? "bg-brass/15 border-brass/50"
-                                : "bg-void border-brass/15 hover:border-brass/30"
-                            }`}>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-baseline gap-2">
-                                <p className="text-parchment/85 text-sm font-semibold">{item.label}</p>
-                                <p className="text-brass/80 text-xs font-mono">{item.nip} NIP</p>
-                              </div>
-                              <p className="text-parchment/40 text-xs mt-0.5">{item.desc}</p>
-                            </div>
-                            <button
-                              onClick={() => toggleCart(item.id)}
-                              disabled={!canAfford && !inCart}
-                              className={`shrink-0 px-3 py-1 rounded text-xs font-semibold border transition-colors disabled:opacity-30 ${
-                                inCart
-                                  ? "bg-brass/30 border-brass/60 text-brass"
-                                  : "bg-void border-parchment/20 hover:border-brass/40 text-parchment/60 hover:text-parchment/90"
-                              }`}>
-                              {inCart ? "Remove" : "Add"}
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Cart total + checkout */}
-                    {cartItems.length > 0 && (
-                      <div className="pt-2 border-t border-brass/15 space-y-2">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-parchment/50">
-                            {cartItems.length} item{cartItems.length !== 1 ? "s" : ""} selected
-                          </span>
-                          <span className="text-brass font-bold font-mono">{cartTotal} NIP</span>
-                        </div>
-                        {cartTotal > playerState.nip && (
-                          <p className="text-blood/70 text-xs">Insufficient NIP ({playerState.nip} available).</p>
-                        )}
-                        <button
-                          onClick={purchaseCart}
-                          disabled={purchasing || cartTotal > playerState.nip}
-                          className="w-full px-4 py-2 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
-                          {purchasing ? "Purchasing..." : `Spend ${cartTotal} NIP`}
-                        </button>
-                      </div>
-                    )}
-
-                    {SHOP_ITEMS.every((i) => alreadyBought.has(i.id)) && (
-                      <p className="text-parchment/30 text-xs italic">All available abilities purchased this round.</p>
-                    )}
-                  </div>
-                )}
-
-                {!inSpendPhase && spends.length === 0 && (
-                  <p className="text-parchment/25 text-xs italic">No purchases this round.</p>
-                )}
-
-              </div>
-            ) : (
-              <p className="text-parchment/40 text-sm italic">Loading resources...</p>
-            )}
-          </Card>
-
-          <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
-            {mapUrl ? (
-              <div className="space-y-3">
-                <a href="/map" onClick={(e) => { e.preventDefault(); import("@/lib/campaignSession").then(m => { m.setCampaignSession(campaignId); window.location.href = "/map"; }); }} title="Open Tactical Hololith" className="cursor-pointer">
-                  <img
-                    src={mapUrl}
-                    alt="Campaign theatre map"
-                    className="w-full rounded border border-brass/20 object-cover hover:border-brass/50 transition-colors cursor-pointer"
-                    style={{ maxHeight: "260px" }}
-                  />
-                </a>
-
-                {/* Territory legend */}
-                {territoryByZone.size > 0 && (
-                  <div>
-                    <p className="text-xs text-parchment/35 mb-2 uppercase tracking-widest">Visible Territory</p>
-                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {Array.from(territoryByZone.entries()).map(([zoneKey, owners]) => {
-                        const controller = zoneController.get(zoneKey) ?? null;
-                        const contested  = Array.from(owners.values()).filter(c => c > 0).length > 1
-                          && controller === null;
-                        return (
-                          <div key={zoneKey} className="flex items-start gap-2">
-                            <div className="w-32 shrink-0 pt-0.5">
-                              <span className="text-parchment/40 text-xs font-mono">{fmtKey(zoneKey)}</span>
-                              {controller !== null && (
-                                <span className={`block text-xs font-mono ${controller === uid ? "text-brass" : "text-parchment/30"}`}>
-                                  {controller === uid ? "⚑ Controlled" : "⚑ Enemy held"}
-                                </span>
-                              )}
-                              {contested && (
-                                <span className="block text-xs font-mono text-orange-400/70">⚔ Contested</span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              {Array.from(owners.entries()).map(([ownerId, count]) => {
-                                const m      = memberById.get(ownerId);
-                                const colour = memberColour.get(ownerId) ?? PLAYER_COLOURS[0];
-                                return (
-                                  <span key={ownerId}
-                                    className={`px-1.5 py-0.5 rounded border text-xs font-mono ${colour}`}>
-                                    {m?.commander_name ?? "Unknown"} ×{count}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-              </div>
-            ) : campaign?.map_id ? (
-              <p className="text-parchment/40 text-sm italic">Loading map...</p>
-            ) : (
-              <p className="text-parchment/30 text-sm italic">
-                No map generated yet. The theatre of war awaits its cartographer.
-              </p>
-            )}
-          </Card>
-
-          </div>
-          {/* end RIGHT COLUMN */}
-
-        </div>
-        {/* end main 2-column layout */}
-
-        {/* ── Row 3: Catchup Offer (conditional — underdog only) ───────── */}
-        {underdogChoice && (
-          <Card title="Catch-up Offer — Underdog Bonus">
-            <div className="space-y-4">
-              <p className="text-parchment/70 text-sm leading-relaxed">
-                The campaign lead has identified you as the current underdog. Choose one benefit
-                to apply before the next round begins.
-              </p>
-              <div className="space-y-2">
-                <p className="text-xs text-parchment/40 uppercase tracking-widest">Select your benefit</p>
-                <select
-                  className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
-                  value={catchupOption}
-                  onChange={(e) => setCatchupOption(e.target.value)}
+            {/* Lead-only: copy War Bulletin prompt */}
+            {isLead && (
+              <div className="mt-4 pt-4 border-t border-brass/15">
+                <p className="text-xs text-parchment/40 mb-2">
+                  Generate an AI prompt summarising public campaign events for the current round.
+                </p>
+                <button
+                  className="w-full px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm transition-colors"
+                  onClick={makePublicRecapPrompt}
                 >
-                  {CATCHUP_OPTIONS.map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-                {catchupOption === "+1 NCP next battle" && (
-                  <p className="text-xs text-parchment/35 italic">
-                    This bonus is recorded and applied by the campaign lead at your next conflict.
-                  </p>
-                )}
+                  ✦ Copy War Bulletin prompt
+                </button>
               </div>
-              <button
-                onClick={acceptCatchup}
-                disabled={accepting}
-                className="w-full px-4 py-2.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
-                {accepting ? "Accepting..." : "Accept Bonus"}
-              </button>
-            </div>
+            )}
+
           </Card>
         )}
 
       </div>
-
-      {/* ── Toast notifications ─────────────────────────────────────────── */}
-      <ToastContainer toasts={toasts} dismiss={dismissToast} />
-
     </Frame>
   );
 }

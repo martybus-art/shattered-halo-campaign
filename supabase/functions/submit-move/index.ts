@@ -21,6 +21,9 @@
 //     the ownership change.
 //
 // changelog:
+//   2026-03-12 -- Added movement log post (private, tag:"movement") inserted
+//                 after every successful move upsert. Visible only to the moving
+//                 player in their War Bulletin. Includes conflict/capture notes.
 //   2026-03-08 -- BUG FIX: conflicts insert now uses player_a / player_b
 //                 (correct column names). Previously used attacker_user_id /
 //                 defender_user_id / metadata which don't exist — conflicts
@@ -352,6 +355,33 @@ serve(async (req) => {
         spend_json:      { deep_strike: hasDeepStrike, defensive_bonus: defensiveBonus },
       });
     }
+
+    // ── 9b. Post private movement log entry to War Bulletin ──────────────────
+    // Private to the moving player — tagged ["movement"] so it can be filtered.
+    // Format: "Scout moved: Halo Spire / C → Vault Ruins / B [deep_strike]"
+    const fmtZone = (k: string) =>
+      k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const moveLabel = moveType === "deep_strike"
+      ? "Deep Strike"
+      : moveType === "recon"
+      ? "Recon"
+      : "Normal move";
+    const unitLabel = unit.unit_type === "scout" ? "Scout" : "Occupation";
+    const conflictNote = conflictId    ? " — ⚔️ Conflict initiated!"   : "";
+    const captureNote  = autoTransfer  ? " — Territory captured!"       : "";
+
+    const moveSuffix = [conflictNote, captureNote].join("").trim();
+
+    await admin.from("posts").insert({
+      campaign_id,
+      round_number:     camp.round_number,
+      visibility:       "private",
+      audience_user_id: uid,
+      created_by:       uid,
+      title:            `Movement Order — Round ${camp.round_number}`,
+      body:             `${unitLabel} unit: ${fmtZone(unit.zone_key)} / ${unit.sector_key.toUpperCase()} → ${fmtZone(to_zone_key)} / ${to_sector_key.toUpperCase()} [${moveLabel}]${moveSuffix}`,
+      tags:             ["movement"],
+    });
 
     // ── 10. Update unit position ──────────────────────────────────────────────
     await admin.from("units")

@@ -3,6 +3,11 @@
 // Lead Player Dashboard -- campaign controls for lead/admin role.
 //
 // changelog:
+//   2026-03-12 -- advanceStage() replaces callFn("advance-round") for the
+//                 Advance Stage button. After advancing, inserts a public
+//                 War Bulletin post tagged ["stage_advance"] with the stage
+//                 transition and a DD/MM/YYYY HH:MM timestamp. Bulletin
+//                 timestamps updated to 24hr DD/MM/YYYY HH:MM format.
 //   2026-03-07 -- Added Distribute Income panel (results stage, economy-gated).
 //                 Shows dry-run preview table (commander, sectors, base income,
 //                 underdog bonus, decay, NIP before/after) before committing.
@@ -769,6 +774,62 @@ export default function LeadControls() {
     await load(campaignId);
   };
 
+  // Advance stage with a timestamped public War Bulletin post.
+  // Captures current stage label BEFORE advancing so we can log "→ <newStage>".
+  // The new stage is read from the reloaded data after callFn completes.
+  const advanceStage = async () => {
+    const stageBefore = round?.stage ?? "unknown";
+    const token = await getToken();
+    if (!token) return;
+
+    // Call advance-round edge function
+    const { data, error } = await supabase.functions.invoke("advance-round", {
+      body: { campaign_id: campaignId },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (error) { setResultModal({ open: true, tone: "blood", title: "Action Failed", message: error.message }); return; }
+    if (!data?.ok) { setResultModal({ open: true, tone: "blood", title: "Action Failed", message: data?.error || "Failed" }); return; }
+
+    // Reload to get the new stage
+    await load(campaignId);
+
+    // Read updated round state (load() sets `round` but we need to query directly
+    // since setState is async — reload from DB)
+    const { data: freshRound } = await supabase
+      .from("rounds")
+      .select("stage, round_number")
+      .eq("campaign_id", campaignId)
+      .order("round_number", { ascending: false })
+      .limit(1)
+      .single();
+
+    const stageAfter   = freshRound?.stage ?? "unknown";
+    const roundNumber  = freshRound?.round_number ?? campaign?.round_number ?? "?";
+
+    // Format timestamp: DD/MM/YYYY HH:MM (local time)
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const ts  = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+    // Capitalise stage name for display
+    const fmtStage = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+    // Insert public bulletin post — all players see this
+    await supabase.from("posts").insert({
+      campaign_id:  campaignId,
+      round_number: roundNumber,
+      visibility:   "public",
+      created_by:   (await supabase.auth.getUser()).data.user?.id ?? null,
+      title:        `Stage Advanced — Round ${roundNumber}`,
+      body:         `The Lead has advanced the campaign stage from ${fmtStage(stageBefore)} to ${fmtStage(stageAfter)}.\n\n${ts}`,
+      tags:         ["stage_advance"],
+    });
+
+    // Reload bulletin
+    await load(campaignId);
+    setResultModal({ open: true, tone: "brass", title: "Stage Advanced", message: `Moved from ${fmtStage(stageBefore)} → ${fmtStage(stageAfter)}.` });
+  };
+
   const startCampaign = async () => {
     setStartStatus("Starting campaign...");
     const token = await getToken();
@@ -1030,7 +1091,7 @@ export default function LeadControls() {
 
                     {/* Advance Stage -- blocked until started */}
                     <div>
-                      <button onClick={() => callFn("advance-round")} disabled={!campaignStarted}
+                      <button onClick={advanceStage} disabled={!campaignStarted}
                         className="w-full px-4 py-2.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40 text-sm transition-colors">
                         Advance Stage
                       </button>
@@ -1325,7 +1386,11 @@ export default function LeadControls() {
                           </p>
                           <div className="flex items-center justify-between mt-2">
                             <p className="text-parchment/20 text-xs">
-                              {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                              {(() => {
+                                const d = new Date(post.created_at);
+                                const p = (n: number) => String(n).padStart(2, "0");
+                                return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+                              })()}
                             </p>
                             {isPrivate && (
                               <button
