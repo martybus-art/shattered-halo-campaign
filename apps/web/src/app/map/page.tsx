@@ -653,6 +653,11 @@ export default function MapPage() {
   const [submitting,    setSubmitting]    = useState(false);
   const [moveResult,    setMoveResult]    = useState<string | null>(null);
 
+  // Clicked sector state — always active regardless of phase; drives the info
+  // panel shown when a player clicks any sector on the SVG overlay.
+  const [clickedZone,   setClickedZone]   = useState<string>("");
+  const [clickedSector, setClickedSector] = useState<string>("");
+
   // Deploy unit state
   const [deployType,    setDeployType]    = useState<"scout" | "occupation">("scout");
   const [deployZone,    setDeployZone]    = useState<string>("");
@@ -805,7 +810,12 @@ export default function MapPage() {
   const zoneNames = useMemo(() => effectiveZones.map((z) => z.name), [effectiveZones]); 
 
   // Combined sector ID for CampaignMapOverlay ("zoneKey:sectorKey" format)
-  const selectedSectorId = toZone && toSector ? `${toZone}:${toSector}` : null;
+  // Movement target takes priority; falls back to last clicked sector for info panel.
+  const selectedSectorId = toZone && toSector
+    ? `${toZone}:${toSector}`
+    : clickedZone && clickedSector
+    ? `${clickedZone}:${clickedSector}`
+    : null;
 
   const memberById = useMemo(() => {
     const m = new Map<string, Member>();
@@ -915,6 +925,19 @@ export default function MapPage() {
     if (!myUnits.some((u) => u.zone_key === toZone && u.sector_key === toSector)) return null;
     return sectorAt(toZone, toSector) ?? null;
   }, [toZone, toSector, myUnits, sectors]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Info shown when a player clicks any sector on the overlay (always active).
+  // Shows what the current player can see: own sectors show full intel,
+  // enemy revealed sectors show owner + fortification, fogged sectors show nothing.
+  const clickedSectorInfo = useMemo(() => {
+    if (!clickedZone || !clickedSector) return null;
+    const s = sectorAt(clickedZone, clickedSector);
+    const myUnit = myUnits.find((u) => u.zone_key === clickedZone && u.sector_key === clickedSector);
+    const isMine = s?.owner_user_id === uid;
+    const isRevealed = s?.revealed_public || isMine || !!myUnit;
+    const owner = ownerLabel(s?.owner_user_id ?? null);
+    return { s, myUnit, isMine, isRevealed, owner };
+  }, [clickedZone, clickedSector, sectors, myUnits, uid, memberById]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1289,6 +1312,10 @@ export default function MapPage() {
                 currentUserId={uid || null}
                 selectedSectorId={selectedSectorId}
                 onSectorClick={(zone, sector) => {
+                  // Always record click for info panel display
+                  setClickedZone(zone);
+                  setClickedSector(sector);
+                  // Also set movement target when a unit is selected and can move
                   if (canMove && selectedUnit) {
                     setToZone(zone);
                     setToSector(sector);
@@ -1317,6 +1344,84 @@ export default function MapPage() {
                     />
                   );
                 })}
+
+              {/* ── Sector click info panel ── */}
+              {/* Shows whenever any sector is clicked — always interactive regardless of phase */}
+              {clickedSectorInfo && (
+                <div className="rounded border border-brass/20 bg-void/80 p-4 space-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <p className="text-brass/60 text-xs uppercase tracking-widest font-mono">
+                      ◈ {fmtKey(clickedZone)} / {clickedSector.toUpperCase()}
+                    </p>
+                    <button
+                      onClick={() => { setClickedZone(""); setClickedSector(""); }}
+                      className="text-parchment/25 hover:text-parchment/60 text-xs px-1 transition-colors">
+                      ✕
+                    </button>
+                  </div>
+
+                  {!clickedSectorInfo.isRevealed ? (
+                    /* Fogged — player has no units here and it's not revealed */
+                    <p className="text-parchment/30 italic text-xs">
+                      Unknown. Deploy a scout to gather intel on this sector.
+                    </p>
+                  ) : (
+                    <>
+                      {/* Ownership */}
+                      {clickedSectorInfo.owner ? (
+                        <div className={`flex items-center gap-2 px-3 py-1.5 rounded border ${
+                          clickedSectorInfo.isMine
+                            ? "border-brass/30 bg-brass/10 text-brass/80"
+                            : "border-blood/30 bg-blood/10 text-blood/80"
+                        }`}>
+                          <span className="font-semibold">
+                            {clickedSectorInfo.isMine ? "Held by you" : `Held by ${clickedSectorInfo.owner.label}`}
+                          </span>
+                          {clickedSectorInfo.s?.fortified && (
+                            <span className="ml-auto text-xs border border-blood/30 px-1.5 py-0.5 rounded font-mono">⬡ Fortified</span>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-parchment/45 text-xs italic px-1">Uncontrolled sector.</p>
+                      )}
+
+                      {/* Units present */}
+                      {clickedSectorInfo.myUnit && (
+                        <div className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded border ${
+                          clickedSectorInfo.myUnit.unit_type === "scout"
+                            ? "border-blue-400/30 bg-blue-500/10 text-blue-300"
+                            : "border-brass/30 bg-brass/10 text-brass/80"
+                        }`}>
+                          <span className="uppercase font-mono">{clickedSectorInfo.myUnit.unit_type}</span>
+                          <span className="text-parchment/40">unit present</span>
+                          <span className="ml-auto font-mono text-parchment/30">R{clickedSectorInfo.myUnit.round_deployed}</span>
+                        </div>
+                      )}
+
+                      {/* Tags / fortification intel (only if I have a unit here) */}
+                      {clickedSectorInfo.myUnit && clickedSectorInfo.s && (
+                        <SectorIntelPanel
+                          zoneKey={clickedZone}
+                          sectorKey={clickedSector}
+                          sector={clickedSectorInfo.s}
+                        />
+                      )}
+
+                      {/* Movement hint */}
+                      {canMove && selectedUnit && (
+                        <p className="text-green-400/60 text-xs italic px-1">
+                          Click selects this sector as movement target.
+                        </p>
+                      )}
+                      {canMove && !selectedUnit && (
+                        <p className="text-parchment/30 text-xs italic px-1">
+                          Select a unit in My Units to issue a movement order.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
