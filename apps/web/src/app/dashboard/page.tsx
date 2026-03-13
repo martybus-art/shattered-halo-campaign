@@ -3,6 +3,10 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-13 — FEATURE: War Bulletin filter bar (All / 🌐 Public / 🔒 Private)
+//                matching lead/page.tsx design. bulletinFilter state added.
+//                PostTagBadge extended with "movement" (blue) and "stage_advance"
+//                (grey) tags. Timestamps updated to DD/MM/YYYY HH:MM 24hr format.
 //   2026-03-09 — FEATURE: War Bulletin now shows private + public posts.
 //                Private posts (🔒) are visible only to audience_user_id.
 //                Public posts visible to all members. Merged & sorted newest-first.
@@ -243,6 +247,20 @@ function PostTagBadge({ tags }: { tags: string[] }) {
       </span>
     );
   }
+  if (tags.includes("movement")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blue-400/30 bg-blue-500/8 text-blue-300/60 font-mono uppercase tracking-wider">
+        ➤ Movement
+      </span>
+    );
+  }
+  if (tags.includes("stage_advance")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
+        ◉ Stage
+      </span>
+    );
+  }
   if (tags.includes("phase")) {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/30 bg-blood/8 text-blood/60 font-mono uppercase tracking-wider">
@@ -266,8 +284,9 @@ export default function Dashboard() {
   const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
   const [round,           setRound]           = useState<Round | null>(null);
   const [role,            setRole]            = useState<string>("player");
-  // Bulletin now holds the 5 most recent public posts instead of just the latest
+  // Bulletin now holds the 10 most recent posts (public + own private) for this player
   const [bulletinPosts,   setBulletinPosts]   = useState<Post[]>([]);
+  const [bulletinFilter,  setBulletinFilter]  = useState<"all" | "public" | "private">("all");
   const [spends,          setSpends]          = useState<Spend[]>([]);
   const [usedTokens,      setUsedTokens]      = useState<Set<string>>(new Set());
   const [mapUrl,          setMapUrl]          = useState<string | null>(null);
@@ -790,46 +809,83 @@ export default function Dashboard() {
 
           {/* War Bulletin — public + private posts for this player */}
           <Card title="War Bulletin">
-            {bulletinPosts.length > 0 ? (
-              <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
-                {bulletinPosts.map((post, idx) => {
-                  const tags: string[]    = Array.isArray(post.tags) ? post.tags : [];
-                  const isPrivate         = post.visibility === "private";
-                  return (
-                    <div
-                      key={post.id}
-                      className={`${idx > 0 ? "pt-4 border-t border-brass/10" : ""} ${isPrivate ? "rounded px-2 py-1 bg-void/60 border border-parchment/8" : ""}`}
-                    >
-                      {/* Title row */}
-                      <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
-                        <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
-                        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                          {isPrivate && (
-                            <span className="text-xs px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/35 font-mono">
-                              🔒 Private
-                            </span>
-                          )}
-                          <PostTagBadge tags={tags} />
-                          <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
+            {/* Filter bar — matches lead/page.tsx bulletin design */}
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <span className="text-xs text-parchment/40 uppercase tracking-widest font-semibold">Show:</span>
+              {(["all", "public", "private"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setBulletinFilter(f)}
+                  className={`px-3 py-1 rounded text-xs font-semibold border transition-colors ${
+                    bulletinFilter === f
+                      ? "bg-brass/25 border-brass/50 text-brass"
+                      : "bg-void border-parchment/15 text-parchment/50 hover:border-brass/30"
+                  }`}
+                >
+                  {f === "all" ? "All" : f === "public" ? "🌐 Public" : "🔒 Private"}
+                </button>
+              ))}
+              <span className="ml-auto text-xs text-parchment/25 font-mono">
+                {bulletinPosts.filter((p) => bulletinFilter === "all" || p.visibility === bulletinFilter).length} post(s)
+              </span>
+            </div>
+
+            {(() => {
+              const filtered = bulletinPosts.filter(
+                (p) => bulletinFilter === "all" || p.visibility === bulletinFilter
+              );
+              if (filtered.length === 0) {
+                return (
+                  <p className="text-parchment/30 text-sm italic">
+                    {bulletinPosts.length === 0
+                      ? "No bulletins posted yet. The silence of the void is deafening."
+                      : "No posts match this filter."}
+                  </p>
+                );
+              }
+              return (
+                <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
+                  {filtered.map((post, idx) => {
+                    const tags: string[]    = Array.isArray(post.tags) ? post.tags : [];
+                    const isPrivate         = post.visibility === "private";
+                    return (
+                      <div
+                        key={post.id}
+                        className={`${idx > 0 ? "pt-4 border-t border-brass/10" : ""} ${isPrivate ? "rounded px-2 py-1 bg-void/60 border border-parchment/8" : ""}`}
+                      >
+                        {/* Title row */}
+                        <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
+                          <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
+                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                            {isPrivate && (
+                              <span className="text-xs px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/35 font-mono">
+                                🔒 Private
+                              </span>
+                            )}
+                            <PostTagBadge tags={tags} />
+                            <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
+                          </div>
                         </div>
+                        {/* Body */}
+                        <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
+                          {idx === 0
+                            ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
+                            : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
+                          }
+                        </p>
+                        <p className="text-parchment/25 text-xs mt-1">
+                          {(() => {
+                            const d = new Date(post.created_at);
+                            const p = (n: number) => String(n).padStart(2, "0");
+                            return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+                          })()}
+                        </p>
                       </div>
-                      {/* Body */}
-                      <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
-                        {idx === 0
-                          ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
-                          : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
-                        }
-                      </p>
-                      <p className="text-parchment/25 text-xs mt-1">
-                        {new Date(post.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-parchment/30 text-sm italic">No bulletins posted yet. The silence of the void is deafening.</p>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </Card>
 
 
