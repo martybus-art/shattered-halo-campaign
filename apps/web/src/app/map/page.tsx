@@ -2,6 +2,11 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-14 — UPDATE: isOverlayLayout extended to include "continent" and
+//                "void_ship" layouts. normaliseLayout now also maps "ship_line"
+//                -> "void_ship" for legacy DB rows. Both layouts use the full
+//                2-column grid (action cards left, overlay map right) and pass
+//                through to CampaignMapOverlay with isLead / campaignId props.
 //   2026-03-11 — FIX: Normalise "spoke" -> "spokes" at load time. DB may store
 //                either spelling; code and isOverlayLayout check require "spokes".
 //   2026-03-11 — LAYOUT: For ring/spokes layouts, restructured to 2-column grid:
@@ -691,8 +696,13 @@ export default function MapPage() {
       setRoundNumber(rn);
       const ro = ((c as any)?.rules_overrides ?? {}) as Record<string, any>;
       setFogEnabled((ro.fog as any)?.enabled !== false);
-      // Normalise "spoke" -> "spokes" — DB may have been seeded with either spelling.
-      const normaliseLayout = (l: string) => l === "spoke" ? "spokes" : l;
+      // Normalise layout spelling — DB may store older variants.
+      // "spoke" -> "spokes", "ship_line" -> "void_ship" (legacy alias)
+      const normaliseLayout = (l: string): string => {
+        if (l === "spoke")     return "spokes";
+        if (l === "ship_line") return "void_ship";
+        return l;
+      };
       setMapLayout(normaliseLayout((ro.map_layout as string | undefined) ?? "ring"));
 
       // Round stage
@@ -962,9 +972,12 @@ export default function MapPage() {
     );
   }
 
-  // True when the AI map image + SVG overlay should be used (ring or spokes with image present).
+  // True when the AI map image + SVG overlay should be used.
   // Controls whether to render a 2-column grid (map right, action cards left) vs stacked layout.
-  const isOverlayLayout = !loading && (mapLayout === "ring" || mapLayout === "spokes") && !!mapId && !!mapImageUrl;
+  // Covers all four implemented overlay layouts: ring, spokes, continent, void_ship.
+  const isOverlayLayout = !loading &&
+    (mapLayout === "ring" || mapLayout === "spokes" || mapLayout === "continent" || mapLayout === "void_ship") &&
+    !!mapId && !!mapImageUrl;
 
   return (
     <Frame title="Tactical Hololith" campaignId={campaignId} role={role} currentPage="map">
