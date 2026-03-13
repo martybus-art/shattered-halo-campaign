@@ -56,6 +56,12 @@
  *                wedge-zones converging to a near-point (innerRFraction). Cluster/zone
  *                count logic mirrors buildAdjacency "continent" in page.tsx. Reuses
  *                wedgePath / wedgeCentroid / polarToCartesian throughout.
+ *   2026-03-14 — FEATURE: Per-zone overrides for continent layout. ContinentConfig
+ *                gains zoneOverrides[]: {sweepDeg, angleOffset} per zone. sweepDeg=0
+ *                means "use computed width". angleOffset shifts the zone's angular
+ *                position independently of neighbours. New ContinentZoneOverridesPanel
+ *                renders 2 sliders per zone in the calibration section. planetR slider
+ *                max raised 600->900.
  *   2026-03-14 — FEATURE: Voidship layout overlay. VoidshipConfig type + sliders,
  *                useVoidshipGeometry, VoidshipOverlay. Rectangular 2-column (port /
  *                starboard) zone grid with no wedges. New rectPath / rectCentroid
@@ -308,6 +314,13 @@ export type ContinentConfig = {
   innerCyOffset:  number;
   outerCyOffset:  number;
   overlayOpacity: number;
+  /**
+   * Per-zone shape overrides. Index matches the globalZoneIndex (same order as
+   * zoneKeys). A missing entry or sweepDeg=0 means "use the computed width".
+   *   sweepDeg    — explicit angular width for this zone (0 = auto)
+   *   angleOffset — shift this zone's start angle (+ = clockwise, − = counter-CW)
+   */
+  zoneOverrides:  Array<{ sweepDeg: number; angleOffset: number }>;
 };
 
 export const DEFAULT_CONTINENT_CONFIG: ContinentConfig = {
@@ -321,6 +334,7 @@ export const DEFAULT_CONTINENT_CONFIG: ContinentConfig = {
   innerCyOffset:  0,
   outerCyOffset:  0,
   overlayOpacity: 1.0,
+  zoneOverrides:  [],
 };
 
 const CONTINENT_CALIB_STORAGE_PREFIX = "shattered-halo:continent-calib:";
@@ -822,7 +836,7 @@ function useContinentGeometry(
   const {
     cx, cy, planetR, perspectiveY,
     innerRFraction, clusterGapDeg, zoneGapDeg,
-    innerCyOffset, outerCyOffset,
+    innerCyOffset, outerCyOffset, zoneOverrides,
   } = cfg;
 
   const innerR  = planetR * innerRFraction;
@@ -831,7 +845,13 @@ function useContinentGeometry(
   const outerCy = cy + outerCyOffset;
   const midCy   = (innerCy + outerCy) / 2;
 
+  // Serialise overrides array so useMemo invalidates when content changes.
+  const overridesSer = JSON.stringify(zoneOverrides ?? []);
+
   return useMemo(() => {
+    const overrides: Array<{ sweepDeg: number; angleOffset: number }> =
+      JSON.parse(overridesSer);
+
     const sectorMap = new Map<string, DbSector>();
     for (const s of sectors) sectorMap.set(`${s.zone_key}:${s.sector_key}`, s);
 
@@ -859,20 +879,24 @@ function useContinentGeometry(
       const zonesInCluster = Math.min(clusterSize, zoneCount - ci * clusterSize);
       if (zonesInCluster <= 0) break;
 
-      // Cluster starts at an evenly-spaced angle around the sphere
       const clusterStart = ci * (clusterSweep + clusterGapDeg);
 
       const totalZoneGapInCluster = (zonesInCluster - 1) * zoneGapDeg;
-      const zoneSweep      = Math.max((clusterSweep - totalZoneGapInCluster) / zonesInCluster, 5);
-      const halfZoneSweep  = zoneSweep / 2;
+      // computedZoneSweep is the auto width — used when no override is set
+      const computedZoneSweep = Math.max((clusterSweep - totalZoneGapInCluster) / zonesInCluster, 5);
 
       for (let zic = 0; zic < zonesInCluster; zic++) {
         const zi      = globalZoneIndex++;
         const zoneKey = zoneKeys[zi] ?? `zone_${zi}`;
 
-        const zoneStart  = clusterStart + zic * (zoneSweep + zoneGapDeg);
-        const zoneEnd    = zoneStart + zoneSweep;
-        const slotMid    = (zoneStart + zoneEnd) / 2;
+        // Per-zone override: sweepDeg=0 → use computed width; angleOffset shifts start
+        const ov            = overrides[zi];
+        const zoneSweep     = (ov?.sweepDeg ?? 0) > 0 ? ov.sweepDeg : computedZoneSweep;
+        const halfZoneSweep = zoneSweep / 2;
+        const nominalStart  = clusterStart + zic * (computedZoneSweep + zoneGapDeg);
+        const zoneStart     = nominalStart + (ov?.angleOffset ?? 0);
+        const zoneEnd       = zoneStart + zoneSweep;
+        const slotMid       = (zoneStart + zoneEnd) / 2;
 
         // Label sits just beyond the planet outer edge at the zone midpoint angle
         const zoneLabelPoint = polarToCartesian(cx, outerCy, planetR + 24, slotMid, perspectiveY);
@@ -881,7 +905,7 @@ function useContinentGeometry(
           const sectorKey   = SECTOR_KEYS[si];
           const id          = `${zoneKey}:${sectorKey}`;
           const isInnerBand = si < 2;
-          const localHalf   = si % 2; // 0 = leading half, 1 = trailing half
+          const localHalf   = si % 2;
 
           const sInnerR     = isInnerBand ? innerR : midR;
           const sOuterR     = isInnerBand ? midR   : planetR;
@@ -915,7 +939,7 @@ function useContinentGeometry(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId,
       cx, cy, planetR, perspectiveY, innerRFraction, clusterGapDeg, zoneGapDeg,
-      innerCyOffset, outerCyOffset]);
+      innerCyOffset, outerCyOffset, overridesSer]);
 }
 
 // ── Voidship geometry hook ────────────────────────────────────────────────────
@@ -1314,7 +1338,7 @@ function ContinentOverlay({
   const {
     cx, cy, planetR, perspectiveY,
     innerRFraction, clusterGapDeg, zoneGapDeg,
-    innerCyOffset, outerCyOffset,
+    innerCyOffset, outerCyOffset, zoneOverrides,
   } = cfg;
   const outerCy = cy + outerCyOffset;
 
@@ -1325,24 +1349,29 @@ function ContinentOverlay({
   const totalZoneDeg = Math.max(360 - totalGapDeg, clusterCount * 10);
   const clusterSweep = totalZoneDeg / clusterCount;
   const innerR       = planetR * innerRFraction;
+  const overridesSer = JSON.stringify(zoneOverrides ?? []);
 
   // Build list of (zoneIndex, startAngle, endAngle) for zone outlines
   const zoneOutlines = useMemo(() => {
+    const overrides: Array<{ sweepDeg: number; angleOffset: number }> =
+      JSON.parse(overridesSer);
     const entries: Array<{ zi: number; start: number; end: number }> = [];
     let gi = 0;
     for (let ci = 0; ci < clusterCount; ci++) {
       const zonesInCluster = Math.min(clusterSize, zoneCount - ci * clusterSize);
       if (zonesInCluster <= 0) break;
-      const clusterStart = ci * (clusterSweep + clusterGapDeg);
-      const totalZoneGap = (zonesInCluster - 1) * zoneGapDeg;
-      const zoneSweep    = Math.max((clusterSweep - totalZoneGap) / zonesInCluster, 5);
+      const clusterStart      = ci * (clusterSweep + clusterGapDeg);
+      const totalZoneGap      = (zonesInCluster - 1) * zoneGapDeg;
+      const computedZoneSweep = Math.max((clusterSweep - totalZoneGap) / zonesInCluster, 5);
       for (let zic = 0; zic < zonesInCluster; zic++) {
-        const start = clusterStart + zic * (zoneSweep + zoneGapDeg);
+        const ov        = overrides[gi];
+        const zoneSweep = (ov?.sweepDeg ?? 0) > 0 ? ov.sweepDeg : computedZoneSweep;
+        const start     = clusterStart + zic * (computedZoneSweep + zoneGapDeg) + (ov?.angleOffset ?? 0);
         entries.push({ zi: gi++, start, end: start + zoneSweep });
       }
     }
     return entries;
-  }, [zoneCount, clusterCount, clusterSize, clusterSweep, clusterGapDeg, zoneGapDeg]);
+  }, [zoneCount, clusterCount, clusterSize, clusterSweep, clusterGapDeg, zoneGapDeg, overridesSer]);
 
   // Deduplicated label points
   const zoneLabelEntries = useMemo(() => {
@@ -1742,7 +1771,7 @@ const CONTINENT_SLIDER_DEFS: SliderDef[] = [
   {
     key: "planetR",
     label: "Planet Radius",
-    min: 200, max: 600, step: 1,
+    min: 200, max: 900, step: 1,
     description: "Outer radius of the planet sphere (horizontal rx)",
   },
   {
@@ -1839,6 +1868,87 @@ const VOIDSHIP_SLIDER_DEFS: SliderDef[] = [
     description: "Master transparency of the SVG overlay (0 = invisible, 1 = fully opaque)",
   },
 ];
+
+// ── Per-zone overrides panel (continent layout only) ──────────────────────────
+//
+// Renders two sliders per zone: Sweep Width (°) and Angle Offset (°).
+// sweepDeg=0 means "use auto-computed width" — the zone snaps back to the
+// default cluster-derived size when you drag back to 0.
+
+function ContinentZoneOverridesPanel({
+  zoneCount,
+  zoneNames,
+  zoneKeys,
+  overrides,
+  onChange,
+}: {
+  zoneCount:  number;
+  zoneNames?: string[];
+  zoneKeys:   string[];
+  overrides:  Array<{ sweepDeg: number; angleOffset: number }>;
+  onChange:   (zi: number, field: "sweepDeg" | "angleOffset", value: number) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-brass/20 bg-black/75 p-4 space-y-4 text-sm">
+      <p className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
+        Per-Zone Shape Overrides
+      </p>
+      <p className="text-zinc-500 text-xs leading-snug">
+        Sweep Width 0° = auto (uses computed cluster width).
+        Angle Offset shifts start position ± independently.
+      </p>
+      <div className="space-y-3">
+        {Array.from({ length: zoneCount }, (_, zi) => {
+          const label    = zoneNames?.[zi] ?? (zoneKeys[zi] ?? `Zone ${zi}`).replace(/_/g, " ");
+          const ov       = overrides[zi] ?? { sweepDeg: 0, angleOffset: 0 };
+          const colour   = ZONE_COLOURS[zi % ZONE_COLOURS.length];
+          return (
+            <div key={zi} className="rounded border border-zinc-800 p-3 space-y-2">
+              <span
+                className="text-xs font-mono font-semibold"
+                style={{ color: colour }}
+              >
+                {label}
+              </span>
+              <div className="grid grid-cols-2 gap-4">
+                {/* Sweep width */}
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <label className="text-zinc-400 text-xs">Sweep Width (°)</label>
+                    <span className="text-brass font-mono text-xs tabular-nums">
+                      {ov.sweepDeg === 0 ? "auto" : `${ov.sweepDeg.toFixed(1)}°`}
+                    </span>
+                  </div>
+                  <input
+                    type="range" min={0} max={120} step={0.5}
+                    value={ov.sweepDeg}
+                    onChange={(e) => onChange(zi, "sweepDeg", parseFloat(e.target.value))}
+                    className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+                  />
+                </div>
+                {/* Angle offset */}
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <label className="text-zinc-400 text-xs">Angle Offset (°)</label>
+                    <span className="text-brass font-mono text-xs tabular-nums">
+                      {ov.angleOffset > 0 ? "+" : ""}{ov.angleOffset.toFixed(1)}°
+                    </span>
+                  </div>
+                  <input
+                    type="range" min={-60} max={60} step={0.5}
+                    value={ov.angleOffset}
+                    onChange={(e) => onChange(zi, "angleOffset", parseFloat(e.target.value))}
+                    className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function CalibrationPanel({
   cfg,
@@ -2025,7 +2135,15 @@ function useContinentCalibConfig(
   const [cfg, setCfgState] = useState<ContinentConfig>(() => {
     try {
       const stored = localStorage.getItem(storageKey);
-      if (stored) return { ...DEFAULT_CONTINENT_CONFIG, ...JSON.parse(stored) };
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Ensure zoneOverrides is always an array (safe merge for new field)
+        return {
+          ...DEFAULT_CONTINENT_CONFIG,
+          ...parsed,
+          zoneOverrides: Array.isArray(parsed.zoneOverrides) ? parsed.zoneOverrides : [],
+        };
+      }
     } catch { /* SSR / private browsing */ }
     return { ...DEFAULT_CONTINENT_CONFIG };
   });
@@ -2215,21 +2333,38 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
   if (layout === "continent") {
     const clusterSize  = Math.max(2, Math.round(props.zoneCount / 3));
     const clusterCount = Math.ceil(props.zoneCount / clusterSize);
-    const buildContinentCopySnippet = () => [
-      "// Continent Calibration — paste into DEFAULT_CONTINENT_CONFIG in CampaignMapOverlay.tsx",
-      "export const DEFAULT_CONTINENT_CONFIG: ContinentConfig = {",
-      `  cx:             ${continentCfg.cx},`,
-      `  cy:             ${continentCfg.cy},`,
-      `  planetR:        ${continentCfg.planetR},`,
-      `  perspectiveY:   ${continentCfg.perspectiveY.toFixed(2)},`,
-      `  innerRFraction: ${continentCfg.innerRFraction.toFixed(2)},`,
-      `  clusterGapDeg:  ${continentCfg.clusterGapDeg},`,
-      `  zoneGapDeg:     ${continentCfg.zoneGapDeg},`,
-      `  innerCyOffset:  ${continentCfg.innerCyOffset},`,
-      `  outerCyOffset:  ${continentCfg.outerCyOffset},`,
-      `  overlayOpacity: ${continentCfg.overlayOpacity.toFixed(2)},`,
-      "};",
-    ].join("\n");
+
+    // Handler for per-zone sweepDeg / angleOffset changes
+    const handleZoneOverrideChange = (zi: number, field: "sweepDeg" | "angleOffset", value: number) => {
+      const next = [...(continentCfg.zoneOverrides ?? [])];
+      while (next.length <= zi) next.push({ sweepDeg: 0, angleOffset: 0 });
+      next[zi] = { ...next[zi], [field]: value };
+      setContinentCfg({ ...continentCfg, zoneOverrides: next });
+    };
+
+    const buildContinentCopySnippet = () => {
+      const ovLines = (continentCfg.zoneOverrides ?? []).map(
+        (ov, i) => `    { sweepDeg: ${ov.sweepDeg}, angleOffset: ${ov.angleOffset} },  // zone ${i}`
+      );
+      return [
+        "// Continent Calibration — paste into DEFAULT_CONTINENT_CONFIG in CampaignMapOverlay.tsx",
+        "export const DEFAULT_CONTINENT_CONFIG: ContinentConfig = {",
+        `  cx:             ${continentCfg.cx},`,
+        `  cy:             ${continentCfg.cy},`,
+        `  planetR:        ${continentCfg.planetR},`,
+        `  perspectiveY:   ${continentCfg.perspectiveY.toFixed(2)},`,
+        `  innerRFraction: ${continentCfg.innerRFraction.toFixed(2)},`,
+        `  clusterGapDeg:  ${continentCfg.clusterGapDeg},`,
+        `  zoneGapDeg:     ${continentCfg.zoneGapDeg},`,
+        `  innerCyOffset:  ${continentCfg.innerCyOffset},`,
+        `  outerCyOffset:  ${continentCfg.outerCyOffset},`,
+        `  overlayOpacity: ${continentCfg.overlayOpacity.toFixed(2)},`,
+        "  zoneOverrides: [",
+        ...ovLines,
+        "  ],",
+        "};",
+      ].join("\n");
+    };
 
     return (
       <div className="space-y-2">
@@ -2247,22 +2382,31 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
           <div className="space-y-2 pt-1">
             {calibToggle}
             {calibOpen && (
-              <CalibrationPanel
-                cfg={continentCfg as unknown as Record<string, number>}
-                sliderDefs={CONTINENT_SLIDER_DEFS}
-                buildCopySnippet={buildContinentCopySnippet}
-                onChange={handleContinentSliderChange}
-                onReset={resetContinentCfg}
-                campaignId={campaignId}
-                derivedValues={[
-                  { label: "clusters",    value: String(clusterCount) },
-                  { label: "zonesPerCluster", value: String(clusterSize) },
-                  { label: "innerR",      value: (continentCfg.planetR * continentCfg.innerRFraction).toFixed(1) },
-                  { label: "outerRy",     value: (continentCfg.planetR * continentCfg.perspectiveY).toFixed(1) },
-                  { label: "innerCy",     value: (continentCfg.cy + continentCfg.innerCyOffset).toFixed(0) },
-                  { label: "outerCy",     value: (continentCfg.cy + continentCfg.outerCyOffset).toFixed(0) },
-                ]}
-              />
+              <>
+                <CalibrationPanel
+                  cfg={continentCfg as unknown as Record<string, number>}
+                  sliderDefs={CONTINENT_SLIDER_DEFS}
+                  buildCopySnippet={buildContinentCopySnippet}
+                  onChange={handleContinentSliderChange}
+                  onReset={resetContinentCfg}
+                  campaignId={campaignId}
+                  derivedValues={[
+                    { label: "clusters",        value: String(clusterCount) },
+                    { label: "zonesPerCluster",  value: String(clusterSize) },
+                    { label: "innerR",           value: (continentCfg.planetR * continentCfg.innerRFraction).toFixed(1) },
+                    { label: "outerRy",          value: (continentCfg.planetR * continentCfg.perspectiveY).toFixed(1) },
+                    { label: "innerCy",          value: (continentCfg.cy + continentCfg.innerCyOffset).toFixed(0) },
+                    { label: "outerCy",          value: (continentCfg.cy + continentCfg.outerCyOffset).toFixed(0) },
+                  ]}
+                />
+                <ContinentZoneOverridesPanel
+                  zoneCount={props.zoneCount}
+                  zoneNames={props.zoneNames}
+                  zoneKeys={props.zoneKeys}
+                  overrides={continentCfg.zoneOverrides ?? []}
+                  onChange={handleZoneOverrideChange}
+                />
+              </>
             )}
           </div>
         )}
