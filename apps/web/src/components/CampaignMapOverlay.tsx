@@ -1839,6 +1839,8 @@ const VOIDSHIP_SLIDER_DEFS: SliderDef[] = [
     description: "Master transparency of the SVG overlay (0 = invisible, 1 = fully opaque)",
   },
 ];
+
+function CalibrationPanel({
   cfg,
   sliderDefs,
   buildCopySnippet,
