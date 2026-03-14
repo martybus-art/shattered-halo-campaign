@@ -13,14 +13,29 @@
 //                (new lead-page Generate Map modal flow). Fixed DB column names:
 //                generation_status (not status), writes both bg_image_path and
 //                image_path for MapImageDisplay compatibility.
-//   2026-03-14 -- ship_line prompt completely rewritten to fix terrain-blob output.
-//                Root causes fixed: (1) removed sharedShotLock (forced orbital/top-down
-//                perspective), (2) removed sharedStyle (planetary terrain map language),
-//                (3) replaced biomeMod with ship-interior zone descriptions (biomeMod
-//                was defaulting to "ash_wastes" outdoor terrain, directly causing the
-//                coloured terrain blobs), (4) changed "top-down" to explicit SIDE-ON
-//                LONGITUDINAL CUTAWAY perspective with strong negative prompting.
-//                Other layout prompts (ring/continent/radial) unchanged.
+//   2026-03-15 -- fixed imageSizeForLayout: removed invalid "1792x1024" size
+//                (OpenAI error: invalid_value). Valid sizes are 1024x1024,
+//                1024x1536, 1536x1024. ship_line now uses 1536x1024 like
+//                all other non-ring layouts.
+//   2026-03-15 -- added LAYOUT_ALIASES + normaliseLayout in handler body so
+//                "void_ship" -> "ship_line" and "spokes" -> "radial" before
+//                buildPrompt() switch. Covers all entry paths: new campaigns,
+//                existing campaigns triggered from lead page, and regenerate
+//                route — not just create-campaign. No DB changes needed.
+//   2026-03-14 v4 -- ship_line prompt: four targeted fixes over v3.
+//                (1) Opening rewritten: side-profile composition anchor first,
+//                cutaway second — "warship cutaway" as the lead phrase was
+//                still drifting output toward terrain maps.
+//                (2) Hard silhouette rule added early: hull must read as single
+//                spacecraft, not continents/islands/terrain.
+//                (3) "zones" replaced with "structural sections" throughout —
+//                breaks the zones->regions->geography->continents chain that
+//                gpt-image-1 follows internally.
+//                (4) "similar to Battlefleet Gothic codex ship cutaway artwork"
+//                added as a visual reference anchor before the negatives list.
+//                "no continents, no islands" added to ABSOLUTE NEGATIVES.
+//                imageSizeForLayout: ship_line now returns 1792x1024.
+//                No other layout (ring/continent/radial) changed.
 //   2026-03-10 -- Ring prompt updated with SVG overlay alignment guidance.
 //                The ring's playable band (inner radius ~50%, outer ~86% of frame)
 //                is now specified so terrain colouring harmonises with the
@@ -214,54 +229,87 @@ function buildPrompt(params: {
     }
 
     case "ship_line": {
-      // ── ship_line does NOT use sharedShotLock (orbital perspective) or sharedStyle
-      // (planetary terrain map language) — those blocks actively fight the cutaway
-      // ship aesthetic and were the primary cause of terrain-blob output.
+      // ── v4 prompt (2026-03-14) ────────────────────────────────────────────
+      // Does NOT use sharedShotLock, sharedStyle, sharedLighting, or biomeMod.
+      // All four contain orbital/terrain/war-map language that drifts the model
+      // toward continent maps.
       //
-      // biomeMod is also intentionally NOT used here: planet_profile is null for
-      // ship_line, so biomeMod defaults to "ash_wastes" outdoor terrain descriptors
-      // which contaminate the interior imagery. Ship interior zones are described
-      // explicitly below instead.
+      // Four targeted fixes over v3 (ChatGPT recommendations):
+      //   1. Opening anchors side-profile FIRST, cutaway second — not vice versa.
+      //   2. Hard silhouette rule added early: hull must not resemble landmasses.
+      //   3. "zones" replaced with "structural sections" — breaks the
+      //      zones->regions->geography->continents association chain.
+      //   4. "similar to Battlefleet Gothic codex ship cutaway artwork" added
+      //      as a visual reference anchor near the end.
 
-      const shipShotLock = [
-        `CRITICAL PERSPECTIVE REQUIREMENT: This is a SIDE-ON LONGITUDINAL CUTAWAY ILLUSTRATION of a warship — NOT a top-down orbital map, NOT a terrain zone layout, NOT overhead blobs of land.`,
-        `The entire warship runs horizontally across the full width of the image from bow (left) to stern (right), viewed from the side or a slight low three-quarter angle.`,
-        `The upper hull plating is removed or shown as transparent, revealing the vast interior compartments in cross-section, like a technical cutaway illustration rendered as grimdark concept art.`,
-        `The exterior gothic hull silhouette — with its towers, lance batteries, prow ram, and engine cowlings — frames the top and bottom of the composition.`,
-        `This is a SHIP CROSS-SECTION viewed from the side. The interior zones are stacked chambers arranged left-to-right along the ship's length, NOT blobs of outdoor terrain seen from above.`,
-      ].join(" ");
+      const shipPrompt = [
+        // ── Fix 2: side-profile composition anchor ──────────────────────────
+        `Side-profile illustration of a colossal Warhammer 40,000 Imperial battleship in space.`,
+        `The ship is shown from the side as a long horizontal silhouette with the hull partially cut away to reveal internal structures.`,
+        `The ship is extremely long and narrow and spans the entire width of the image.`,
+        `The silhouette clearly reads as a single Gothic warship with prow ram, cathedral spires, and massive plasma engines.`,
 
-      const shipZoneDescriptions = [
-        `${zone_count} major interior battle zones are distributed along the ship's length as distinct structural compartments, separated by colossal armoured bulkheads and structural ribs — thick dark iron barriers visible spanning the full interior height.`,
-        `Each zone is a unique cavernous interior space: gothic cathedral vaults, industrial machinery halls, plasma reactor chambers, weapon loading bays, crew labyrinth districts, and shrine complexes.`,
-        `Bow zones: the command bridge spire rising above the hull, filled with tactical hololiths and cogitator banks glowing amber; Navigator's sanctum and astropathic choir glowing with eerie psychic purple-blue light.`,
-        `Midship zones: vast weapon decks with macro cannon batteries and lance arrays embedded in the hull walls; crew districts as dense industrial labyrinths of barracks, manufactorums, and gothic shrines.`,
-        `Stern zones: the plasma reactors and warp drive — colossal cathedral-like machinery chambers glowing with intense blue-white plasma energy; the main engines visible as massive glowing exhausts at the far right.`,
-        `Interior aesthetic throughout: corroded iron deck plates, gothic arches, vaulted ceilings, amber cogitator light, incense braziers, servo skull stations, purity seals, devotional statues.`,
-      ].join(" ");
+        // ── Fix 3: hard silhouette rule ─────────────────────────────────────
+        `The ship silhouette must be clearly readable as a single spacecraft.`,
+        `The hull is continuous and not broken into separate landmasses.`,
+        `It must NOT resemble continents, islands, or terrain.`,
 
-      const shipStyle = [
-        `Warhammer 40K Battlefleet Gothic official concept art style — grimdark Gothic warship cutaway cross-section illustration.`,
-        `The ship silhouette is magnificent and massive: gothic spires, prow-mounted lance arrays, armoured flanks bristling with weapon batteries, towering superstructure.`,
-        `Rich mechanical detail on the hull exterior: riveted iron plating, cathedral buttresses, turrets, gothic spires, venting plasma exhausts, prow ram.`,
-        `Battle damage throughout: breached decks exposing the void, plasma fires, collapsed corridors, shattered statues, explosive decompression, blast marks.`,
-        `Stars, nebula glow, and void visible beyond the hull where armour plates have been torn away.`,
-        `Grimdark palette: corroded iron, dark stone, deep crimson, tarnished gold, with blue-white plasma glow from the stern engines and amber mechanical light within.`,
-        `Vibrant zone identity colours tinting each interior compartment — Orange, Purple, Blue, Green, Gold — distinguishing battle zones without replacing the mechanical aesthetic.`,
-        `Epic scale: the ship feels kilometres long; individual figures and vehicles implied by architectural scale alone.`,
-        `Cinematic lighting: blue-white plasma reactor glow from the stern, amber cogitator light in command areas, warp energy glow in the navigator's sanctum, fire and battle damage throughout.`,
-        `NO top-down terrain view. NO outdoor landscapes. NO blob zones. NO volcanic plains. NO alien forests. NO planetary surface. NO overhead map. NO floor plan grid. NO text. NO UI.`,
-        `This is a side-on warship cross-section concept art illustration, not a planetary map.`,
-      ].join(" ");
+        `Bow on the left with a massive armored ram prow.`,
+        `Stern on the right with enormous glowing plasma engines.`,
 
-      return [
-        `Warhammer 40K Gothic warship cutaway concept art: a colossal Imperial warship seen from the side with the hull cut away to reveal the vast interior battle zones arranged along its full length.`,
+        `The hull is partially cut away to reveal the ship interior like a technical cutaway illustration.`,
+        `The warship is kilometres long with towering cathedral-like internal spaces.`,
+
+        // ── Fix 1: sections not zones ───────────────────────────────────────
+        `The warship interior is divided into ${zone_count} massive structural sections running from bow to stern.`,
+        `Each section is a different part of the ship's internal architecture.`,
+        `Each structural section is separated by gigantic armoured bulkheads spanning the full interior height.`,
+
+        `Example internal sections include:`,
+        `command bridge spires and navigator sanctum,`,
+        `crew hive districts of gothic corridors,`,
+        `macro cannon weapon decks,`,
+        `hangar bays open to the void,`,
+        `cathedral-scale plasma reactor chambers,`,
+        `the colossal warp engine and plasma drives.`,
+
+        `Each section glows with a distinct atmospheric lighting colour inside the chamber — blue plasma glow, amber cogitator light, green reactor radiation, purple warp energy — but these colours are environmental lighting, NOT border outlines.`,
+
+        `Interior architecture is extremely detailed: gothic arches, iron gantries, pipes, catwalks, shrine altars, servo skull stations, and sacred machinery.`,
+
+        `Battle damage visible throughout the ship interior — fires, hull breaches, decompression scars, broken machinery.`,
+
+        `The exterior hull remains clearly visible forming the silhouette of the ship: gothic towers, lance batteries, armor plates, weapon sponsons, and cathedral buttresses.`,
+
+        `Stars and nebulae visible in the void beyond the hull.`,
+
         `${narrativeContext}${campaignNameContext}`,
-        shipShotLock,
-        shipZoneDescriptions,
-        shipStyle,
-        sharedLighting,
+
+        `Warhammer 40K Battlefleet Gothic concept art style.`,
+        `Epic grimdark sci-fi illustration.`,
+        `Highly detailed painterly concept art.`,
+
+        // ── Fix 4: codex reference anchor ───────────────────────────────────
+        `Similar to Battlefleet Gothic codex ship cutaway artwork.`,
+
+        `ABSOLUTE NEGATIVES:`,
+        `no top-down view,`,
+        `no terrain map,`,
+        `no planet surface,`,
+        `no continents,`,
+        `no islands,`,
+        `no radial map,`,
+        `no infographic,`,
+        `no dungeon map,`,
+        `no grid,`,
+        `no UI,`,
+        `no text,`,
+        `no labels,`,
+        `no coloured zone outlines,`,
+        `no pie charts.`,
       ].join(" ");
+
+      return shipPrompt;
     }
 
     default: {
@@ -277,10 +325,13 @@ function buildPrompt(params: {
 
 // ── Image size per layout ────────────────────────────────────────────────────
 // Ring uses 1024×1024 (square) so the aspect-square SVG overlay aligns 1:1.
-// Other layouts use 1536×1024 (landscape) for a wider cinematic feel.
+// All other layouts including ship_line use 1536×1024 (landscape).
+// Note: OpenAI gpt-image-1 valid sizes are 1024x1024, 1024x1536, 1536x1024.
+// 1792x1024 is NOT valid — removed 2026-03-15 after OpenAI invalid_value error.
 
 function imageSizeForLayout(layout: Layout): string {
-  return layout === "ring" ? "1024x1024" : "1536x1024";
+  if (layout === "ring") return "1024x1024";
+  return "1536x1024";
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -305,22 +356,34 @@ serve(async (req) => {
     const {
       map_id,
       campaign_id,
-      layout             = "ring",
-      zone_count         = 8,
-      biome              = "ash_wastes",
-      mixed_biomes       = false,
-      campaign_name      = "",
-      campaign_narrative = "",
+      layout:             rawLayout      = "ring",
+      zone_count                         = 8,
+      biome                              = "ash_wastes",
+      mixed_biomes                       = false,
+      campaign_name                      = "",
+      campaign_narrative                 = "",
     } = body as {
       map_id?:             string;
       campaign_id?:        string;
-      layout?:             Layout;
+      layout?:             string;   // accept string so aliases pass TS without casting
       zone_count?:         number;
       biome?:              string;
       mixed_biomes?:       boolean;
       campaign_name?:      string;
       campaign_narrative?: string;
     };
+
+    // normaliseLayout: maps frontend/DB alias values to the canonical Layout
+    // values used by the switch statement in buildPrompt().
+    //   "void_ship" -> "ship_line"  (stored in campaigns.rules_overrides.map_layout)
+    //   "spokes"    -> "radial"     (stored in campaigns.rules_overrides.map_layout)
+    // Without this, any call originating from the lead page or regenerate route
+    // passes the alias and falls to the default generic terrain-map prompt.
+    const LAYOUT_ALIASES: Record<string, Layout> = {
+      void_ship: "ship_line",
+      spokes:    "radial",
+    };
+    const layout: Layout = (LAYOUT_ALIASES[rawLayout] ?? rawLayout) as Layout;
 
     if (!campaign_id) return json(400, { ok: false, error: "campaign_id required" });
 

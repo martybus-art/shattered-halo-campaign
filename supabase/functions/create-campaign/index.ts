@@ -9,6 +9,11 @@
 //                added background call to generate-map edge function so the
 //                map image starts generating immediately after campaign creation;
 //                returns map_id in response so frontend can poll MapImageDisplay.
+//   2026-03-15 — added normaliseLayout() to map frontend layout values to the
+//                canonical values expected by generate-map's switch statement.
+//                "void_ship" → "ship_line", "spokes" → "radial". Without this,
+//                both fall to the default case and generate a generic terrain map
+//                regardless of the layout-specific prompts.
 //   2026-03-07 — populate commander_name on lead member insert from auth
 //                user_metadata.display_name so Players card shows a real name.
 
@@ -39,7 +44,18 @@ Deno.serve(async (req) => {
   const map_id_override     = body?.map_id ?? null;   // allow pre-existing map (legacy)
 
   // Map generation params
-  const layout              = body?.layout        ?? "ring";
+  // normaliseLayout: maps frontend/template layout values to the canonical
+  // values used by the generate-map edge function's switch statement.
+  //   "void_ship" → "ship_line"  (frontend stores "void_ship" in rules_overrides)
+  //   "spokes"    → "radial"     (frontend stores "spokes" in rules_overrides)
+  // Without this, both fall to the default case and generate a generic terrain map.
+  function normaliseLayout(raw: string): string {
+    if (raw === "void_ship") return "ship_line";
+    if (raw === "spokes")    return "radial";
+    return raw;
+  }
+
+  const layout              = normaliseLayout(body?.layout ?? "ring");
   const zone_count          = Number(body?.zone_count ?? 8);
   const biome               = body?.biome         ?? "ash_wastes";
   const mixed_biomes        = Boolean(body?.mixed_biomes ?? false);

@@ -13,7 +13,7 @@
  *   "ring"      — fully implemented (ring/halo megastructure)
  *   "spokes"    — fully implemented (hub + spoke wedges radiating from centre)
  *   "continent" — fully implemented (planet sphere with clustered wedge-continents)
- *   "void_ship" — fully implemented (rectangular 2-column port/starboard grid)
+ *   "void_ship" — fully implemented (single-column diagonal parallelogram zones)
  *   others      — image shown without overlay (stub, extend as needed)
  *
  * Sector key → overlay position mapping (ring layout):
@@ -63,10 +63,11 @@
  *                renders 2 sliders per zone in the calibration section. planetR slider
  *                max raised 600->900.
  *   2026-03-14 — FEATURE: Voidship layout overlay. VoidshipConfig type + sliders,
- *                useVoidshipGeometry, VoidshipOverlay. Rectangular 2-column (port /
- *                starboard) zone grid with no wedges. New rectPath / rectCentroid
- *                helpers and SECTOR_GRID lookup for 2×2 sub-rect sector subdivision.
- *                MapLayout type extended with "void_ship" (DB-native spelling).
+ *                useVoidshipGeometry, VoidshipOverlay. REDESIGN: single diagonal
+ *                column of connected perspective parallelograms (bow top-left,
+ *                stern bottom-right). parallelPath helper replaces rectPath for
+ *                zone outlines and sub-cell sector paths. skewX slider controls
+ *                the perspective lean angle. Aspect changed to aspect-square.
  *   2026-03-14 — UPDATE: Main export calls all 4 layout hooks unconditionally.
  *                isOverlayLayout in page.tsx extended to include "continent" and
  *                "void_ship". Stub fallback narrowed to truly unimplemented types.
@@ -341,37 +342,37 @@ const CONTINENT_CALIB_STORAGE_PREFIX = "shattered-halo:continent-calib:";
 
 // ── Voidship geometry config ──────────────────────────────────────────────────
 //
-// VoidshipConfig controls the rectangular void-ship overlay.
-// Zones are arranged in two columns (port / starboard) of rectangle cells.
-// No wedges or ellipses — the ship is a rectilinear structure.
+// VoidshipConfig controls the single-column diagonal parallelogram overlay.
+// Zones stack from bow (top-left) to stern (bottom-right) as connected
+// parallelograms, matching the perspective of a void-ship viewed from above-right.
 //
-// Zone order: port column (zones[0..perCol-1] top-to-bottom),
-//             starboard column (zones[perCol..N-1] top-to-bottom).
-// perCol = ceil(zoneCount / 2) — matches page.tsx void_ship computePositions.
+// Zone order: zones[0] = bow, zones[N-1] = stern (top to bottom).
+// Sectors within each zone: 2×2 sub-parallelograms using SECTOR_GRID.
 //
-//   shipX / shipY  — top-left corner of the ship bounding box (SVG units 0–1000)
-//   shipW / shipH  — total width and height of the ship bounding box
-//   gapX           — centerline corridor width between port and starboard columns
+//   shipX / shipY  — top-left corner of the bow zone (SVG units 0–1000)
+//   zoneW          — width of each zone parallelogram
+//   shipH          — total height bow to stern (all zones + gaps)
+//   skewX          — rightward shift of stern bottom vs bow top (perspective lean)
 //   gapY           — bulkhead gap height between zone rows
-//   sectorGap      — gap between the 4 sector sub-rectangles (2×2 grid) per zone
+//   sectorGap      — gap between the 4 sector sub-parallelograms within each zone
 
 export type VoidshipConfig = {
   shipX:          number;
   shipY:          number;
-  shipW:          number;
+  zoneW:          number;
   shipH:          number;
-  gapX:           number;
+  skewX:          number;
   gapY:           number;
   sectorGap:      number;
   overlayOpacity: number;
 };
 
 export const DEFAULT_VOIDSHIP_CONFIG: VoidshipConfig = {
-  shipX:          120,
-  shipY:           80,
-  shipW:          760,
-  shipH:          840,
-  gapX:            40,
+  shipX:          200,
+  shipY:           60,
+  zoneW:          420,
+  shipH:          880,
+  skewX:          200,
   gapY:             6,
   sectorGap:        3,
   overlayOpacity:  1.0,
@@ -528,6 +529,25 @@ function rectPath(x: number, y: number, w: number, h: number): string {
 /** Visual centre of a rectangle — used for unit dot / fortification placement. */
 function rectCentroid(x: number, y: number, w: number, h: number): { x: number; y: number } {
   return { x: x + w / 2, y: y + h / 2 };
+}
+
+/**
+ * Returns an SVG path for a parallelogram.
+ * Top edge starts at (topLeftX, topY) and has width w.
+ * The bottom edge is shifted right by skewX: starts at (topLeftX + skewX, topY + h).
+ * Positive skewX = stern/bottom leans right relative to bow/top (perspective lean).
+ */
+function parallelPath(
+  topLeftX: number, topY: number, w: number, h: number, skewX: number
+): string {
+  const botLeftX = topLeftX + skewX;
+  return [
+    `M ${topLeftX.toFixed(2)} ${topY.toFixed(2)}`,
+    `L ${(topLeftX + w).toFixed(2)} ${topY.toFixed(2)}`,
+    `L ${(botLeftX + w).toFixed(2)} ${(topY + h).toFixed(2)}`,
+    `L ${botLeftX.toFixed(2)} ${(topY + h).toFixed(2)}`,
+    "Z",
+  ].join(" ");
 }
 
 /**
@@ -946,15 +966,20 @@ function useContinentGeometry(
 //
 // Zone order: port column (zones[0..perCol-1] top-to-bottom),
 //             starboard column (zones[perCol..N-1] top-to-bottom).
-// perCol = ceil(zoneCount / 2) — matches page.tsx void_ship computePositions.
-// Each zone is subdivided into a 2×2 grid of sector rectangles using SECTOR_GRID.
+// ── Voidship geometry hook ────────────────────────────────────────────────────
+//
+// Zone order: zones[0] = bow (top), zones[N-1] = stern (bottom).
+// All zones stacked in a single diagonal column. Each zone is a parallelogram
+// whose bottom edge is shifted right by skewX * zoneH / shipH relative to
+// its top edge, so all zones chain together into one continuous hull shape.
+// Each zone is subdivided into a 2×2 grid of sub-parallelograms for sectors a–d.
 
 function useVoidshipGeometry(
   props: CampaignMapOverlayProps,
   cfg: VoidshipConfig,
 ): SectorGeometry[] {
   const { zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId } = props;
-  const { shipX, shipY, shipW, shipH, gapX, gapY, sectorGap } = cfg;
+  const { shipX, shipY, zoneW, shipH, skewX, gapY, sectorGap } = cfg;
 
   return useMemo(() => {
     const sectorMap = new Map<string, DbSector>();
@@ -970,31 +995,52 @@ function useVoidshipGeometry(
     const result: SectorGeometry[] = [];
     if (zoneCount === 0) return result;
 
-    const perCol = Math.ceil(zoneCount / 2);
-    const colW   = (shipW - gapX) / 2;
-    // Zone height: divide ship height evenly, with row gaps between zones
-    const zoneH  = perCol > 1 ? (shipH - (perCol - 1) * gapY) / perCol : shipH;
-    const subW   = (colW - sectorGap) / 2;
-    const subH   = (zoneH - sectorGap) / 2;
+    // Zone height: divide shipH evenly with row gaps between zones
+    const zoneH = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
+    // Width of each sector sub-cell (half of zoneW minus the gap)
+    const subW  = (zoneW - sectorGap) / 2;
+    const subH  = (zoneH - sectorGap) / 2;
 
     for (let zi = 0; zi < zoneCount; zi++) {
       const zoneKey = zoneKeys[zi] ?? `zone_${zi}`;
-      const col     = zi < perCol ? 0 : 1;           // 0 = port, 1 = starboard
-      const row     = zi < perCol ? zi : zi - perCol;
 
-      const zoneX = shipX + col * (colW + gapX);
-      const zoneY = shipY + row * (zoneH + gapY);
+      // Top y of this zone; top-left x accumulates skew proportional to position
+      const zoneTopY     = shipY + zi * (zoneH + gapY);
+      const zoneTopDy    = zi * (zoneH + gapY);           // distance from ship top
+      const zoneTopLeftX = shipX + skewX * zoneTopDy / shipH;
 
-      // Zone label sits just above the zone rectangle
-      const zoneLabelPoint = { x: zoneX + colW / 2, y: zoneY - 8 };
+      // Zone label sits centred above the top edge of the zone
+      const zoneLabelPoint = { x: zoneTopLeftX + zoneW / 2, y: zoneTopY - 8 };
 
       for (let si = 0; si < 4; si++) {
         const sectorKey = SECTOR_KEYS[si];
         const id        = `${zoneKey}:${sectorKey}`;
         const [gc, gr]  = SECTOR_GRID[sectorKey] ?? [0, 0];
 
-        const sx = zoneX + gc * (subW + sectorGap);
-        const sy = zoneY + gr * (subH + sectorGap);
+        // Sub-cell top and bottom local y offsets within the zone
+        const topDy = gr * (subH + sectorGap);
+        const botDy = topDy + subH;
+
+        // Left x of sub-cell at its top and bottom, applying continuous hull skew
+        const subTopLeftX = zoneTopLeftX + skewX * topDy / shipH + gc * (subW + sectorGap);
+        const subBotLeftX = zoneTopLeftX + skewX * botDy / shipH + gc * (subW + sectorGap);
+        const subTopY     = zoneTopY + topDy;
+        const subBotY     = zoneTopY + botDy;
+
+        // Parallelogram path for this sub-cell
+        const path = [
+          `M ${subTopLeftX.toFixed(2)} ${subTopY.toFixed(2)}`,
+          `L ${(subTopLeftX + subW).toFixed(2)} ${subTopY.toFixed(2)}`,
+          `L ${(subBotLeftX + subW).toFixed(2)} ${subBotY.toFixed(2)}`,
+          `L ${subBotLeftX.toFixed(2)} ${subBotY.toFixed(2)}`,
+          "Z",
+        ].join(" ");
+
+        // Centroid at mid-height of sub-cell, averaged over the skew lean
+        const centroid = {
+          x: (subTopLeftX + subBotLeftX) / 2 + subW / 2,
+          y: (subTopY + subBotY) / 2,
+        };
 
         const dbSector = sectorMap.get(id);
         const hasUnit  = activeUnitSet.has(id);
@@ -1008,8 +1054,8 @@ function useVoidshipGeometry(
           state,
           fortified: dbSector?.fortified ?? false,
           hasUnit,
-          path:     rectPath(sx, sy, subW, subH),
-          centroid: rectCentroid(sx, sy, subW, subH),
+          path,
+          centroid,
           zoneLabelPoint,
         });
       }
@@ -1018,7 +1064,7 @@ function useVoidshipGeometry(
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId,
-      shipX, shipY, shipW, shipH, gapX, gapY, sectorGap]);
+      shipX, shipY, zoneW, shipH, skewX, gapY, sectorGap]);
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
@@ -1494,28 +1540,22 @@ function VoidshipOverlay({
   cfg: VoidshipConfig;
 }) {
   const { zoneCount, onSectorClick, showZoneLabels, zoneNames } = props;
-  const { shipX, shipY, shipW, shipH, gapX, gapY } = cfg;
+  const { shipX, shipY, zoneW, shipH, skewX, gapY } = cfg;
 
-  const perCol = Math.ceil(zoneCount / 2);
-  const colW   = (shipW - gapX) / 2;
-  const zoneH  = perCol > 1 ? (shipH - (perCol - 1) * gapY) / perCol : shipH;
+  const zoneH = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
 
-  // Zone boundary outlines — one per zone
-  const zoneRects = useMemo(() => {
-    const rects: Array<{ zi: number; x: number; y: number; w: number; h: number }> = [];
+  // Zone boundary outlines — one parallelogram per zone
+  const zoneParallels = useMemo(() => {
+    const result: Array<{ zi: number; path: string }> = [];
     for (let zi = 0; zi < zoneCount; zi++) {
-      const col  = zi < perCol ? 0 : 1;
-      const row  = zi < perCol ? zi : zi - perCol;
-      rects.push({
-        zi,
-        x: shipX + col * (colW + gapX),
-        y: shipY + row * (zoneH + gapY),
-        w: colW,
-        h: zoneH,
-      });
+      const topDy      = zi * (zoneH + gapY);
+      const topLeftX   = shipX + skewX * topDy / shipH;
+      const topY       = shipY + topDy;
+      const zoneSkewX  = skewX * zoneH / shipH;
+      result.push({ zi, path: parallelPath(topLeftX, topY, zoneW, zoneH, zoneSkewX) });
     }
-    return rects;
-  }, [zoneCount, perCol, shipX, shipY, colW, gapX, zoneH, gapY]);
+    return result;
+  }, [zoneCount, shipX, shipY, zoneW, shipH, skewX, gapY, zoneH]);
 
   // Deduplicated label points
   const zoneLabelEntries = useMemo(() => {
@@ -1530,11 +1570,8 @@ function VoidshipOverlay({
     return entries;
   }, [geometry]);
 
-  // Ship hull outline — outer rectangle around both columns
-  const hullPath = rectPath(shipX, shipY, shipW, shipH);
-  // Centerline corridor outline
-  const corridorX = shipX + colW;
-  const corridorPath = rectPath(corridorX, shipY, gapX, shipH);
+  // Full hull outline — single parallelogram spanning the whole ship
+  const hullPath = parallelPath(shipX, shipY, zoneW, shipH, skewX);
 
   return (
     <svg
@@ -1543,29 +1580,20 @@ function VoidshipOverlay({
       aria-label="Tactical map overlay"
       style={{ opacity: cfg.overlayOpacity }}
     >
-      {/* ── Ship hull faint background ── */}
+      {/* ── Hull silhouette faint background ── */}
       <path
         d={hullPath}
-        fill="rgba(0,0,0,0.08)"
-        stroke="rgba(255,255,255,0.10)"
-        strokeWidth={1.5}
-        pointerEvents="none"
-      />
-
-      {/* ── Centerline corridor ── */}
-      <path
-        d={corridorPath}
-        fill="rgba(0,0,0,0.25)"
+        fill="rgba(0,0,0,0.10)"
         stroke="rgba(255,255,255,0.12)"
-        strokeWidth={1}
+        strokeWidth={2}
         pointerEvents="none"
       />
 
       {/* ── Zone boundary outlines ── */}
-      {zoneRects.map(({ zi, x, y, w, h }) => (
-        <rect
+      {zoneParallels.map(({ zi, path }) => (
+        <path
           key={`vs-zone-${zi}`}
-          x={x} y={y} width={w} height={h}
+          d={path}
           fill="none"
           stroke={zoneColour(zi)}
           strokeWidth={2.5}
@@ -1821,45 +1849,45 @@ const CONTINENT_SLIDER_DEFS: SliderDef[] = [
 const VOIDSHIP_SLIDER_DEFS: SliderDef[] = [
   {
     key: "shipX",
-    label: "Ship Left Edge",
-    min: 0, max: 400, step: 1,
-    description: "X position of the ship's port-side outer hull edge",
+    label: "Bow Left X",
+    min: 0, max: 500, step: 1,
+    description: "X position of the bow zone's top-left corner",
   },
   {
     key: "shipY",
-    label: "Ship Top Edge",
+    label: "Bow Top Y",
     min: 0, max: 300, step: 1,
-    description: "Y position of the ship's bow (top)",
+    description: "Y position of the bow (topmost zone)",
   },
   {
-    key: "shipW",
-    label: "Ship Width",
-    min: 200, max: 900, step: 1,
-    description: "Total width of the ship (both columns + corridor)",
+    key: "zoneW",
+    label: "Zone Width",
+    min: 100, max: 700, step: 1,
+    description: "Width of each zone parallelogram",
   },
   {
     key: "shipH",
     label: "Ship Height",
-    min: 300, max: 950, step: 1,
-    description: "Total height of the ship (bow to stern)",
+    min: 200, max: 970, step: 1,
+    description: "Total height bow to stern (all zones + bulkhead gaps)",
   },
   {
-    key: "gapX",
-    label: "Corridor Width",
-    min: 10, max: 120, step: 1,
-    description: "Width of the centerline corridor between port and starboard columns",
+    key: "skewX",
+    label: "Perspective Lean",
+    min: -300, max: 300, step: 1,
+    description: "Rightward shift of stern vs bow — positive = leans upper-left to lower-right",
   },
   {
     key: "gapY",
     label: "Bulkhead Gap",
     min: 0, max: 40, step: 1,
-    description: "Height of the bulkhead gap between zone rows",
+    description: "Height of the gap between zone rows",
   },
   {
     key: "sectorGap",
     label: "Sector Gap",
     min: 0, max: 20, step: 1,
-    description: "Gap between the 4 sector sub-rectangles within each zone",
+    description: "Gap between the 4 sector sub-parallelograms within each zone",
   },
   {
     key: "overlayOpacity",
@@ -2416,19 +2444,19 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
 
   // ── Voidship layout ───────────────────────────────────────────────────────
   if (layout === "void_ship") {
-    const perCol = Math.ceil(props.zoneCount / 2);
-    const colW   = (voidshipCfg.shipW - voidshipCfg.gapX) / 2;
-    const zoneH  = perCol > 1
-      ? (voidshipCfg.shipH - (perCol - 1) * voidshipCfg.gapY) / perCol
+    const zoneH = props.zoneCount > 1
+      ? (voidshipCfg.shipH - (props.zoneCount - 1) * voidshipCfg.gapY) / props.zoneCount
       : voidshipCfg.shipH;
+    const subW  = (voidshipCfg.zoneW - voidshipCfg.sectorGap) / 2;
+    const subH  = (zoneH - voidshipCfg.sectorGap) / 2;
     const buildVoidshipCopySnippet = () => [
       "// Voidship Calibration — paste into DEFAULT_VOIDSHIP_CONFIG in CampaignMapOverlay.tsx",
       "export const DEFAULT_VOIDSHIP_CONFIG: VoidshipConfig = {",
       `  shipX:          ${voidshipCfg.shipX},`,
       `  shipY:          ${voidshipCfg.shipY},`,
-      `  shipW:          ${voidshipCfg.shipW},`,
+      `  zoneW:          ${voidshipCfg.zoneW},`,
       `  shipH:          ${voidshipCfg.shipH},`,
-      `  gapX:           ${voidshipCfg.gapX},`,
+      `  skewX:          ${voidshipCfg.skewX},`,
       `  gapY:           ${voidshipCfg.gapY},`,
       `  sectorGap:      ${voidshipCfg.sectorGap},`,
       `  overlayOpacity: ${voidshipCfg.overlayOpacity.toFixed(2)},`,
@@ -2438,8 +2466,8 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
     return (
       <div className="space-y-2">
         <MapLegend />
-        {/* Voidship uses aspect-video (16:9) — the ship is taller than wide */}
-        <div className="relative w-full aspect-video overflow-hidden rounded-xl border border-zinc-700 bg-black">
+        {/* Voidship uses aspect-square — the 1000×1000 SVG viewBox is undistorted */}
+        <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
           <img
             src={mapUrl}
             alt="Campaign theatre map"
@@ -2460,11 +2488,12 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                 onReset={resetVoidshipCfg}
                 campaignId={campaignId}
                 derivedValues={[
-                  { label: "perCol",   value: String(perCol) },
-                  { label: "colW",     value: colW.toFixed(1) },
-                  { label: "zoneH",    value: zoneH.toFixed(1) },
-                  { label: "subW",     value: ((colW - voidshipCfg.sectorGap) / 2).toFixed(1) },
-                  { label: "subH",     value: ((zoneH - voidshipCfg.sectorGap) / 2).toFixed(1) },
+                  { label: "zoneH",      value: zoneH.toFixed(1) },
+                  { label: "subW",       value: subW.toFixed(1) },
+                  { label: "subH",       value: subH.toFixed(1) },
+                  { label: "skewPerZone", value: (voidshipCfg.skewX * zoneH / voidshipCfg.shipH).toFixed(1) },
+                  { label: "bowRight",   value: (voidshipCfg.shipX + voidshipCfg.zoneW).toFixed(0) },
+                  { label: "sternLeft",  value: (voidshipCfg.shipX + voidshipCfg.skewX).toFixed(0) },
                 ]}
               />
             )}
