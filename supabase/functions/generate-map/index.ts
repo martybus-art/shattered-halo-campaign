@@ -13,6 +13,14 @@
 //                (new lead-page Generate Map modal flow). Fixed DB column names:
 //                generation_status (not status), writes both bg_image_path and
 //                image_path for MapImageDisplay compatibility.
+//   2026-03-14 -- ship_line prompt completely rewritten to fix terrain-blob output.
+//                Root causes fixed: (1) removed sharedShotLock (forced orbital/top-down
+//                perspective), (2) removed sharedStyle (planetary terrain map language),
+//                (3) replaced biomeMod with ship-interior zone descriptions (biomeMod
+//                was defaulting to "ash_wastes" outdoor terrain, directly causing the
+//                coloured terrain blobs), (4) changed "top-down" to explicit SIDE-ON
+//                LONGITUDINAL CUTAWAY perspective with strong negative prompting.
+//                Other layout prompts (ring/continent/radial) unchanged.
 //   2026-03-10 -- Ring prompt updated with SVG overlay alignment guidance.
 //                The ring's playable band (inner radius ~50%, outer ~86% of frame)
 //                is now specified so terrain colouring harmonises with the
@@ -206,29 +214,52 @@ function buildPrompt(params: {
     }
 
     case "ship_line": {
+      // ── ship_line does NOT use sharedShotLock (orbital perspective) or sharedStyle
+      // (planetary terrain map language) — those blocks actively fight the cutaway
+      // ship aesthetic and were the primary cause of terrain-blob output.
+      //
+      // biomeMod is also intentionally NOT used here: planet_profile is null for
+      // ship_line, so biomeMod defaults to "ash_wastes" outdoor terrain descriptors
+      // which contaminate the interior imagery. Ship interior zones are described
+      // explicitly below instead.
+
+      const shipShotLock = [
+        `CRITICAL PERSPECTIVE REQUIREMENT: This is a SIDE-ON LONGITUDINAL CUTAWAY ILLUSTRATION of a warship — NOT a top-down orbital map, NOT a terrain zone layout, NOT overhead blobs of land.`,
+        `The entire warship runs horizontally across the full width of the image from bow (left) to stern (right), viewed from the side or a slight low three-quarter angle.`,
+        `The upper hull plating is removed or shown as transparent, revealing the vast interior compartments in cross-section, like a technical cutaway illustration rendered as grimdark concept art.`,
+        `The exterior gothic hull silhouette — with its towers, lance batteries, prow ram, and engine cowlings — frames the top and bottom of the composition.`,
+        `This is a SHIP CROSS-SECTION viewed from the side. The interior zones are stacked chambers arranged left-to-right along the ship's length, NOT blobs of outdoor terrain seen from above.`,
+      ].join(" ");
+
+      const shipZoneDescriptions = [
+        `${zone_count} major interior battle zones are distributed along the ship's length as distinct structural compartments, separated by colossal armoured bulkheads and structural ribs — thick dark iron barriers visible spanning the full interior height.`,
+        `Each zone is a unique cavernous interior space: gothic cathedral vaults, industrial machinery halls, plasma reactor chambers, weapon loading bays, crew labyrinth districts, and shrine complexes.`,
+        `Bow zones: the command bridge spire rising above the hull, filled with tactical hololiths and cogitator banks glowing amber; Navigator's sanctum and astropathic choir glowing with eerie psychic purple-blue light.`,
+        `Midship zones: vast weapon decks with macro cannon batteries and lance arrays embedded in the hull walls; crew districts as dense industrial labyrinths of barracks, manufactorums, and gothic shrines.`,
+        `Stern zones: the plasma reactors and warp drive — colossal cathedral-like machinery chambers glowing with intense blue-white plasma energy; the main engines visible as massive glowing exhausts at the far right.`,
+        `Interior aesthetic throughout: corroded iron deck plates, gothic arches, vaulted ceilings, amber cogitator light, incense braziers, servo skull stations, purity seals, devotional statues.`,
+      ].join(" ");
+
+      const shipStyle = [
+        `Warhammer 40K Battlefleet Gothic official concept art style — grimdark Gothic warship cutaway cross-section illustration.`,
+        `The ship silhouette is magnificent and massive: gothic spires, prow-mounted lance arrays, armoured flanks bristling with weapon batteries, towering superstructure.`,
+        `Rich mechanical detail on the hull exterior: riveted iron plating, cathedral buttresses, turrets, gothic spires, venting plasma exhausts, prow ram.`,
+        `Battle damage throughout: breached decks exposing the void, plasma fires, collapsed corridors, shattered statues, explosive decompression, blast marks.`,
+        `Stars, nebula glow, and void visible beyond the hull where armour plates have been torn away.`,
+        `Grimdark palette: corroded iron, dark stone, deep crimson, tarnished gold, with blue-white plasma glow from the stern engines and amber mechanical light within.`,
+        `Vibrant zone identity colours tinting each interior compartment — Orange, Purple, Blue, Green, Gold — distinguishing battle zones without replacing the mechanical aesthetic.`,
+        `Epic scale: the ship feels kilometres long; individual figures and vehicles implied by architectural scale alone.`,
+        `Cinematic lighting: blue-white plasma reactor glow from the stern, amber cogitator light in command areas, warp energy glow in the navigator's sanctum, fire and battle damage throughout.`,
+        `NO top-down terrain view. NO outdoor landscapes. NO blob zones. NO volcanic plains. NO alien forests. NO planetary surface. NO overhead map. NO floor plan grid. NO text. NO UI.`,
+        `This is a side-on warship cross-section concept art illustration, not a planetary map.`,
+      ].join(" ");
+
       return [
-        `Cinematic top-down cutaway view of a colossal Warhammer 40K Gothic warship drifting through space, its armored hull partially exposed to reveal the vast internal structure like a megastructure cross-section.`,
+        `Warhammer 40K Gothic warship cutaway concept art: a colossal Imperial warship seen from the side with the hull cut away to reveal the vast interior battle zones arranged along its full length.`,
         `${narrativeContext}${campaignNameContext}`,
-        sharedShotLock,
-        `The warship spans the image from bow (left) to stern (right), its immense gothic silhouette visible against the void.`,
-        `${zone_count} major interior battle zones are distributed along the length of the ship — each zone representing a massive strategic compartment or cluster of decks rather than small rooms.`,
-        `Terrain of the interior war zones: ${biomeMod}`,
-        `These zones include areas such as command sanctums, cathedral-like crew districts, reactor cathedrals, weapon batteries, launch bays, warp engines, and sensor arrays.`,
-        `Each zone is separated by colossal armoured bulkheads, blast doors, and deck-spanning structural ribs — visible as thick dark mechanical barriers within the ship.`,
-        `The ship is unimaginably vast, containing cathedral vaults, towering reactor chambers, kilometre-long corridors, shrine complexes, and weapon halls.`,
-        `The Command Bridge rises in a gothic tower structure filled with cogitator banks and tactical hololiths.`,
-        `The Navigator's Sanctum and Astropathic Choir chambers glow with eerie psychic light.`,
-        `The Plasma Reactors and Warp Drive sections dominate the stern half of the vessel — colossal cathedral-like machinery glowing with blue-white plasma energy.`,
-        `Weapon decks line the hull — macro cannon batteries, lance arrays, torpedo chambers, and launch bays embedded into the armoured sides of the ship.`,
-        `Void shield generators and augur arrays form massive machinery chambers surrounded by defensive infrastructure.`,
-        `Crew districts appear as dense industrial labyrinths of barracks, shrines, manufactorums, and gothic halls.`,
-        `Interior aesthetic: corroded iron deck plates, gothic arches, cathedral vaults, cogitator consoles glowing amber, incense braziers, servo skull stations, purity seals and devotional statues.`,
-        `Battle damage throughout the ship: breached decks exposing the void, fires, plasma leaks, collapsed corridors, shattered statues, blast marks and wreckage.`,
-        `Stars and nebula glow are visible beyond the hull outline where armor plates have been torn open.`,
-        `The stern engines burn with intense blue-white plasma light illuminating surrounding compartments.`,
-        `No blueprint diagrams, no dungeon grid layout, no UI overlays — this is a grimdark environment concept art tactical map.`,
-        `balanced cinematic lighting, not overly dark, details visible - subtle atmospheric glow from the planet or megastructure providing soft fill light across terrain`,
-        sharedStyle,
+        shipShotLock,
+        shipZoneDescriptions,
+        shipStyle,
         sharedLighting,
       ].join(" ");
     }
