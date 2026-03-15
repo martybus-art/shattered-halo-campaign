@@ -1923,7 +1923,7 @@ const CONTINENT_SLIDER_DEFS: SliderDef[] = [
   {
     key: "planetR",
     label: "Planet Radius",
-    min: 200, max: 900, step: 1,
+    min: 200, max: 1020, step: 1,
     description: "Outer radius of the planet sphere (horizontal rx)",
   },
   {
@@ -1998,7 +1998,7 @@ const VOIDSHIP_SLIDER_DEFS: SliderDef[] = [
   {
     key: "shipH",
     label: "Ship Height",
-    min: 200, max: 970, step: 1,
+    min: 200, max: 1020, step: 1,
     description: "Total height bow to stern (all zones + bulkhead gaps)",
   },
   {
@@ -2043,14 +2043,17 @@ function ContinentZoneOverridesPanel({
   zoneKeys,
   overrides,
   onChange,
+  initialOpen = true,
 }: {
-  zoneCount:  number;
-  zoneNames?: string[];
-  zoneKeys:   string[];
-  overrides:  Array<{ sweepDeg: number; angleOffset: number }>;
-  onChange:   (zi: number, field: "sweepDeg" | "angleOffset", value: number) => void;
+  zoneCount:    number;
+  zoneNames?:   string[];
+  zoneKeys:     string[];
+  overrides:    Array<{ sweepDeg: number; angleOffset: number }>;
+  onChange:     (zi: number, field: "sweepDeg" | "angleOffset", value: number) => void;
+  /** Whether the panel starts expanded. Pass false in popup mode. Default true. */
+  initialOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(initialOpen);
   return (
     <div className="rounded-lg border border-brass/20 bg-iron/80 backdrop-blur-sm text-sm overflow-hidden">
       <button
@@ -2132,15 +2135,18 @@ function VoidshipZoneWidthPanel({
   overrides,
   defaultW,
   onChange,
+  initialOpen = true,
 }: {
-  zoneCount:  number;
-  zoneNames?: string[];
-  zoneKeys:   string[];
-  overrides:  number[];
-  defaultW:   number;
-  onChange:   (zi: number, value: number) => void;
+  zoneCount:    number;
+  zoneNames?:   string[];
+  zoneKeys:     string[];
+  overrides:    number[];
+  defaultW:     number;
+  onChange:     (zi: number, value: number) => void;
+  /** Whether the panel starts expanded. Pass false in popup mode. Default true. */
+  initialOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(initialOpen);
   const halfDefault = Math.round(defaultW / 2);
 
   return (
@@ -2199,17 +2205,19 @@ function CalibrationPanel({
   onChange,
   onReset,
   campaignId,
+  initialOpen = true,
 }: {
   cfg: Record<string, number>;
   sliderDefs: SliderDef[];
-  /** Returns the text pasted to clipboard when the user clicks "Copy Config". */
   buildCopySnippet: () => string;
   onChange: (key: string, value: number) => void;
   onReset: () => void;
   campaignId?: string;
+  /** Whether the panel starts expanded. Pass false in popup mode. Default true. */
+  initialOpen?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
-  const [open, setOpen]     = useState(true);
+  const [open, setOpen]     = useState(initialOpen);
 
   const copyConfig = useCallback(() => {
     navigator.clipboard.writeText(buildCopySnippet()).then(() => {
@@ -2576,6 +2584,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                 onChange={handleSpokesSliderChange}
                 onReset={resetSpokesCfg}
                 campaignId={campaignId}
+                initialOpen={!popupMode}
               />
             )}
           </div>
@@ -2644,6 +2653,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                   onChange={handleContinentSliderChange}
                   onReset={resetContinentCfg}
                   campaignId={campaignId}
+                  initialOpen={!popupMode}
                 />
                 <ContinentZoneOverridesPanel
                   zoneCount={props.zoneCount}
@@ -2651,6 +2661,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                   zoneKeys={props.zoneKeys}
                   overrides={continentCfg.zoneOverrides ?? []}
                   onChange={handleZoneOverrideChange}
+                  initialOpen={!popupMode}
                 />
               </>
             )}
@@ -2722,6 +2733,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                   onChange={handleVoidshipSliderChange}
                   onReset={resetVoidshipCfg}
                   campaignId={campaignId}
+                  initialOpen={!popupMode}
                 />
                 <VoidshipZoneWidthPanel
                   zoneCount={props.zoneCount}
@@ -2730,6 +2742,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                   overrides={voidshipCfg.zoneWidthOverrides ?? []}
                   defaultW={voidshipCfg.zoneW}
                   onChange={handleZoneWidthChange}
+                  initialOpen={!popupMode}
                 />
               </>
             )}
@@ -2775,6 +2788,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
               onChange={handleRingSliderChange}
               onReset={resetRingCfg}
               campaignId={campaignId}
+              initialOpen={!popupMode}
             />
           )}
         </div>
