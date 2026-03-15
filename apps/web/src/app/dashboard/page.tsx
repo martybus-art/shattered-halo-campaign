@@ -3,6 +3,18 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-15 — FEATURE: Zone Effects system integrated into Faction Resources card.
+//                New types: CampaignZoneEffect, ZoneEffectReveal, ZoneEffectEvent.
+//                load() queries campaign_zone_effects (joined to zone_effects),
+//                zone_effect_reveals (fog-of-war — RLS returns only this player's
+//                own reveals), and zone_effect_events (one-time use audit log).
+//                Faction Resources card gains "Zone Effects" section below
+//                Round Purchases. Shows only revealed effects; one-time scope
+//                effects display Used/Available badge matching existing token UX.
+//                PostTagBadge extended with "zone_effect" (purple) case.
+//                Realtime subscription extended to also reload zone effects on
+//                zone_effect_reveals INSERT so the card updates without a page
+//                refresh when a reveal is written by the backend.
 //   2026-03-13 — FEATURE: War Bulletin filter bar (All / 🌐 Public / 🔒 Private)
 //                matching lead/page.tsx design. bulletinFilter state added.
 //                PostTagBadge extended with "movement" (blue) and "stage_advance"
@@ -172,6 +184,47 @@ type Spend  = { spend_type: string; nip_spent: number };
 type Member = { user_id: string; commander_name: string | null; faction_name: string | null; role: string };
 type Sector = { zone_key: string; sector_key: string; owner_user_id: string | null; revealed_public: boolean };
 
+// Zone effects — joined shape returned by the campaign_zone_effects select
+type ZoneEffectDetail = {
+  slug:           string;
+  name:           string;
+  category:       string;
+  scope:          string;   // 'permanent' | 'per_battle' | 'per_round' | 'one_time'
+  lore:           string;
+  minor_benefit:  string;
+  major_benefit:  string;
+  global_benefit: string;
+  power_rating:   number;
+};
+
+type CampaignZoneEffect = {
+  id:                      string;
+  zone_key:                string;
+  zone_name:               string;
+  minor_one_time_consumed: boolean;
+  major_one_time_consumed: boolean;
+  global_uses_remaining:   number | null;
+  zone_effects:            ZoneEffectDetail;
+};
+
+// Per-player fog-of-war reveal record (RLS returns only this player's own rows)
+type ZoneEffectReveal = {
+  id:             string;
+  zone_key:       string;
+  zone_effect_id: string;
+  tier:           "minor" | "major" | "global";
+  revealed_at:    string;
+};
+
+// Append-only event log — used for one-time use tracking on the resource card
+type ZoneEffectEvent = {
+  id:             string;
+  zone_key:       string;
+  zone_effect_id: string;
+  event_type:     string;
+  round_number:   number;
+};
+
 type UnderdogChoice = {
   id:            string;
   chosen_option: string | null;
@@ -261,6 +314,13 @@ function PostTagBadge({ tags }: { tags: string[] }) {
       </span>
     );
   }
+  if (tags.includes("zone_effect")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-purple-400/35 bg-purple-500/10 text-purple-300/70 font-mono uppercase tracking-wider">
+        ◈ Zone Effect
+      </span>
+    );
+  }
   if (tags.includes("phase")) {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/30 bg-blood/8 text-blood/60 font-mono uppercase tracking-wider">
@@ -296,6 +356,10 @@ export default function Dashboard() {
   const [cart,            setCart]            = useState<Record<string, boolean>>({});
   const [secretLocation,  setSecretLocation]  = useState<string | null>(null);
   const [myUnits,         setMyUnits]         = useState<{ id: string; unit_type: string; zone_key: string; sector_key: string }[]>([]);
+  // Zone effects state — populated from three separate tables
+  const [campaignZoneEffects, setCampaignZoneEffects] = useState<CampaignZoneEffect[]>([]);
+  const [myZoneReveals,       setMyZoneReveals]       = useState<ZoneEffectReveal[]>([]);
+  const [zoneEffectEvents,    setZoneEffectEvents]    = useState<ZoneEffectEvent[]>([]);
   const [purchasing,      setPurchasing]      = useState(false);
   const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
   const [accepting,       setAccepting]       = useState(false);
@@ -451,6 +515,34 @@ export default function Dashboard() {
       .from("units").select("id,unit_type,zone_key,sector_key")
       .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "active");
     setMyUnits(unitRows ?? []);
+
+    // 12. Campaign zone effects — full join so we have effect details for display.
+    //     RLS on campaign_zone_effects: all campaign members can read.
+    //     The fog-of-war is enforced client-side using myZoneReveals — we load
+    //     all assignments but only render the ones that have a matching reveal row.
+    const { data: czeRows } = await supabase
+      .from("campaign_zone_effects")
+      .select("id,zone_key,zone_name,minor_one_time_consumed,major_one_time_consumed,global_uses_remaining,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
+      .eq("campaign_id", cid);
+    setCampaignZoneEffects((czeRows ?? []) as CampaignZoneEffect[]);
+
+    // 13. My zone effect reveals — RLS enforces that only this player's own
+    //     reveal rows are returned, so no client-side filtering required.
+    const { data: revealRows } = await supabase
+      .from("zone_effect_reveals")
+      .select("id,zone_key,zone_effect_id,tier,revealed_at")
+      .eq("campaign_id", cid)
+      .eq("user_id", user.id);
+    setMyZoneReveals((revealRows ?? []) as ZoneEffectReveal[]);
+
+    // 14. Zone effect events for this player — used to show one-time use status
+    //     on the Faction Resources card (mirrors the existing usedTokens pattern).
+    const { data: zeeRows } = await supabase
+      .from("zone_effect_events")
+      .select("id,zone_key,zone_effect_id,event_type,round_number")
+      .eq("campaign_id", cid)
+      .eq("user_id", user.id);
+    setZoneEffectEvents((zeeRows ?? []) as ZoneEffectEvent[]);
   };
 
   useEffect(() => {
@@ -499,6 +591,35 @@ export default function Dashboard() {
 
     return () => {
       supabase.removeChannel(channel);
+    };
+  }, [uid, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -- Realtime: zone_effect_reveals — reload when a new reveal is written -----
+  // The backend writes to zone_effect_reveals when sector control thresholds are
+  // met. Subscribing here means the Zone Effects section updates live without
+  // requiring a page refresh.
+  useEffect(() => {
+    if (!uid || !campaignId) return;
+
+    const revealChannel = supabase
+      .channel(`zone_effect_reveals_live_${uid}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "zone_effect_reveals",
+          filter: `user_id=eq.${uid}`,
+        },
+        () => {
+          // A new reveal has been written for this player — reload zone effect data
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(revealChannel);
     };
   }, [uid, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -664,6 +785,47 @@ export default function Dashboard() {
     members.forEach((mem) => m.set(mem.user_id, mem));
     return m;
   }, [members]);
+
+  // -- Zone effects derived state --------------------------------------------
+
+  // Index reveals by zone_key, collecting all tiers revealed for this player.
+  // e.g. { "ash_wastes": Set { "minor", "global" } }
+  const myRevealsByZone = useMemo(() => {
+    const m = new Map<string, Set<"minor" | "major" | "global">>();
+    for (const r of myZoneReveals) {
+      if (!m.has(r.zone_key)) m.set(r.zone_key, new Set());
+      m.get(r.zone_key)!.add(r.tier);
+    }
+    return m;
+  }, [myZoneReveals]);
+
+  // Index one_time_used events by zone_key so we can show Used/Available badge.
+  // one_time_used events indicate a one-time benefit has been consumed.
+  const oneTimeUsedByZone = useMemo(() => {
+    const used = new Set<string>();
+    for (const e of zoneEffectEvents) {
+      if (e.event_type === "one_time_used") used.add(e.zone_key);
+    }
+    return used;
+  }, [zoneEffectEvents]);
+
+  // Build the list of zone effects that are visible to this player —
+  // i.e. zones where this player has at least one reveal tier.
+  // Sorted by reveal time (most recent first) using zone_key as stable fallback.
+  const visibleZoneEffects = useMemo(() => {
+    return campaignZoneEffects
+      .filter((cze) => myRevealsByZone.has(cze.zone_key))
+      .sort((a, b) => {
+        // Sort by the most recent reveal time for each zone
+        const latestA = myZoneReveals
+          .filter((r) => r.zone_key === a.zone_key)
+          .reduce((max, r) => (r.revealed_at > max ? r.revealed_at : max), "");
+        const latestB = myZoneReveals
+          .filter((r) => r.zone_key === b.zone_key)
+          .reduce((max, r) => (r.revealed_at > max ? r.revealed_at : max), "");
+        return latestB.localeCompare(latestA);
+      });
+  }, [campaignZoneEffects, myRevealsByZone, myZoneReveals]);
 
   // -- Render ----------------------------------------------------------------
 
@@ -942,6 +1104,98 @@ export default function Dashboard() {
                                 : <span className="text-brass/60 text-xs font-mono">Free</span>
                               }
                             </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Zone Effects ── revealed effects for this player ──── */}
+                {/* Fog-of-war enforced: only effects with a matching reveal  */}
+                {/* row in zone_effect_reveals are shown here.                */}
+                {visibleZoneEffects.length > 0 && (
+                  <div className="border-t border-brass/10 pt-3 space-y-2">
+                    <p className="text-xs text-parchment/40 font-semibold uppercase tracking-widest">
+                      Zone Effects
+                    </p>
+                    <div className="space-y-2">
+                      {visibleZoneEffects.map((cze) => {
+                        const effect        = cze.zone_effects;
+                        const tiers         = myRevealsByZone.get(cze.zone_key) ?? new Set();
+                        const hasMajor      = tiers.has("major");
+                        const hasMinor      = tiers.has("minor");
+                        const hasGlobal     = tiers.has("global");
+                        const isOneTime     = effect.scope === "one_time";
+                        const wasUsed       = isOneTime && oneTimeUsedByZone.has(cze.zone_key);
+
+                        // Determine the active tier label and benefit text for this player
+                        const activeTier = hasMajor ? "major" : hasMinor ? "minor" : "global";
+                        const benefitText =
+                          hasMajor  ? effect.major_benefit  :
+                          hasMinor  ? effect.minor_benefit  :
+                          effect.global_benefit;
+
+                        // Tier badge colours
+                        const tierStyles: Record<string, string> = {
+                          major:  "border-brass/60 bg-brass/20 text-brass",
+                          minor:  "border-brass/35 bg-brass/10 text-brass/70",
+                          global: "border-purple-400/40 bg-purple-500/15 text-purple-300/80",
+                        };
+
+                        // Scope label for display
+                        const scopeLabel: Record<string, string> = {
+                          permanent: "Always active",
+                          per_battle: "Per battle",
+                          per_round: "Per round",
+                          one_time: "One-time use",
+                        };
+
+                        return (
+                          <div
+                            key={cze.zone_key}
+                            className={`rounded border px-3 py-2.5 space-y-1.5 ${
+                              hasMajor
+                                ? "border-brass/35 bg-brass/5"
+                                : hasMinor
+                                  ? "border-brass/20 bg-void"
+                                  : "border-purple-400/20 bg-purple-500/5"
+                            }`}
+                          >
+                            {/* Header row: zone name + tier badge */}
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="min-w-0">
+                                <p className="text-parchment/85 text-sm font-semibold truncate">
+                                  {cze.zone_name}
+                                </p>
+                                <p className="text-parchment/40 text-xs font-mono">{effect.name}</p>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                <span className={`text-xs px-1.5 py-0.5 rounded border font-mono uppercase ${tierStyles[activeTier]}`}>
+                                  {activeTier === "major"  && "★ Major"}
+                                  {activeTier === "minor"  && "◆ Minor"}
+                                  {activeTier === "global" && "◈ Global"}
+                                </span>
+                                {isOneTime && (
+                                  wasUsed
+                                    ? <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/30">Used</span>
+                                    : <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-brass/35 bg-brass/10 text-brass/70">Available</span>
+                                )}
+                                <span className="text-xs text-parchment/25 font-mono">
+                                  {scopeLabel[effect.scope] ?? effect.scope}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Active benefit text */}
+                            <p className="text-parchment/65 text-xs leading-relaxed">
+                              {benefitText}
+                            </p>
+
+                            {/* Lore — collapsed, small */}
+                            <p className="text-parchment/25 text-xs italic leading-relaxed border-t border-parchment/8 pt-1.5">
+                              {effect.lore.length > 120 ? effect.lore.slice(0, 120) + "…" : effect.lore}
+                            </p>
                           </div>
                         );
                       })}

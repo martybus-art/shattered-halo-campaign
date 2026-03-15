@@ -3,6 +3,17 @@
 // Stage order: spend → recon → movement → conflicts → missions → results → publish
 // On publish → next round starts at spend.
 // Conflict detection runs on movement→conflicts transition.
+// Zone effect evaluation runs on movement→conflicts and results→publish transitions.
+//
+// changelog:
+//   2026-03-15 -- Wired evaluate-zone-effects: called (non-blocking) after the
+//                 movement→conflicts transition (units have moved, ownership may
+//                 have changed) and after the results→publish transition (battle
+//                 outcomes resolve, sector control may have shifted). Errors from
+//                 evaluate-zone-effects are logged but never break stage advance.
+//                 Uses Deno.env SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY for the
+//                 internal service-to-service call, matching the pattern used by
+//                 other edge functions across this codebase.
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
@@ -86,6 +97,55 @@ async function detectConflicts(
     }
   }
   return created;
+}
+
+// ---------------------------------------------------------------------------
+// evaluateZoneEffects
+// ---------------------------------------------------------------------------
+// Calls the evaluate-zone-effects edge function via an internal service-to-
+// service fetch. This checks sector ownership against thresholds and writes
+// new zone_effect_reveals + War Bulletin posts for any newly-qualified players.
+//
+// Called after:
+//   movement → conflicts  (units have moved, ownership may have changed)
+//   results  → publish    (battle outcomes resolve, sector control may shift)
+//
+// Non-blocking: any error is logged but NEVER propagates — a failure here
+// must not break the stage advance or return an error to the lead player.
+// ---------------------------------------------------------------------------
+async function evaluateZoneEffects(campaign_id: string): Promise<void> {
+  const supabaseUrl      = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey   = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    console.warn("[advance-round] evaluateZoneEffects: missing SUPABASE_URL or service role key — skipping");
+    return;
+  }
+
+  try {
+    const resp = await fetch(
+      `${supabaseUrl}/functions/v1/evaluate-zone-effects`,
+      {
+        method:  "POST",
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": `Bearer ${serviceRoleKey}`,
+        },
+        body: JSON.stringify({ campaign_id }),
+      }
+    );
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "(unreadable)");
+      console.error(`[advance-round] evaluateZoneEffects: HTTP ${resp.status} — ${text}`);
+    } else {
+      const data = await resp.json().catch(() => null);
+      console.log(`[advance-round] evaluateZoneEffects: ok — newReveals=${data?.newReveals ?? "?"} bulletins=${data?.bulletin_posts ?? "?"}`);
+    }
+  } catch (e: any) {
+    // Non-fatal — log and continue
+    console.error("[advance-round] evaluateZoneEffects: fetch error —", e?.message ?? String(e));
+  }
 }
 
 serve(async (req) => {
@@ -173,6 +233,14 @@ serve(async (req) => {
       .update({ stage: newStage })
       .eq("campaign_id", campaign_id)
       .eq("round_number", campaign.round_number);
+
+    // Evaluate zone effects after transitions where sector ownership can change:
+    //   movement → conflicts : units have moved, some sectors may be newly controlled
+    //   results  → publish   : battle outcomes resolved, sector control may have shifted
+    // evaluateZoneEffects is non-blocking — errors do not affect the response.
+    if (stage === "movement" || stage === "results") {
+      await evaluateZoneEffects(campaign_id);
+    }
 
     return json(200, { ok: true, stage: newStage, conflicts_created });
 

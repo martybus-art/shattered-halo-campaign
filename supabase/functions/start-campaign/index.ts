@@ -1,8 +1,17 @@
 // supabase/functions/start-campaign/index.ts
 // Allocates secret starting locations for all players, creates their
-// initial scout and occupation units, and seeds the sectors table.
+// initial scout and occupation units, seeds the sectors table, and
+// randomly assigns unique zone effects to every zone on the campaign map.
 //
 // changelog:
+//   2026-03-15 -- Added assignZoneEffects(): after player allocation completes,
+//                 randomly assigns a unique zone_effect from the zone_effects
+//                 reference table to every zone defined in the campaign map_json.
+//                 Reads zone keys and names directly from map_json.zones so
+//                 there is no separate zone table needed. Idempotent — skips
+//                 zones that already have an effect assigned. Uses adminClient()
+//                 for all writes (bypasses RLS). Late mode does NOT re-run
+//                 assignZoneEffects() since effects are assigned at initial start.
 //   2026-03-15 — REFACTOR: Removed local fallbackMap(). map_json is now
 //                guaranteed populated by create-campaign via buildMapTemplate().
 //                start-campaign reads map_json as before; if map_json is still
@@ -54,6 +63,98 @@ function parseLocation(loc: string) {
 }
 
 const STARTING_NIP = 1;
+
+// ---------------------------------------------------------------------------
+// assignZoneEffects
+// ---------------------------------------------------------------------------
+// Randomly assigns a unique zone_effect to each zone in the campaign's map.
+// Sources zone keys and names directly from map_json — no separate zone table.
+// Idempotent: zones that already have an effect assigned are skipped.
+// Called once at initial start; never called for late mode (effects persist).
+// ---------------------------------------------------------------------------
+async function assignZoneEffects(
+  admin: ReturnType<typeof adminClient>,
+  campaign_id: string,
+  mapDef: MapDef
+): Promise<void> {
+  // 1. Check which zones already have effects (idempotency guard)
+  const { data: existing, error: existErr } = await admin
+    .from("campaign_zone_effects")
+    .select("zone_key, zone_effect_id")
+    .eq("campaign_id", campaign_id);
+
+  if (existErr) {
+    console.error("[start-campaign] assignZoneEffects: existing check error:", existErr.message);
+    return;
+  }
+
+  const assignedZoneKeys    = new Set((existing ?? []).map((r: any) => r.zone_key as string));
+  const usedEffectIds       = new Set((existing ?? []).map((r: any) => r.zone_effect_id as string));
+  const zonesNeedingEffects = mapDef.zones.filter((z) => !assignedZoneKeys.has(z.key));
+
+  if (!zonesNeedingEffects.length) {
+    console.log("[start-campaign] assignZoneEffects: all zones already assigned, skipping.");
+    return;
+  }
+
+  // 2. Load active zone effects from the reference table
+  const { data: effects, error: effectErr } = await admin
+    .from("zone_effects")
+    .select("id, slug, scope")
+    .eq("is_active", true);
+
+  if (effectErr || !effects?.length) {
+    console.error("[start-campaign] assignZoneEffects: could not load zone_effects:", effectErr?.message ?? "empty");
+    return;
+  }
+
+  // 3. Build pool: prefer effects not yet used in this campaign; wrap if exhausted
+  const preferredPool = shuffle((effects as any[]).filter((e) => !usedEffectIds.has(e.id as string)));
+  const fallbackPool  = shuffle(effects as any[]);
+  let   pool          = [...preferredPool];
+
+  // 4. Build rows for each zone needing an assignment
+  const rows: {
+    campaign_id:           string;
+    zone_key:              string;
+    zone_name:             string;
+    zone_effect_id:        string;
+    global_uses_remaining: number | null;
+  }[] = [];
+
+  for (const zone of zonesNeedingEffects) {
+    if (!pool.length) {
+      // Exhausted unique effects — refill from full pool (duplicates allowed as fallback)
+      pool = shuffle([...fallbackPool]);
+    }
+    const effect = pool.shift()!;
+
+    rows.push({
+      campaign_id,
+      zone_key:              zone.key,
+      zone_name:             zone.name ?? zone.key,
+      zone_effect_id:        effect.id,
+      // one_time scope effects start with 1 global use; others are unlimited (null)
+      global_uses_remaining: (effect.scope as string) === "one_time" ? 1 : null,
+    });
+
+    // Mark as used so subsequent zones in this same batch prefer different effects
+    usedEffectIds.add(effect.id as string);
+    pool = pool.filter((e) => e.id !== effect.id);
+  }
+
+  if (!rows.length) return;
+
+  const { error: insertErr } = await admin
+    .from("campaign_zone_effects")
+    .upsert(rows, { onConflict: "campaign_id,zone_key", ignoreDuplicates: true });
+
+  if (insertErr) {
+    console.error("[start-campaign] assignZoneEffects: upsert error:", insertErr.message);
+  } else {
+    console.log(`[start-campaign] assignZoneEffects: assigned ${rows.length} zone effect(s).`);
+  }
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -117,7 +218,7 @@ serve(async (req) => {
 
       // Safety net for legacy campaigns: backfill map_json from template
       if (!map && mapRow) {
-        const layout     = (mapRow as any)?.layout    as string ?? "ring";
+        const layout     = (mapRow as any)?.layout     as string ?? "ring";
         const zone_count = (mapRow as any)?.zone_count as number ?? 8;
         map = buildMapTemplate(layout, zone_count) as MapDef;
 
@@ -165,7 +266,7 @@ serve(async (req) => {
     }
 
     const allLocations: string[] = [];
-    for (const z of map.zones)
+    for (const z of map!.zones)
       for (const sec of z.sectors) allLocations.push(sec.key);
 
     function pickFreeSectorInZone(zoneKey: string): string | null {
@@ -279,6 +380,9 @@ serve(async (req) => {
     }
 
     // ── Late mode ─────────────────────────────────────────────────────────────
+    // Zone effects are NOT reassigned in late mode — they were set at initial
+    // start and late-joining players enter a campaign where effects are already
+    // in place (hidden or revealed depending on existing player progress).
 
     if (mode === "late") {
       const uid = late_user_id!;
@@ -322,7 +426,7 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, allocatedLoc);
-      await createInitialSectors(uid, allocatedLoc, map);
+      await createInitialSectors(uid, allocatedLoc, map!);
       await createInitialUnits(uid, allocatedLoc, roundNumber ?? 1);
       return json(200, { ok: true, allocated: 1 });
     }
@@ -347,13 +451,18 @@ serve(async (req) => {
 
       await ensurePublicPlayerState(uid);
       await writeSecret(uid, loc);
-      await createInitialSectors(uid, loc, map);
+      await createInitialSectors(uid, loc, map!);
       await createInitialUnits(uid, loc, 1);
 
       usedSectors.add(loc);
       usedZones.add(parseLocation(loc).zone_key);
       allocated++;
     }
+
+    // ── Assign zone effects to all zones (initial start only) ─────────────────
+    // Runs after player allocation so map zones are fully seeded.
+    // assignZoneEffects is idempotent — safe to call even if partially assigned.
+    await assignZoneEffects(admin, campaign_id, map!);
 
     const { error: roundErr } = await admin.from("rounds").upsert(
       { campaign_id, round_number: 1, stage: "spend" },

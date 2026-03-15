@@ -2,6 +2,17 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-15 — FEATURE: Zone effects integrated into map overlay and popup panel.
+//                New type ZoneEffectSummary imported from CampaignMapOverlay.
+//                load() adds queries 12-13: campaign_zone_effects (joined to
+//                zone_effects) and zone_effect_reveals for the current user.
+//                Derived state: zoneEffectsByKey (fog-of-war pre-filter using
+//                reveal rows), oneTimeUsedByZone (from zone_effect_events),
+//                zoneEffectSummaries array passed to both CampaignMapOverlay
+//                call sites as the new zoneEffectSummaries prop.
+//                SectorInfoPopupPanel: new "Zone Effect" CollapsibleSection
+//                shows revealed effect name, tier badge, benefit text, scope,
+//                lore, and major-benefit teaser when minor tier applies.
 //   2026-03-15 — FEATURE: Sector info popup panel. Three new components added:
 //                TagCard (renders a single SectorTag in brass card style),
 //                CollapsibleSection (reusable ◈ toggle panel matching
@@ -77,7 +88,7 @@ import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
 import { MapImageDisplay } from "@/components/MapImageDisplay";
-import CampaignMapOverlay from "@/components/CampaignMapOverlay";
+import CampaignMapOverlay, { ZoneEffectSummary } from "@/components/CampaignMapOverlay";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -159,6 +170,33 @@ type Member = {
   user_id:        string;
   commander_name: string | null;
   faction_name:   string | null;
+};
+
+// Zone effects — data loaded for overlay + popup panel
+type CampaignZoneEffect = {
+  id:                      string;
+  zone_key:                string;
+  zone_name:               string;
+  minor_one_time_consumed: boolean;
+  major_one_time_consumed: boolean;
+  global_uses_remaining:   number | null;
+  zone_effects: {
+    slug:           string;
+    name:           string;
+    category:       string;
+    scope:          string;
+    lore:           string;
+    minor_benefit:  string;
+    major_benefit:  string;
+    global_benefit: string;
+    power_rating:   number;
+  };
+};
+
+type ZoneEffectReveal = {
+  zone_key:       string;
+  zone_effect_id: string;
+  tier:           "minor" | "major" | "global";
 };
 
 // ── Adjacency builder ─────────────────────────────────────────────────────────
@@ -726,14 +764,20 @@ function SectorInfoPopupPanel({
   myUnits,
   memberById,
   uid,
+  czeByZone,
+  revealTierByZone,
 }: {
-  zoneKey:    string;
-  sectorKey:  string;
-  sectors:    Sector[];
-  zones:      MapZone[];
-  myUnits:    Unit[];
-  memberById: Map<string, Member>;
-  uid:        string;
+  zoneKey:          string;
+  sectorKey:        string;
+  sectors:          Sector[];
+  zones:            MapZone[];
+  myUnits:          Unit[];
+  memberById:       Map<string, Member>;
+  uid:              string;
+  /** Full campaign_zone_effects lookup — for zone effect detail panel. */
+  czeByZone:        Map<string, CampaignZoneEffect>;
+  /** Highest reveal tier per zone for current player — fog-of-war gate. */
+  revealTierByZone: Map<string, "minor" | "major" | "global">;
 }) {
   // ── Empty state ─────────────────────────────────────────────────────────
   if (!zoneKey || !sectorKey) {
@@ -796,9 +840,15 @@ function SectorInfoPopupPanel({
       .reduce((s, t) => s + (t.value ?? 0), 0);
   }, 0);
 
+  // ── Zone effect for this zone (fog-of-war: only shown if revealed) ────────
+  const revealedTier  = revealTierByZone.get(zoneKey) ?? null;
+  const cze           = czeByZone.get(zoneKey) ?? null;
+  const zoneEffect    = (revealedTier && cze) ? cze.zone_effects : null;
+
   const hasNoFeatures = !myUnit && !sector?.fortified
     && defTags.length === 0 && zoneBenefitTags.length === 0
-    && relicTags.length === 0 && nipTags.length === 0 && otherTags.length === 0;
+    && relicTags.length === 0 && nipTags.length === 0 && otherTags.length === 0
+    && !zoneEffect;
 
   return (
     <div className="space-y-2">
@@ -884,6 +934,79 @@ function SectorInfoPopupPanel({
                 </div>
               )}
               {defTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
+            </CollapsibleSection>
+          )}
+
+          {/* Zone Effect — revealed via fog-of-war system */}
+          {zoneEffect && revealedTier && (
+            <CollapsibleSection
+              title="Zone Effect"
+              defaultOpen
+              badge={
+                <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${
+                  revealedTier === "major"
+                    ? "border-yellow-400/60 bg-yellow-400/15 text-yellow-300"
+                    : revealedTier === "minor"
+                    ? "border-brass/50 bg-brass/15 text-brass"
+                    : "border-purple-400/40 bg-purple-500/15 text-purple-300/80"
+                }`}>
+                  {revealedTier === "major" ? "★ Major" : revealedTier === "minor" ? "◆ Minor" : "◈ Global"}
+                </span>
+              }
+            >
+              {/* Effect name + category */}
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <div>
+                  <p className="text-parchment/85 text-sm font-semibold">{zoneEffect.name}</p>
+                  <p className="text-parchment/35 text-xs font-mono">{zoneEffect.category}</p>
+                </div>
+                <span className="text-xs px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/40 font-mono shrink-0">
+                  {zoneEffect.scope === "permanent"  && "Always active"}
+                  {zoneEffect.scope === "per_battle" && "Per battle"}
+                  {zoneEffect.scope === "per_round"  && "Per round"}
+                  {zoneEffect.scope === "one_time"   && "One-time use"}
+                </span>
+              </div>
+
+              {/* Active benefit text */}
+              <div className={`px-3 py-2.5 rounded border space-y-1 ${
+                revealedTier === "major"
+                  ? "border-yellow-400/25 bg-yellow-400/5"
+                  : revealedTier === "minor"
+                  ? "border-brass/20 bg-brass/5"
+                  : "border-purple-400/20 bg-purple-500/5"
+              }`}>
+                <p className="text-parchment/40 text-xs font-mono uppercase tracking-wide">
+                  {revealedTier === "major" ? "Full Control Benefit" : revealedTier === "minor" ? "Partial Control Benefit" : "Global Effect (Consolation)"}
+                </p>
+                <p className="text-parchment/75 text-xs leading-relaxed">
+                  {revealedTier === "major"
+                    ? zoneEffect.major_benefit
+                    : revealedTier === "minor"
+                    ? zoneEffect.minor_benefit
+                    : zoneEffect.global_benefit}
+                </p>
+              </div>
+
+              {/* Major benefit teaser — shown only for minor-tier players */}
+              {revealedTier === "minor" && (
+                <div className="px-3 py-2 rounded border border-parchment/10 bg-parchment/3 space-y-1 opacity-50">
+                  <p className="text-parchment/35 text-xs font-mono uppercase tracking-wide">
+                    [★ Locked — Full Control]
+                  </p>
+                  <p className="text-parchment/40 text-xs leading-relaxed italic">
+                    {zoneEffect.major_benefit}
+                  </p>
+                  <p className="text-parchment/25 text-xs">
+                    Capture all sectors in this zone to unlock.
+                  </p>
+                </div>
+              )}
+
+              {/* Lore */}
+              <p className="text-parchment/25 text-xs italic leading-relaxed border-t border-parchment/8 pt-2">
+                {zoneEffect.lore.length > 160 ? zoneEffect.lore.slice(0, 160) + "…" : zoneEffect.lore}
+              </p>
             </CollapsibleSection>
           )}
 
@@ -975,6 +1098,10 @@ export default function MapPage() {
   const [mapImageUrl,   setMapImageUrl]   = useState<string | null>(null);
   const [pageError,     setPageError]     = useState<string | null>(null);
   const [loading,       setLoading]       = useState(false);
+
+  // Zone effects state — loaded in load(), derived into zoneEffectSummaries
+  const [campaignZoneEffects, setCampaignZoneEffects] = useState<CampaignZoneEffect[]>([]);
+  const [myZoneReveals,       setMyZoneReveals]       = useState<ZoneEffectReveal[]>([]);
 
   // Movement order state
   const [selectedUnit,  setSelectedUnit]  = useState<Unit | null>(null);
@@ -1108,6 +1235,24 @@ export default function MapPage() {
         if (owned.length > 0) setDeployZone((owned[0] as any).zone_key);
       }
 
+      // Zone effects — all assignments for this campaign (fog-of-war enforced
+      // client-side using reveal rows below; we load all so the panel can show
+      // future reveals without a separate query).
+      const { data: czeRows } = await supabase
+        .from("campaign_zone_effects")
+        .select("id,zone_key,zone_name,minor_one_time_consumed,major_one_time_consumed,global_uses_remaining,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
+        .eq("campaign_id", campaignId);
+      setCampaignZoneEffects((czeRows ?? []) as CampaignZoneEffect[]);
+
+      // Zone effect reveals — RLS returns only this player's own rows.
+      // Used to enforce fog-of-war: only zones with a reveal are shown.
+      const { data: revealRows } = await supabase
+        .from("zone_effect_reveals")
+        .select("zone_key,zone_effect_id,tier")
+        .eq("campaign_id", campaignId)
+        .eq("user_id", user.id);
+      setMyZoneReveals((revealRows ?? []) as ZoneEffectReveal[]);
+
     } catch (e: any) {
       setPageError(e?.message ?? String(e));
     } finally {
@@ -1162,6 +1307,54 @@ export default function MapPage() {
   }, [members]);
 
   const mySectors = useMemo(() => sectors.filter((s) => s.owner_user_id === uid), [sectors, uid]);
+
+  // ── Zone effect derived state ──────────────────────────────────────────────
+  // Build a map of zone_key → highest reveal tier for this player.
+  // RLS already filtered reveal rows to this user; we just index them.
+  const revealTierByZone = useMemo(() => {
+    const m = new Map<string, "minor" | "major" | "global">();
+    // Priority order: major > minor > global (only store the highest tier)
+    const priority = { major: 3, minor: 2, global: 1 } as const;
+    for (const r of myZoneReveals) {
+      const current  = m.get(r.zone_key);
+      const incoming = r.tier as "minor" | "major" | "global";
+      if (!current || priority[incoming] > priority[current]) {
+        m.set(r.zone_key, incoming);
+      }
+    }
+    return m;
+  }, [myZoneReveals]);
+
+  // Build the ZoneEffectSummary array passed to CampaignMapOverlay.
+  // Only zones with a reveal row are included — fog-of-war enforced here.
+  const zoneEffectSummaries = useMemo<ZoneEffectSummary[]>(() => {
+    return campaignZoneEffects
+      .filter((cze) => revealTierByZone.has(cze.zone_key))
+      .map((cze) => {
+        const tier    = revealTierByZone.get(cze.zone_key)!;
+        const effect  = cze.zone_effects;
+        const isOneTime = effect.scope === "one_time";
+        // Consumed = minor or major one-time flag set (whichever applies to this tier)
+        const isConsumed = isOneTime
+          ? (tier === "major" ? cze.major_one_time_consumed : cze.minor_one_time_consumed)
+          : false;
+        return {
+          zone_key:      cze.zone_key,
+          effect_name:   effect.name,
+          tier,
+          scope:         effect.scope,
+          is_consumed:   isConsumed,
+          major_benefit: effect.major_benefit,
+        } satisfies ZoneEffectSummary;
+      });
+  }, [campaignZoneEffects, revealTierByZone]);
+
+  // Per-zone effect lookup (for SectorInfoPopupPanel — full detail needed there)
+  const czeByZone = useMemo(() => {
+    const m = new Map<string, CampaignZoneEffect>();
+    for (const cze of campaignZoneEffects) m.set(cze.zone_key, cze);
+    return m;
+  }, [campaignZoneEffects]);
 
   const inMovementPhase = stage === "movement";
   const inReconPhase    = stage === "recon";
@@ -1673,6 +1866,7 @@ export default function MapPage() {
                     isLead={role === "lead"}
                     campaignId={campaignId}
                     calibrationLocked={true}
+                    zoneEffectSummaries={zoneEffectSummaries}
                   />
                 </div>
               </Card>
@@ -1821,6 +2015,7 @@ export default function MapPage() {
                 campaignId={campaignId}
                 calibrationLocked={calibrationLocked}
                 popupMode
+                zoneEffectSummaries={zoneEffectSummaries}
                 popupSidePanel={
                   <SectorInfoPopupPanel
                     zoneKey={clickedZone}
@@ -1830,6 +2025,8 @@ export default function MapPage() {
                     myUnits={myUnits}
                     memberById={memberById}
                     uid={uid}
+                    czeByZone={czeByZone}
+                    revealTierByZone={revealTierByZone}
                   />
                 }
               />

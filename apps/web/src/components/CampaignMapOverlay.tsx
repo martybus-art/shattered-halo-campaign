@@ -68,6 +68,16 @@
  *                stern bottom-right). parallelPath helper replaces rectPath for
  *                zone outlines and sub-cell sector paths. skewX slider controls
  *                the perspective lean angle. Aspect changed to aspect-square.
+ *   2026-03-15 — FEATURE: Zone effects SVG overlay badges. New exported type
+ *                ZoneEffectSummary. New prop zoneEffectSummaries on
+ *                CampaignMapOverlayProps. New ZoneEffectBadges helper renders
+ *                compact tier badges (★ major, ◆ minor, ◈ global) at each
+ *                zone's label point across all four layouts (ring, spokes,
+ *                continent, void_ship). Minor-tier entries additionally render
+ *                a greyed-out major benefit teaser line as an expansion
+ *                incentive. One-time effects show a ✕ Used indicator when
+ *                is_consumed=true. Fog-of-war enforced by page.tsx before
+ *                passing — unrevealed zones are absent from the array.
  *   2026-03-15 — FEATURE: popupSidePanel prop. When popupMode=true and
  *                calibrationLocked=true all five layout branches (ring, spokes,
  *                continent, void_ship, stub) now render a right column and display
@@ -124,6 +134,30 @@ export type DbUnit = {
 };
 
 export type MapLayout = "ring" | "spokes" | "continent" | "radial" | "ship_line" | "void_ship";
+
+/**
+ * Per-zone zone-effect summary for the current player.
+ * Computed in map/page.tsx from campaign_zone_effects + zone_effect_reveals.
+ * Only zones with a reveal row are included — fog-of-war enforced before passing.
+ * Rendered as SVG badges at each zone's label point on the overlay.
+ */
+export type ZoneEffectSummary = {
+  /** zone_key from campaign_zone_effects / sectors table. */
+  zone_key:      string;
+  /** Human-readable effect name (e.g. "Fortified Bastion"). */
+  effect_name:   string;
+  /** The tier this player qualifies for in this zone. */
+  tier:          "minor" | "major" | "global";
+  /** Scope tag from zone_effects.scope. */
+  scope:         string;
+  /** True when a one-time benefit has already been consumed. */
+  is_consumed:   boolean;
+  /**
+   * Major benefit text — always provided so the overlay can render a
+   * greyed-out teaser for minor-tier players as an expansion incentive.
+   */
+  major_benefit: string;
+};
 
 export type CampaignMapOverlayProps = {
   /** Signed URL or public path for the AI-generated map image. */
@@ -207,6 +241,20 @@ export type CampaignMapOverlayProps = {
    * when the player clicks a zone / sector on the overlay.
    */
   popupSidePanel?: React.ReactNode;
+
+  /**
+   * Zone effect summaries for the current player — one entry per zone that has
+   * a reveal in zone_effect_reveals. Fog-of-war enforced in page.tsx before
+   * passing; unrevealed zones are absent from this array.
+   *
+   * Rendered as compact SVG badges at each zone's label point:
+   *   ★ gold  = major (full zone control)
+   *   ◆ brass = minor (half or more)
+   *   ◈ purple= global (consolation — another player holds major)
+   * Minor-tier entries also show a greyed-out major benefit teaser.
+   * One-time effects show a "Used" indicator when is_consumed=true.
+   */
+  zoneEffectSummaries?: ZoneEffectSummary[];
 };
 
 // ── Internal types ─────────────────────────────────────────────────────────────
@@ -1148,6 +1196,119 @@ function useVoidshipGeometry(
       shipX, shipY, zoneW, shipH, shearDeg, gapY, sectorGap, overridesSer]);
 }
 
+// ── Zone effect SVG badges ────────────────────────────────────────────────────
+// Rendered after zone labels in all four Overlay components.
+// Shows tier icon + truncated effect name at each zone's label point.
+// For minor-tier entries, a second greyed-out line shows the major benefit
+// as a teaser — visible only to the controlling player (minor threshold met)
+// as an incentive to expand and capture the remaining sectors.
+// Fog-of-war: badge only appears when zoneEffectsByKey has an entry for that
+// zone_key, which is pre-filtered by page.tsx using zone_effect_reveals.
+
+function ZoneEffectBadges({
+  zoneLabelEntries,
+  zoneEffectsByKey,
+  showZoneLabels,
+  labelAngle = 0,
+}: {
+  zoneLabelEntries: Array<{ zi: number; zoneKey: string; point: { x: number; y: number } }>;
+  zoneEffectsByKey: Map<string, ZoneEffectSummary>;
+  showZoneLabels?: boolean;
+  /** For voidship layout, pass shearDeg so badges lean with the parallelogram. */
+  labelAngle?: number;
+}) {
+  if (!zoneEffectsByKey.size) return null;
+
+  const TIER_ICON: Record<string, string> = {
+    major:  "★",
+    minor:  "◆",
+    global: "◈",
+  };
+
+  const TIER_FILL: Record<string, string> = {
+    major:  "rgba(250,204,21,0.92)",   // gold — full zone control
+    minor:  "rgba(201,168,76,0.85)",   // brass — partial control
+    global: "rgba(167,139,250,0.85)",  // purple — consolation effect
+  };
+
+  // Y position of badge:
+  //   showZoneLabels=true  → below the zone name text (fontSize 17 + gap)
+  //   showZoneLabels=false → at the label point itself
+  const baseYOffset = showZoneLabels ? 22 : 5;
+
+  return (
+    <>
+      {zoneLabelEntries.map(({ zi, zoneKey, point }) => {
+        const summary = zoneEffectsByKey.get(zoneKey);
+        if (!summary) return null;
+
+        const icon    = TIER_ICON[summary.tier] ?? "◈";
+        const fill    = TIER_FILL[summary.tier] ?? "rgba(201,168,76,0.85)";
+        const name    = summary.effect_name.length > 14
+          ? summary.effect_name.slice(0, 13) + "…"
+          : summary.effect_name;
+        const consumed = summary.is_consumed && summary.scope === "one_time";
+        const label   = consumed ? `${icon} ${name} ✕` : `${icon} ${name}`;
+
+        const bx = point.x;
+        const by = point.y + baseYOffset;
+
+        // Minor tier: show a greyed-out major benefit teaser below the badge.
+        // Not shown for major (already achieved) or global (different player).
+        const showTeaser   = summary.tier === "minor" && !!summary.major_benefit;
+        const teaserText   = showTeaser
+          ? `[★ ${summary.major_benefit.length > 24 ? summary.major_benefit.slice(0, 23) + "…" : summary.major_benefit}]`
+          : null;
+
+        // Per-zone rotate transform for voidship lean
+        const rotBadge   = labelAngle ? `rotate(${labelAngle}, ${bx.toFixed(1)}, ${by.toFixed(1)})` : undefined;
+        const rotTeaser  = (labelAngle && teaserText)
+          ? `rotate(${labelAngle}, ${bx.toFixed(1)}, ${(by + 13).toFixed(1)})`
+          : undefined;
+
+        return (
+          <g key={`ze-badge-${zi}`} pointerEvents="none">
+            {/* Effect name badge */}
+            <text
+              x={bx.toFixed(1)}
+              y={by.toFixed(1)}
+              textAnchor="middle"
+              fontSize={11}
+              fontWeight="700"
+              fill={consumed ? "rgba(130,120,100,0.65)" : fill}
+              stroke="rgba(0,0,0,0.80)"
+              strokeWidth={2.5}
+              paintOrder="stroke"
+              transform={rotBadge}
+              style={{ fontFamily: "sans-serif" }}
+            >
+              {label}
+            </text>
+            {/* Major benefit teaser (minor controlling player only) */}
+            {teaserText && (
+              <text
+                x={bx.toFixed(1)}
+                y={(by + 13).toFixed(1)}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight="400"
+                fill="rgba(180,160,80,0.38)"
+                stroke="rgba(0,0,0,0.65)"
+                strokeWidth={2}
+                paintOrder="stroke"
+                transform={rotTeaser}
+                style={{ fontFamily: "sans-serif", fontStyle: "italic" }}
+              >
+                {teaserText}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
 // ── Legend ────────────────────────────────────────────────────────────────────
 
 const LEGEND_ITEMS: Array<{ state: SectorState; label: string }> = [
@@ -1201,6 +1362,12 @@ function RingOverlay({
   const innerCy = cy + innerCyOffset;
   const outerCy = cy + outerCyOffset;
   const zoneSweep = 360 / Math.max(zoneCount, 1);
+
+  const zoneEffectsByKey = useMemo(() => {
+    const m = new Map<string, ZoneEffectSummary>();
+    for (const s of props.zoneEffectSummaries ?? []) m.set(s.zone_key, s);
+    return m;
+  }, [props.zoneEffectSummaries]);
 
   // Deduplicated zone label points (one per zone)
   const zoneLabelEntries = useMemo(() => {
@@ -1305,10 +1472,16 @@ function RingOverlay({
             pointerEvents="none"
             style={{ fontFamily: "sans-serif", letterSpacing: "-0.3px" }}
           >
-            {/* Use provided display name, fall back to key with underscores replaced */}
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+
+      {/* ── Zone effect badges (fog-of-war: only revealed zones) ── */}
+      <ZoneEffectBadges
+        zoneLabelEntries={zoneLabelEntries}
+        zoneEffectsByKey={zoneEffectsByKey}
+        showZoneLabels={showZoneLabels}
+      />
       </g>{/* end rotate */}
     </svg>
   );
@@ -1337,6 +1510,12 @@ function SpokesOverlay({
   const effectiveSweep  = Math.max(fullSweep - spokeGapDeg, 5);
   const innerCy         = cy + innerCyOffset;
   const outerCy         = cy + outerCyOffset;
+
+  const zoneEffectsByKey = useMemo(() => {
+    const m = new Map<string, ZoneEffectSummary>();
+    for (const s of props.zoneEffectSummaries ?? []) m.set(s.zone_key, s);
+    return m;
+  }, [props.zoneEffectSummaries]);
 
   // Build hub ellipse outline path (two semicircles)
   const hubRy = (centerR * perspectiveY).toFixed(2);
@@ -1453,6 +1632,13 @@ function SpokesOverlay({
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+
+      {/* ── Zone effect badges (fog-of-war: only revealed zones) ── */}
+      <ZoneEffectBadges
+        zoneLabelEntries={zoneLabelEntries}
+        zoneEffectsByKey={zoneEffectsByKey}
+        showZoneLabels={showZoneLabels}
+      />
       </g>{/* end rotate */}
     </svg>
   );
@@ -1476,6 +1662,12 @@ function ContinentOverlay({
     innerCyOffset, outerCyOffset, zoneOverrides, rotateDeg,
   } = cfg;
   const outerCy = cy + outerCyOffset;
+
+  const zoneEffectsByKey = useMemo(() => {
+    const m = new Map<string, ZoneEffectSummary>();
+    for (const s of props.zoneEffectSummaries ?? []) m.set(s.zone_key, s);
+    return m;
+  }, [props.zoneEffectSummaries]);
 
   // Re-derive cluster structure to draw zone boundary outlines (one wedge per zone)
   const clusterSize  = Math.max(2, Math.round(zoneCount / 3));
@@ -1616,6 +1808,13 @@ function ContinentOverlay({
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+
+      {/* ── Zone effect badges (fog-of-war: only revealed zones) ── */}
+      <ZoneEffectBadges
+        zoneLabelEntries={zoneLabelEntries}
+        zoneEffectsByKey={zoneEffectsByKey}
+        showZoneLabels={showZoneLabels}
+      />
       </g>{/* end rotate */}
     </svg>
   );
@@ -1639,6 +1838,12 @@ function VoidshipOverlay({
   const uniformH   = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
   // Text rotation angle = shear angle so labels lie along the parallelogram's lean
   const labelAngle = shearDeg;
+
+  const zoneEffectsByKey = useMemo(() => {
+    const m = new Map<string, ZoneEffectSummary>();
+    for (const s of props.zoneEffectSummaries ?? []) m.set(s.zone_key, s);
+    return m;
+  }, [props.zoneEffectSummaries]);
 
   // Zone boundary outlines — one parallelogram per zone, respecting per-zone half-widths
   const zoneParallels = useMemo(() => {
@@ -1781,6 +1986,14 @@ function VoidshipOverlay({
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+
+      {/* ── Zone effect badges (fog-of-war: only revealed zones) ── */}
+      <ZoneEffectBadges
+        zoneLabelEntries={zoneLabelEntries}
+        zoneEffectsByKey={zoneEffectsByKey}
+        showZoneLabels={showZoneLabels}
+        labelAngle={labelAngle}
+      />
       </g>{/* end rotate */}
     </svg>
   );

@@ -448,3 +448,9 @@ verify_jwt = false
 
 [functions.form-alliance]
 verify_jwt = false
+
+[functions.assign-zone-effects]
+verify_jwt = false
+
+[functions.evaluate-zone-effects]
+verify_jwt = false
