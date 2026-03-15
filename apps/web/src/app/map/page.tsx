@@ -848,6 +848,8 @@ export default function MapPage() {
   const inReconPhase    = stage === "recon";
   const canMove         = inMovementPhase || (inReconPhase && hasRecon);
   const inSpendPhase    = stage === "spend";
+  // Overlay calibration is locked once the campaign has started (round_number > 0)
+  const calibrationLocked = roundNumber > 0;
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -1349,7 +1351,7 @@ export default function MapPage() {
                   showZoneLabels
                   isLead={role === "lead"}
                   campaignId={campaignId}
-                  calibrationLocked={roundNumber > 0}
+                  calibrationLocked={calibrationLocked}
                 />
                 {/* Expand hint overlay — visible on hover */}
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center pointer-events-none">
@@ -1502,7 +1504,7 @@ export default function MapPage() {
                 showZoneLabels
                 isLead={role === "lead"}
                 campaignId={campaignId}
-                calibrationLocked={roundNumber > 0}
+                calibrationLocked={calibrationLocked}
                 popupMode
               />
             </div>
