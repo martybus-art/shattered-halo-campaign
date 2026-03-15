@@ -2,6 +2,26 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-15 — FIX: Two-layer sector adjacency (zone + sector boundary).
+//                isCrossZoneSectorValid corrected for all four layout types:
+//                Ring: CW col1->col0, CCW col0->col1.
+//                Spoke: hub<->outer row1 of outer zone (c/d face hub);
+//                  outer-to-outer ring uses col CW/CCW.
+//                Void_ship: within corridor row-based (vertical stacking,
+//                  forward=row1->row0, backward=row0->row1); cross-corridor
+//                  bridge col-based (port->starboard col1->col0).
+//                Continent: within cluster mini-ring uses col CW/CCW;
+//                  between-cluster bridge uses col (increasing=col1->col0).
+//                validSectorIds useMemo replaces zone-only validZones for
+//                per-cell highlighting + interactive flag in TacticalMap.
+//                Both onSectorClick handlers use isValidSectorMove.
+//                SECTOR_COL / SECTOR_ROW constants added after SECTOR_KEYS.
+//   2026-03-15 — FIX: Adjacency validation + player guidance for movement orders.
+//                New moveTargetError state. Both onSectorClick handlers (thumbnail
+//                and popup) now use isValidSectorMove (two-layer). Non-reachable
+//                clicks show a clear error and do not update the destination.
+//                Deep Strike bypasses the check. Guidance text added to My Units
+//                card: explains select-then-click, one-move-per-unit limit.
 //   2026-03-15 — FIX: Movement targeting broken for isOverlayLayout campaigns.
 //                Root cause: the Theatre Map thumbnail wrapper div had
 //                onClick={() => setMapPopupOpen(true)} which intercepted ALL
@@ -114,6 +134,12 @@ import CampaignMapOverlay, { ZoneEffectSummary } from "@/components/CampaignMapO
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const SECTOR_KEYS = ["a", "b", "c", "d"];
+
+// Sector grid geometry — used for sector-level adjacency checks.
+//   a(col0,row0) | b(col1,row0)
+//   c(col0,row1) | d(col1,row1)
+const SECTOR_COL: Record<string, number> = { a: 0, b: 1, c: 0, d: 1 };
+const SECTOR_ROW: Record<string, number> = { a: 0, b: 0, c: 1, d: 1 };
 
 const UNIT_NIP_COST: Record<string, number> = {
   scout: 1,
@@ -279,6 +305,158 @@ function buildAdjacency(zones: MapZone[], layout = "ring"): Map<string, Set<stri
   return adj;
 }
 
+// -- Sector-level adjacency --------------------------------------------------
+// Two-layer movement rule:
+//   Layer 1: zone adjacency (buildAdjacency).
+//   Layer 2: sector adjacency within zone or across a zone boundary.
+//
+// Ring cross-zone convention (2x2 sector grid: col0={a,c}, col1={b,d}):
+//   Clockwise move (zone[i] -> zone[i+1]):   fromSector in col1, toSector in col0.
+//   Counter-clockwise (zone[i] -> zone[i-1]): fromSector in col0, toSector in col1.
+// Spoke: outer zone inner row (c,d = row1) faces the hub.
+// Void_ship / continent: col-based by index ordering.
+
+function isCrossZoneSectorValid(
+  fromZone: string, fromSector: string,
+  toZone:   string, toSector:   string,
+  zones:    MapZone[],
+  layout:   string,
+): boolean {
+  const n       = zones.length;
+  const fromIdx = zones.findIndex((z) => z.key === fromZone);
+  const toIdx   = zones.findIndex((z) => z.key === toZone);
+  if (fromIdx < 0 || toIdx < 0) return false;
+
+  switch (layout) {
+
+    // ---- Ring ---------------------------------------------------------------
+    // Zones arranged in a circle. Boundary is the right edge (col1) of zone[i]
+    // connecting to the left edge (col0) of zone[i+1] (clockwise).
+    // CW  (i -> i+1): fromSector col1, toSector col0.
+    // CCW (i -> i-1): fromSector col0, toSector col1.
+    case "ring": {
+      const isCW  = (fromIdx + 1) % n === toIdx;
+      const isCCW = (toIdx   + 1) % n === fromIdx;
+      if (isCW)  return SECTOR_COL[fromSector] === 1 && SECTOR_COL[toSector] === 0;
+      if (isCCW) return SECTOR_COL[fromSector] === 0 && SECTOR_COL[toSector] === 1;
+      return false;
+    }
+
+    // ---- Spoke --------------------------------------------------------------
+    // Hub (zones[0]) at centre; outer zones form a ring around it.
+    // Hub <-> outer: outer zone inner face = row1 (c, d face the hub).
+    //   Enter outer from hub: toSector in row1 (c or d).
+    //   Leave outer to hub:   fromSector in row1 (c or d).
+    // Outer <-> outer (ring portion): same CW/CCW col rule as ring layout.
+    case "spoke": {
+      const isFromHub = fromIdx === 0;
+      const isToHub   = toIdx   === 0;
+      if (isFromHub || isToHub) {
+        // Hub boundary: outer sector must be in row1 (inner face toward hub)
+        const outerSector = isFromHub ? toSector : fromSector;
+        return SECTOR_ROW[outerSector] === 1;
+      }
+      // Outer-to-outer: treat as a ring of outer zones (indices 1..n-1)
+      const outerZones = zones.slice(1);
+      const fOIdx = outerZones.findIndex((z) => z.key === fromZone);
+      const tOIdx = outerZones.findIndex((z) => z.key === toZone);
+      const nO    = outerZones.length;
+      const isCW  = (fOIdx + 1) % nO === tOIdx;
+      const isCCW = (tOIdx + 1) % nO === fOIdx;
+      if (isCW)  return SECTOR_COL[fromSector] === 1 && SECTOR_COL[toSector] === 0;
+      if (isCCW) return SECTOR_COL[fromSector] === 0 && SECTOR_COL[toSector] === 1;
+      return false;
+    }
+
+    // ---- Void Ship ----------------------------------------------------------
+    // Port corridor:      zones[0 .. perCol-1] — stacked vertically, left side.
+    // Starboard corridor: zones[perCol .. n-1]  — stacked vertically, right side.
+    // Bridges: bow (zones[0] <-> zones[perCol]) and stern (zones[perCol-1] <-> zones[n-1]).
+    //
+    // Within a corridor zones are vertical, so the shared boundary is horizontal:
+    //   Forward (lower -> higher index): fromSector row1 (c/d), toSector row0 (a/b).
+    //   Backward (higher -> lower index): fromSector row0 (a/b), toSector row1 (c/d).
+    //
+    // Bridge is horizontal (port left, starboard right), so col-based:
+    //   Port -> Starboard: fromSector col1 (b/d), toSector col0 (a/c).
+    //   Starboard -> Port: fromSector col0 (a/c), toSector col1 (b/d).
+    case "void_ship": {
+      const perCol      = Math.ceil(n / 2);
+      const fromInPort  = fromIdx < perCol;
+      const toInPort    = toIdx   < perCol;
+      if (fromInPort === toInPort) {
+        // Same corridor — horizontal shared boundary (row-based)
+        if (fromIdx < toIdx) return SECTOR_ROW[fromSector] === 1 && SECTOR_ROW[toSector] === 0;
+        if (fromIdx > toIdx) return SECTOR_ROW[fromSector] === 0 && SECTOR_ROW[toSector] === 1;
+        return false;
+      }
+      // Cross-corridor bridge — vertical shared boundary (col-based)
+      if (fromInPort) return SECTOR_COL[fromSector] === 1 && SECTOR_COL[toSector] === 0;
+      return SECTOR_COL[fromSector] === 0 && SECTOR_COL[toSector] === 1;
+    }
+
+    // ---- Continent ----------------------------------------------------------
+    // Clusters of ~cs zones each, internally ring-connected. Clusters bridge at
+    // the last zone of cluster c -> first zone of cluster c+1.
+    //
+    // Within a cluster (mini-ring): CW/CCW col rule, same as ring layout.
+    //   CW within cluster  (pos -> pos+1): fromSector col1, toSector col0.
+    //   CCW within cluster (pos -> pos-1): fromSector col0, toSector col1.
+    //
+    // Between clusters (bridge): increasing cluster index -> col1 -> col0.
+    case "continent": {
+      const cs          = Math.max(2, Math.round(n / Math.ceil(n / 3)));
+      const fromCluster = Math.floor(fromIdx / cs);
+      const toCluster   = Math.floor(toIdx   / cs);
+      const fromPos     = fromIdx % cs;
+      const toPos       = toIdx   % cs;
+      if (fromCluster === toCluster) {
+        // Within same cluster — mini-ring
+        const clusterSize = Math.min(cs, n - fromCluster * cs);
+        const isCW  = (fromPos + 1) % clusterSize === toPos;
+        const isCCW = (toPos   + 1) % clusterSize === fromPos;
+        if (isCW)  return SECTOR_COL[fromSector] === 1 && SECTOR_COL[toSector] === 0;
+        if (isCCW) return SECTOR_COL[fromSector] === 0 && SECTOR_COL[toSector] === 1;
+        return false; // not directly adjacent within cluster
+      }
+      // Between clusters: bridge runs from last of lower cluster to first of higher
+      if (fromCluster < toCluster) return SECTOR_COL[fromSector] === 1 && SECTOR_COL[toSector] === 0;
+      return SECTOR_COL[fromSector] === 0 && SECTOR_COL[toSector] === 1;
+    }
+
+    default:
+      return false;
+  }
+}
+
+// Full two-layer sector move validator. Returns true when moving
+// fromZone/fromSector -> toZone/toSector is legal given the map topology.
+//   - Same sector: always valid (hold position).
+//   - Same zone, different sector: orthogonal in 2x2 (no diagonals).
+//   - Cross-zone: zone must be adjacent AND sectors must face the boundary.
+//   - Deep strike: bypasses all checks.
+function isValidSectorMove(
+  fromZone:      string,
+  fromSector:    string,
+  toZone:        string,
+  toSector:      string,
+  zones:         MapZone[],
+  layout:        string,
+  adj:           Map<string, Set<string>>,
+  hasDeepStrike: boolean,
+): boolean {
+  if (hasDeepStrike) return true;
+  if (fromZone === toZone && fromSector === toSector) return true; // hold position
+  if (fromZone === toZone) {
+    // Same zone: orthogonal only
+    const colDiff = Math.abs(SECTOR_COL[fromSector] - SECTOR_COL[toSector]);
+    const rowDiff = Math.abs(SECTOR_ROW[fromSector] - SECTOR_ROW[toSector]);
+    return (colDiff + rowDiff) === 1;
+  }
+  if (!adj.get(fromZone)?.has(toZone)) return false;
+  return isCrossZoneSectorValid(fromZone, fromSector, toZone, toSector, zones, layout);
+}
+
 // ── Zone SVG positions ────────────────────────────────────────────────────────
 // Returns the SVG canvas centre {x, y} for each zone's node bounding box.
 
@@ -375,12 +553,29 @@ function TacticalMap({
   // Zones where I currently have a unit
   const myUnitZones = useMemo(() => new Set(myUnits.map((u) => u.zone_key)), [myUnits]);
 
-  // Valid destination zones for the selected unit
+  // Valid destination zones for the selected unit (used for node border + edge highlights)
   const validZones = useMemo(() => {
     if (!selectedUnit || !canMove) return new Set<string>();
     if (hasDeepStrike) return new Set(zones.map((z) => z.key));
     return adj.get(selectedUnit.zone_key) ?? new Set<string>();
   }, [selectedUnit, canMove, hasDeepStrike, adj, zones]);
+
+  // Valid destination zone:sector pairs — two-layer check (zone adjacency + sector boundary).
+  // This drives which individual cells are highlighted and clickable.
+  const validSectorIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!selectedUnit || !canMove) return ids;
+    for (const z of zones) {
+      for (const sk of SECTOR_KEYS) {
+        if (isValidSectorMove(
+          selectedUnit.zone_key, selectedUnit.sector_key,
+          z.key, sk,
+          zones, layout, adj, hasDeepStrike,
+        )) ids.add(`${z.key}:${sk}`);
+      }
+    }
+    return ids;
+  }, [selectedUnit, canMove, zones, layout, adj, hasDeepStrike]);
 
   // Deduplicated edges for connector lines
   const edges = useMemo(() => {
@@ -409,8 +604,8 @@ function TacticalMap({
       return "enemy";
     }
     if (!zoneKnown && !(s?.revealed_public)) return "fog_cell";
-    // Unclaimed / unknown — only green/reachable if a unit is selected and range allows
-    return (canMove && selectedUnit && validZones.has(zk)) ? "reachable" : "empty";
+    // Unclaimed / unknown -- only green/reachable if this exact sector is a valid destination
+    return (canMove && selectedUnit && validSectorIds.has(`${zk}:${sk}`)) ? "reachable" : "empty";
   };
 
   type CellState = ReturnType<typeof cellState>;
@@ -537,11 +732,11 @@ function TacticalMap({
               const stroke = cellStroke(st);
               const tclr   = cellTextFill(st);
 
-              // A sector cell is interactive only when:
-              //   1. A unit is selected AND it's the movement phase
-              //   2. This zone is within adjacency range (or deep-strike)
-              //   3. This is not a fog-placeholder zone
-              const interactive = isReach && canMove && !!selectedUnit;
+              // A sector cell is interactive only when this exact zone:sector is a
+              // valid destination for the selected unit (two-layer: zone adjacent
+              // AND sectors face each other across the boundary). Deep strike
+              // bypasses both checks via isValidSectorMove.
+              const interactive = canMove && !!selectedUnit && validSectorIds.has(`${zone.key}:${sk}`);
 
               const s       = sectorLookup.get(`${zone.key}:${sk}`);
               const hasUnit = myUnits.some((u) => u.zone_key === zone.key && u.sector_key === sk);
@@ -1130,6 +1325,7 @@ export default function MapPage() {
   const [toSector,      setToSector]      = useState<string>("");
   const [submitting,    setSubmitting]    = useState(false);
   const [moveResult,    setMoveResult]    = useState<string | null>(null);
+  const [moveTargetError, setMoveTargetError] = useState<string | null>(null);
 
   // Clicked sector state — always active regardless of phase; drives the info
   // panel shown when a player clicks any sector on the SVG overlay.
@@ -1683,6 +1879,15 @@ export default function MapPage() {
                   })}
                 </div>
 
+                {/* Movement guidance — only shown during movement phase with no unit selected */}
+                {canMove && !selectedUnit && (
+                  <p className="mt-2 text-xs text-parchment/40 italic px-1 border-t border-parchment/10 pt-3">
+                    ◈ Select a unit above, then click a reachable sector on the Theatre Map to issue a movement order.
+                    {hasDeepStrike ? " Deep Strike active — any sector valid." : " Units may move to an adjacent zone or any sector within their current zone."}
+                    {" "}One move per unit per round.
+                  </p>
+                )}
+
                 {/* Token row */}
                 <div className="mt-3 pt-3 border-t border-parchment/10 flex gap-3 flex-wrap">
                   <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasDeepStrike ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/10 text-parchment/25"}`}>
@@ -1722,6 +1927,12 @@ export default function MapPage() {
                     </div>
                   )}
 
+                  {moveTargetError && (
+                    <div className="px-3 py-2 rounded border border-blood/30 bg-blood/10 text-sm text-blood/80">
+                      ⛔ {moveTargetError}
+                    </div>
+                  )}
+
                   {moveResult && (
                     <p className={`text-sm px-3 py-2 rounded border ${
                       moveResult.startsWith("Error") ? "border-blood/30 bg-blood/10 text-blood/80" : "border-brass/30 bg-brass/10 text-brass/80"
@@ -1736,7 +1947,7 @@ export default function MapPage() {
                       {submitting ? "Submitting…" : "Confirm Order"}
                     </button>
                     <button
-                      onClick={() => { setSelectedUnit(null); setToZone(""); setToSector(""); setMoveResult(null); }}
+                      onClick={() => { setSelectedUnit(null); setToZone(""); setToSector(""); setMoveResult(null); setMoveTargetError(null); }}
                       className="px-4 py-2.5 rounded bg-void border border-parchment/20 hover:border-parchment/40 text-parchment/50 text-sm transition-colors">
                       Cancel
                     </button>
@@ -1879,6 +2090,21 @@ export default function MapPage() {
                       setClickedZone(zone);
                       setClickedSector(sector);
                       if (canMove && selectedUnit) {
+                        // Two-layer validation: zone adjacency + sector boundary.
+                        const valid = isValidSectorMove(
+                          selectedUnit.zone_key, selectedUnit.sector_key,
+                          zone, sector,
+                          effectiveZones, mapLayout, adj, hasDeepStrike,
+                        );
+                        if (!valid) {
+                          setMoveTargetError(
+                            zone !== selectedUnit.zone_key
+                              ? `Cannot move to ${fmtKey(zone)} / ${sector.toUpperCase()} — sector is not on the adjacent boundary. Only sectors facing this unit's position are reachable.`
+                              : `Cannot move to ${sector.toUpperCase()} from ${selectedUnit.sector_key.toUpperCase()} — sectors are not orthogonally adjacent.`
+                          );
+                          return;
+                        }
+                        setMoveTargetError(null);
                         setToZone(zone);
                         setToSector(sector);
                       }
@@ -2037,6 +2263,21 @@ export default function MapPage() {
                   setClickedZone(zone);
                   setClickedSector(sector);
                   if (canMove && selectedUnit) {
+                    // Two-layer validation: zone adjacency + sector boundary.
+                    const valid = isValidSectorMove(
+                      selectedUnit.zone_key, selectedUnit.sector_key,
+                      zone, sector,
+                      effectiveZones, mapLayout, adj, hasDeepStrike,
+                    );
+                    if (!valid) {
+                      setMoveTargetError(
+                        zone !== selectedUnit.zone_key
+                          ? `Cannot move to ${fmtKey(zone)} / ${sector.toUpperCase()} — sector is not on the adjacent boundary. Only sectors facing this unit's position are reachable.`
+                          : `Cannot move to ${sector.toUpperCase()} from ${selectedUnit.sector_key.toUpperCase()} — sectors are not orthogonally adjacent.`
+                      );
+                      return;
+                    }
+                    setMoveTargetError(null);
                     setToZone(zone);
                     setToSector(sector);
                   }
