@@ -3,6 +3,11 @@
 // Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
+//   2026-03-15 — FIX: CampaignZoneEffect cast changed from `as CampaignZoneEffect[]`
+//                to `as unknown as CampaignZoneEffect[]`. Supabase infers its own
+//                generated type for nested join results (zone_effects(...) select)
+//                which TypeScript rejects as an unsafe direct cast. The double-cast
+//                pattern matches existing usage in this codebase (e.g. sectors as any).
 //   2026-03-15 — FEATURE: Zone Effects system integrated into Faction Resources card.
 //                New types: CampaignZoneEffect, ZoneEffectReveal, ZoneEffectEvent.
 //                load() queries campaign_zone_effects (joined to zone_effects),
@@ -524,7 +529,7 @@ export default function Dashboard() {
       .from("campaign_zone_effects")
       .select("id,zone_key,zone_name,minor_one_time_consumed,major_one_time_consumed,global_uses_remaining,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
       .eq("campaign_id", cid);
-    setCampaignZoneEffects((czeRows ?? []) as CampaignZoneEffect[]);
+    setCampaignZoneEffects((czeRows ?? []) as unknown as CampaignZoneEffect[]);
 
     // 13. My zone effect reveals — RLS enforces that only this player's own
     //     reveal rows are returned, so no client-side filtering required.

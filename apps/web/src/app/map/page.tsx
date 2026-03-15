@@ -2,6 +2,9 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-15 — FIX: CampaignZoneEffect cast changed to `as unknown as CampaignZoneEffect[]`
+//                to satisfy TypeScript — Supabase infers its own type for nested
+//                join results that doesn't directly match our hand-written type.
 //   2026-03-15 — FEATURE: Zone effects integrated into map overlay and popup panel.
 //                New type ZoneEffectSummary imported from CampaignMapOverlay.
 //                load() adds queries 12-13: campaign_zone_effects (joined to
@@ -1242,7 +1245,7 @@ export default function MapPage() {
         .from("campaign_zone_effects")
         .select("id,zone_key,zone_name,minor_one_time_consumed,major_one_time_consumed,global_uses_remaining,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
         .eq("campaign_id", campaignId);
-      setCampaignZoneEffects((czeRows ?? []) as CampaignZoneEffect[]);
+      setCampaignZoneEffects((czeRows ?? []) as unknown as CampaignZoneEffect[]);
 
       // Zone effect reveals — RLS returns only this player's own rows.
       // Used to enforce fog-of-war: only zones with a reveal are shown.
