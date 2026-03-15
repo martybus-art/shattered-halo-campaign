@@ -68,6 +68,12 @@
  *                stern bottom-right). parallelPath helper replaces rectPath for
  *                zone outlines and sub-cell sector paths. skewX slider controls
  *                the perspective lean angle. Aspect changed to aspect-square.
+ *   2026-03-15 — FEATURE: popupSidePanel prop. When popupMode=true and
+ *                calibrationLocked=true all five layout branches (ring, spokes,
+ *                continent, void_ship, stub) now render a right column and display
+ *                props.popupSidePanel instead of the calibration panel. This allows
+ *                page.tsx to inject a <SectorInfoPopupPanel /> showing clicked-sector
+ *                intel (unit, defenses, zone benefits, relics, NIP resources).
  *   2026-03-15 — FEATURE: Rotation slider for voidship overlay. VoidshipConfig gains
  *                rotateDeg (-180..180). SVG content wrapped in <g transform="rotate(deg,
  *                500, 500)"> so the whole overlay pivots around the canvas centre.
@@ -193,6 +199,14 @@ export type CampaignMapOverlayProps = {
    * The calibration toggle button is hidden — the panel is always visible.
    */
   popupMode?: boolean;
+
+  /**
+   * Optional panel rendered in the right column when popupMode=true and
+   * calibrationLocked=true (campaign has started — calibration panel hidden).
+   * Pass a <SectorInfoPopupPanel /> from page.tsx to display sector intel
+   * when the player clicks a zone / sector on the overlay.
+   */
+  popupSidePanel?: React.ReactNode;
 };
 
 // ── Internal types ─────────────────────────────────────────────────────────────
@@ -2455,7 +2469,7 @@ function useVoidshipCalibConfig(
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
-  const { mapUrl, layout, isLead, campaignId, calibrationLocked, popupMode } = props;
+  const { mapUrl, layout, isLead, campaignId, calibrationLocked, popupMode, popupSidePanel } = props;
 
   // All four config hooks called unconditionally — React rules of hooks forbid
   // conditional hook calls, so every hook is always initialised regardless of
@@ -2539,6 +2553,11 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
             </div>
           </div>
         </div>
+        {popupMode && popupSidePanel && (
+          <div className={calibCls}>
+            {popupSidePanel}
+          </div>
+        )}
       </div>
     );
   }
@@ -2573,19 +2592,25 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
             <SpokesOverlay props={props} geometry={spokesGeometry} cfg={spokesCfg} />
           </div>
         </div>
-        {showCalibSection && (
+        {(showCalibSection || popupMode) && (
           <div className={calibCls}>
-            {calibToggle}
-            {effectiveCalibOpen && (
-              <CalibrationPanel
-                cfg={spokesCfg as unknown as Record<string, number>}
-                sliderDefs={SPOKES_SLIDER_DEFS}
-                buildCopySnippet={buildSpokesCopySnippet}
-                onChange={handleSpokesSliderChange}
-                onReset={resetSpokesCfg}
-                campaignId={campaignId}
-                initialOpen={!popupMode}
-              />
+            {showCalibSection ? (
+              <>
+                {calibToggle}
+                {effectiveCalibOpen && (
+                  <CalibrationPanel
+                    cfg={spokesCfg as unknown as Record<string, number>}
+                    sliderDefs={SPOKES_SLIDER_DEFS}
+                    buildCopySnippet={buildSpokesCopySnippet}
+                    onChange={handleSpokesSliderChange}
+                    onReset={resetSpokesCfg}
+                    campaignId={campaignId}
+                    initialOpen={!popupMode}
+                  />
+                )}
+              </>
+            ) : (
+              popupSidePanel
             )}
           </div>
         )}
@@ -2641,29 +2666,35 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
             <ContinentOverlay props={props} geometry={continentGeometry} cfg={continentCfg} />
           </div>
         </div>
-        {showCalibSection && (
+        {(showCalibSection || popupMode) && (
           <div className={calibCls}>
-            {calibToggle}
-            {effectiveCalibOpen && (
+            {showCalibSection ? (
               <>
-                <CalibrationPanel
-                  cfg={continentCfg as unknown as Record<string, number>}
-                  sliderDefs={CONTINENT_SLIDER_DEFS}
-                  buildCopySnippet={buildContinentCopySnippet}
-                  onChange={handleContinentSliderChange}
-                  onReset={resetContinentCfg}
-                  campaignId={campaignId}
-                  initialOpen={!popupMode}
-                />
-                <ContinentZoneOverridesPanel
-                  zoneCount={props.zoneCount}
-                  zoneNames={props.zoneNames}
-                  zoneKeys={props.zoneKeys}
-                  overrides={continentCfg.zoneOverrides ?? []}
-                  onChange={handleZoneOverrideChange}
-                  initialOpen={!popupMode}
-                />
+                {calibToggle}
+                {effectiveCalibOpen && (
+                  <>
+                    <CalibrationPanel
+                      cfg={continentCfg as unknown as Record<string, number>}
+                      sliderDefs={CONTINENT_SLIDER_DEFS}
+                      buildCopySnippet={buildContinentCopySnippet}
+                      onChange={handleContinentSliderChange}
+                      onReset={resetContinentCfg}
+                      campaignId={campaignId}
+                      initialOpen={!popupMode}
+                    />
+                    <ContinentZoneOverridesPanel
+                      zoneCount={props.zoneCount}
+                      zoneNames={props.zoneNames}
+                      zoneKeys={props.zoneKeys}
+                      overrides={continentCfg.zoneOverrides ?? []}
+                      onChange={handleZoneOverrideChange}
+                      initialOpen={!popupMode}
+                    />
+                  </>
+                )}
               </>
+            ) : (
+              popupSidePanel
             )}
           </div>
         )}
@@ -2721,30 +2752,36 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
             <VoidshipOverlay props={props} geometry={voidshipGeometry} cfg={voidshipCfg} />
           </div>
         </div>
-        {showCalibSection && (
+        {(showCalibSection || popupMode) && (
           <div className={calibCls}>
-            {calibToggle}
-            {effectiveCalibOpen && (
+            {showCalibSection ? (
               <>
-                <CalibrationPanel
-                  cfg={voidshipCfg as unknown as Record<string, number>}
-                  sliderDefs={VOIDSHIP_SLIDER_DEFS}
-                  buildCopySnippet={buildVoidshipCopySnippet}
-                  onChange={handleVoidshipSliderChange}
-                  onReset={resetVoidshipCfg}
-                  campaignId={campaignId}
-                  initialOpen={!popupMode}
-                />
-                <VoidshipZoneWidthPanel
-                  zoneCount={props.zoneCount}
-                  zoneNames={props.zoneNames}
-                  zoneKeys={props.zoneKeys}
-                  overrides={voidshipCfg.zoneWidthOverrides ?? []}
-                  defaultW={voidshipCfg.zoneW}
-                  onChange={handleZoneWidthChange}
-                  initialOpen={!popupMode}
-                />
+                {calibToggle}
+                {effectiveCalibOpen && (
+                  <>
+                    <CalibrationPanel
+                      cfg={voidshipCfg as unknown as Record<string, number>}
+                      sliderDefs={VOIDSHIP_SLIDER_DEFS}
+                      buildCopySnippet={buildVoidshipCopySnippet}
+                      onChange={handleVoidshipSliderChange}
+                      onReset={resetVoidshipCfg}
+                      campaignId={campaignId}
+                      initialOpen={!popupMode}
+                    />
+                    <VoidshipZoneWidthPanel
+                      zoneCount={props.zoneCount}
+                      zoneNames={props.zoneNames}
+                      zoneKeys={props.zoneKeys}
+                      overrides={voidshipCfg.zoneWidthOverrides ?? []}
+                      defaultW={voidshipCfg.zoneW}
+                      onChange={handleZoneWidthChange}
+                      initialOpen={!popupMode}
+                    />
+                  </>
+                )}
               </>
+            ) : (
+              popupSidePanel
             )}
           </div>
         )}
@@ -2777,19 +2814,25 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
           <RingOverlay props={props} geometry={ringGeometry} cfg={ringCfg} />
         </div>
       </div>
-      {showCalibSection && (
+      {(showCalibSection || popupMode) && (
         <div className={calibCls}>
-          {calibToggle}
-          {effectiveCalibOpen && (
-            <CalibrationPanel
-              cfg={ringCfg as unknown as Record<string, number>}
-              sliderDefs={RING_SLIDER_DEFS}
-              buildCopySnippet={buildRingCopySnippet}
-              onChange={handleRingSliderChange}
-              onReset={resetRingCfg}
-              campaignId={campaignId}
-              initialOpen={!popupMode}
-            />
+          {showCalibSection ? (
+            <>
+              {calibToggle}
+              {effectiveCalibOpen && (
+                <CalibrationPanel
+                  cfg={ringCfg as unknown as Record<string, number>}
+                  sliderDefs={RING_SLIDER_DEFS}
+                  buildCopySnippet={buildRingCopySnippet}
+                  onChange={handleRingSliderChange}
+                  onReset={resetRingCfg}
+                  campaignId={campaignId}
+                  initialOpen={!popupMode}
+                />
+              )}
+            </>
+          ) : (
+            popupSidePanel
           )}
         </div>
       )}

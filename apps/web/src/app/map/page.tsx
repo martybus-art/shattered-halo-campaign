@@ -2,6 +2,18 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-15 — FEATURE: Sector info popup panel. Three new components added:
+//                TagCard (renders a single SectorTag in brass card style),
+//                CollapsibleSection (reusable ◈ toggle panel matching
+//                CampaignMapOverlay's CalibrationPanel styling), and
+//                SectorInfoPopupPanel (full intel display for a clicked zone/sector).
+//                SectorInfoPopupPanel passes as popupSidePanel= prop to the
+//                fullscreen map popup's CampaignMapOverlay so that clicking any
+//                sector on the overlay fills the right column with grouped intel:
+//                Field Unit, Defenses, Zone Benefits, Relics Discovered, Resources,
+//                and Sector Intel sections — all collapsible, all data-driven.
+//                CampaignMapOverlay.tsx gains popupSidePanel?: React.ReactNode prop;
+//                all five layout branches render it when calibrationLocked=true.
 //   2026-03-15 — FEATURE: Fullscreen map calibration popup. mapPopupOpen state
 //                added. Right-column map thumbnail now has a hover expand hint;
 //                clicking it opens a fixed fullscreen modal with CampaignMapOverlay
@@ -620,6 +632,313 @@ function SectorIntelPanel({
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── TagCard ───────────────────────────────────────────────────────────────────
+// Renders a single sector / zone tag in the grimdark card style.
+// Reused by SectorInfoPopupPanel and SectorIntelPanel logic.
+
+function TagCard({ tag }: { tag: SectorTag }) {
+  return (
+    <div className="flex items-start gap-2.5 px-3 py-2 rounded border border-brass/20 bg-brass/5">
+      <span className="text-brass shrink-0 mt-0.5">{tag.icon ?? "◈"}</span>
+      <div>
+        <p className="text-sm text-brass/90 font-semibold">{tag.label}</p>
+        {tag.description && (
+          <p className="text-xs text-parchment/55 mt-0.5">{tag.description}</p>
+        )}
+        {tag.value !== undefined && (
+          <p className="text-xs text-brass/55 font-mono mt-0.5">
+            {tag.type === "nip_bonus" ? `+${tag.value} NIP / round` : `Value: ${tag.value}`}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── CollapsibleSection ────────────────────────────────────────────────────────
+// Reusable collapsible panel with a brass ◈ toggle, matching the visual style
+// of CampaignMapOverlay's CalibrationPanel for consistency in the map popup.
+
+function CollapsibleSection({
+  title,
+  defaultOpen = false,
+  badge,
+  children,
+}: {
+  title:        string;
+  defaultOpen?: boolean;
+  badge?:       React.ReactNode;
+  children:     React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="rounded-lg border border-brass/20 bg-iron/80 text-sm overflow-hidden">
+      <button
+        onClick={() => setOpen((p) => !p)}
+        className="w-full flex items-center gap-2 px-4 py-3 hover:bg-brass/5 transition-colors text-left group"
+        aria-expanded={open}
+      >
+        <span
+          className={`text-brass/60 text-xs shrink-0 transition-transform duration-200 inline-block ${open ? "" : "-rotate-90"}`}
+        >
+          ◈
+        </span>
+        <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase group-hover:text-brass/80 transition-colors flex-1">
+          {title}
+        </span>
+        {badge && <span className="shrink-0 ml-1">{badge}</span>}
+      </button>
+      {open && (
+        <div className="px-4 pb-4 border-t border-brass/15 pt-3 space-y-2">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SectorInfoPopupPanel ──────────────────────────────────────────────────────
+// Shown in the right column of the fullscreen map popup (popupMode=true) once
+// the campaign has started and calibration is locked.
+//
+// Displays structured intel for the currently clicked zone / sector, grouped
+// into collapsible sections that match CalibrationPanel's visual style:
+//   • Zone / sector header  — ownership badge, fortification status
+//   • Field Unit            — scout or occupation, round deployed
+//   • Defenses              — fortified position + defensive tags
+//   • Zone Benefits         — zone_benefit tags aggregated from zone's sectors
+//   • Relics Discovered     — relic tags on this sector
+//   • Resources             — nip_bonus tags + zone-wide NIP total
+//   • Sector Intel          — all other tags
+//
+// All sections render only when relevant data exists; a placeholder is shown
+// when nothing has been clicked yet.
+
+function SectorInfoPopupPanel({
+  zoneKey,
+  sectorKey,
+  sectors,
+  zones,
+  myUnits,
+  memberById,
+  uid,
+}: {
+  zoneKey:    string;
+  sectorKey:  string;
+  sectors:    Sector[];
+  zones:      MapZone[];
+  myUnits:    Unit[];
+  memberById: Map<string, Member>;
+  uid:        string;
+}) {
+  // ── Empty state ─────────────────────────────────────────────────────────
+  if (!zoneKey || !sectorKey) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-parchment/25 text-sm text-center font-mono space-y-2 px-4">
+        <span className="text-3xl opacity-20">◈</span>
+        <p className="leading-relaxed">
+          Click a sector on the map<br />to view its intelligence report.
+        </p>
+      </div>
+    );
+  }
+
+  // ── Data resolution ──────────────────────────────────────────────────────
+  const zone        = zones.find((z) => z.key === zoneKey);
+  const sector      = sectors.find((s) => s.zone_key === zoneKey && s.sector_key === sectorKey);
+  const zoneSectors = sectors.filter((s) => s.zone_key === zoneKey);
+  const myUnit      = myUnits.find((u) => u.zone_key === zoneKey && u.sector_key === sectorKey);
+  const isMine      = sector?.owner_user_id === uid;
+  const isRevealed  = !!(sector?.revealed_public || isMine || myUnit);
+
+  const ownerInfo = sector?.owner_user_id
+    ? (sector.owner_user_id === uid
+        ? { label: "You", mine: true }
+        : { label: memberById.get(sector.owner_user_id)?.commander_name ?? "Enemy Commander", mine: false })
+    : null;
+
+  // ── Tag buckets (sector-level) ───────────────────────────────────────────
+  const tags: SectorTag[]  = Array.isArray(sector?.tags) ? sector!.tags! : [];
+  const defTags   = tags.filter((t) => t.type === "defensive");
+  const relicTags = tags.filter((t) => t.type === "relic");
+  const nipTags   = tags.filter((t) => t.type === "nip_bonus");
+  const otherTags = tags.filter(
+    (t) => !["defensive", "relic", "nip_bonus", "zone_benefit"].includes(t.type),
+  );
+
+  // ── Zone benefits — deduplicated zone_benefit tags from visible sectors ──
+  const seenBenefits   = new Set<string>();
+  const zoneBenefitTags: SectorTag[] = [];
+  for (const zs of zoneSectors) {
+    const canSee = zs.owner_user_id === uid
+      || zs.revealed_public
+      || myUnits.some((u) => u.zone_key === zoneKey && u.sector_key === zs.sector_key);
+    if (!canSee) continue;
+    const ztags: SectorTag[] = Array.isArray(zs.tags) ? zs.tags : [];
+    for (const t of ztags) {
+      if (t.type === "zone_benefit" && !seenBenefits.has(t.label)) {
+        seenBenefits.add(t.label);
+        zoneBenefitTags.push(t);
+      }
+    }
+  }
+
+  // ── Zone-wide NIP total from owned sectors ───────────────────────────────
+  const zoneNipTotal = zoneSectors.reduce((sum, zs) => {
+    if (zs.owner_user_id !== uid) return sum;
+    const ztags: SectorTag[] = Array.isArray(zs.tags) ? zs.tags : [];
+    return sum + ztags
+      .filter((t) => t.type === "nip_bonus")
+      .reduce((s, t) => s + (t.value ?? 0), 0);
+  }, 0);
+
+  const hasNoFeatures = !myUnit && !sector?.fortified
+    && defTags.length === 0 && zoneBenefitTags.length === 0
+    && relicTags.length === 0 && nipTags.length === 0 && otherTags.length === 0;
+
+  return (
+    <div className="space-y-2">
+
+      {/* ── Zone / sector header ── */}
+      <div className="rounded-lg border border-brass/30 bg-iron/80 px-4 py-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-brass/60 text-xs uppercase tracking-widest font-mono shrink-0">
+            ◈ {fmtKey(zoneKey)} / {sectorKey.toUpperCase()}
+          </p>
+          {zone && zone.name !== fmtKey(zoneKey) && (
+            <span className="text-parchment/30 text-xs font-mono truncate">{zone.name}</span>
+          )}
+        </div>
+
+        {!isRevealed ? (
+          <p className="text-parchment/30 italic text-xs">
+            Unknown. Deploy a scout to gather intel on this sector.
+          </p>
+        ) : ownerInfo ? (
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded border ${
+            ownerInfo.mine
+              ? "border-brass/30 bg-brass/10 text-brass/80"
+              : "border-blood/30 bg-blood/10 text-blood/80"
+          }`}>
+            <span className="font-semibold text-sm">
+              {ownerInfo.mine ? "Held by you" : `Held by ${ownerInfo.label}`}
+            </span>
+            {sector?.fortified && (
+              <span className="ml-auto text-xs border border-blood/30 px-1.5 py-0.5 rounded font-mono">
+                ⬡ Fortified
+              </span>
+            )}
+          </div>
+        ) : (
+          <p className="text-parchment/45 text-xs italic">Uncontrolled sector.</p>
+        )}
+      </div>
+
+      {/* ── Sections only when sector is visible ── */}
+      {isRevealed && (
+        <>
+          {/* Field Unit */}
+          {myUnit && (
+            <CollapsibleSection title="Field Unit" defaultOpen>
+              <div className={`flex items-center gap-2 px-3 py-2 rounded border ${
+                myUnit.unit_type === "scout"
+                  ? "border-blue-400/30 bg-blue-500/10"
+                  : "border-brass/30 bg-brass/10"
+              }`}>
+                <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase font-semibold ${
+                  myUnit.unit_type === "scout"
+                    ? "bg-blue-500/20 border-blue-400/40 text-blue-300"
+                    : "bg-brass/20 border-brass/40 text-brass"
+                }`}>
+                  {myUnit.unit_type}
+                </span>
+                <span className="text-parchment/60 text-xs">unit present</span>
+                <span className="ml-auto text-parchment/30 text-xs font-mono">
+                  R{myUnit.round_deployed}
+                </span>
+              </div>
+              <p className="text-parchment/40 text-xs leading-relaxed">
+                {myUnit.unit_type === "scout"
+                  ? "Scout unit — grants zone visibility and may move during the recon phase."
+                  : "Occupation unit — holds this sector and defends it when attacked."}
+              </p>
+            </CollapsibleSection>
+          )}
+
+          {/* Defenses */}
+          {(sector?.fortified || defTags.length > 0) && (
+            <CollapsibleSection title="Defenses" defaultOpen>
+              {sector?.fortified && (
+                <div className="flex items-start gap-2.5 px-3 py-2 rounded border border-blood/30 bg-blood/5">
+                  <span className="text-blood/80 shrink-0 mt-0.5">⬡</span>
+                  <div>
+                    <p className="text-sm text-blood/80 font-semibold">Fortified Position</p>
+                    <p className="text-xs text-parchment/40 mt-0.5">
+                      Attackers suffer a defensive penalty. Siege assets or overwhelming force recommended.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {defTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
+            </CollapsibleSection>
+          )}
+
+          {/* Zone Benefits */}
+          {zoneBenefitTags.length > 0 && (
+            <CollapsibleSection title="Zone Benefits" defaultOpen>
+              {zoneBenefitTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
+            </CollapsibleSection>
+          )}
+
+          {/* Relics */}
+          {relicTags.length > 0 && (
+            <CollapsibleSection title="Relics Discovered" defaultOpen>
+              {relicTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
+            </CollapsibleSection>
+          )}
+
+          {/* Resources / NIP income */}
+          {(nipTags.length > 0 || zoneNipTotal > 0) && (
+            <CollapsibleSection title="Resources" defaultOpen>
+              {nipTags.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-parchment/40 text-xs font-mono uppercase tracking-wide">
+                    Sector Income
+                  </p>
+                  {nipTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
+                </div>
+              )}
+              {zoneNipTotal > 0 && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded border border-brass/20 bg-brass/5">
+                  <span className="text-brass/70 text-xs font-mono">⊕</span>
+                  <span className="text-parchment/60 text-xs">Zone NIP income (all held sectors)</span>
+                  <span className="ml-auto text-brass font-mono font-semibold text-sm">
+                    +{zoneNipTotal} / round
+                  </span>
+                </div>
+              )}
+            </CollapsibleSection>
+          )}
+
+          {/* Other / miscellaneous intel tags */}
+          {otherTags.length > 0 && (
+            <CollapsibleSection title="Sector Intel">
+              {otherTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
+            </CollapsibleSection>
+          )}
+
+          {/* No-data state */}
+          {hasNoFeatures && (
+            <div className="px-4 py-6 text-center text-parchment/25 text-xs font-mono italic border border-brass/10 rounded-lg">
+              No special features recorded for this sector.
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1502,6 +1821,17 @@ export default function MapPage() {
                 campaignId={campaignId}
                 calibrationLocked={calibrationLocked}
                 popupMode
+                popupSidePanel={
+                  <SectorInfoPopupPanel
+                    zoneKey={clickedZone}
+                    sectorKey={clickedSector}
+                    sectors={sectors}
+                    zones={effectiveZones}
+                    myUnits={myUnits}
+                    memberById={memberById}
+                    uid={uid}
+                  />
+                }
               />
             </div>
 
