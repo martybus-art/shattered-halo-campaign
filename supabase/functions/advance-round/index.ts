@@ -1,19 +1,24 @@
 // supabase/functions/advance-round/index.ts
 // Advances the current round stage one step.
-// Stage order: spend → recon → movement → conflicts → missions → results → publish
-// On publish → next round starts at spend.
-// Conflict detection runs on movement→conflicts transition.
-// Zone effect evaluation runs on movement→conflicts and results→publish transitions.
+// Stage order: spend -> recon -> movement -> missions -> results -> publish
+// On publish -> next round starts at spend.
 //
 // changelog:
+//   2026-03-16 -- BREAKING: Removed "conflicts" stage. It was a passive lobby
+//                 with no automated logic -- players could submit NIP influence
+//                 and the lead reviewed the list before advancing to missions.
+//                 All of that now happens in the merged "missions" stage.
+//                 detectConflicts() and evaluateZoneEffects() both moved from
+//                 the movement->conflicts transition to movement->missions.
+//                 Any DB rows with stage="conflicts" should be migrated to
+//                 stage="missions" (hotfix applied directly to live campaigns).
+//                 New stage order: spend->recon->movement->missions->results->publish
 //   2026-03-15 -- Wired evaluate-zone-effects: called (non-blocking) after the
-//                 movement→conflicts transition (units have moved, ownership may
-//                 have changed) and after the results→publish transition (battle
+//                 movement->missions transition (units have moved, ownership may
+//                 have changed) and after the results->publish transition (battle
 //                 outcomes resolve, sector control may have shifted). Errors from
 //                 evaluate-zone-effects are logged but never break stage advance.
-//                 Uses Deno.env SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY for the
-//                 internal service-to-service call, matching the pattern used by
-//                 other edge functions across this codebase.
+
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
 
@@ -21,7 +26,6 @@ const STAGE_ORDER = [
   "spend",
   "recon",
   "movement",
-  "conflicts",
   "missions",
   "results",
   "publish",
@@ -35,6 +39,10 @@ function nextStage(current: string): Stage {
   return STAGE_ORDER[idx + 1];
 }
 
+// detectConflicts: called on movement->missions transition.
+// Scans all moves this round for players moving to the same zone:sector and
+// creates conflict records for each contested destination. Idempotent --
+// existing conflicts are skipped via dedup key check.
 async function detectConflicts(
   admin: ReturnType<typeof adminClient>,
   campaign_id: string,
@@ -99,26 +107,19 @@ async function detectConflicts(
   return created;
 }
 
-// ---------------------------------------------------------------------------
-// evaluateZoneEffects
-// ---------------------------------------------------------------------------
-// Calls the evaluate-zone-effects edge function via an internal service-to-
-// service fetch. This checks sector ownership against thresholds and writes
-// new zone_effect_reveals + War Bulletin posts for any newly-qualified players.
-//
+// evaluateZoneEffects: non-blocking internal call to the evaluate-zone-effects
+// edge function. Checks sector ownership against thresholds and writes new
+// zone_effect_reveals + War Bulletin posts for newly-qualified players.
 // Called after:
-//   movement → conflicts  (units have moved, ownership may have changed)
-//   results  → publish    (battle outcomes resolve, sector control may shift)
-//
-// Non-blocking: any error is logged but NEVER propagates — a failure here
-// must not break the stage advance or return an error to the lead player.
-// ---------------------------------------------------------------------------
+//   movement -> missions : units have moved, ownership may have changed
+//   results  -> publish  : battle outcomes resolved, sector control may shift
+// Errors are logged but NEVER propagate -- a failure must not break stage advance.
 async function evaluateZoneEffects(campaign_id: string): Promise<void> {
-  const supabaseUrl      = Deno.env.get("SUPABASE_URL");
-  const serviceRoleKey   = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseUrl    = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !serviceRoleKey) {
-    console.warn("[advance-round] evaluateZoneEffects: missing SUPABASE_URL or service role key — skipping");
+    console.warn("[advance-round] evaluateZoneEffects: missing env vars -- skipping");
     return;
   }
 
@@ -137,14 +138,13 @@ async function evaluateZoneEffects(campaign_id: string): Promise<void> {
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "(unreadable)");
-      console.error(`[advance-round] evaluateZoneEffects: HTTP ${resp.status} — ${text}`);
+      console.error(`[advance-round] evaluateZoneEffects: HTTP ${resp.status} -- ${text}`);
     } else {
       const data = await resp.json().catch(() => null);
-      console.log(`[advance-round] evaluateZoneEffects: ok — newReveals=${data?.newReveals ?? "?"} bulletins=${data?.bulletin_posts ?? "?"}`);
+      console.log(`[advance-round] evaluateZoneEffects: ok -- newReveals=${data?.newReveals ?? "?"} bulletins=${data?.bulletin_posts ?? "?"}`);
     }
   } catch (e: any) {
-    // Non-fatal — log and continue
-    console.error("[advance-round] evaluateZoneEffects: fetch error —", e?.message ?? String(e));
+    console.error("[advance-round] evaluateZoneEffects: fetch error --", e?.message ?? String(e));
   }
 }
 
@@ -155,7 +155,7 @@ serve(async (req) => {
 
     const result = await requireUser(req);
     if (!result?.user) return json(401, { ok: false, error: "Unauthorised" });
-    const user = result.user;
+    const user  = result.user;
     const admin = adminClient();
 
     const { campaign_id } = (await req.json()) as { campaign_id: string };
@@ -188,7 +188,7 @@ serve(async (req) => {
       .eq("round_number", campaign.round_number)
       .maybeSingle();
 
-    // No round row yet — create and start at spend
+    // No round row yet -- create and start at spend
     if (!round) {
       await admin.from("rounds").insert({
         campaign_id,
@@ -200,8 +200,13 @@ serve(async (req) => {
 
     const stage = round.stage as string;
 
-    // publish → close this round, open next
-    if (stage === "publish") {
+    // Legacy compatibility: if a campaign is somehow still on the old
+    // "conflicts" stage (e.g. deployed before this migration), treat it
+    // as "movement" so nextStage() returns "missions" correctly.
+    const effectiveStage = stage === "conflicts" ? "movement" : stage;
+
+    // publish -> close this round, open next
+    if (effectiveStage === "publish") {
       await admin
         .from("rounds")
         .update({ stage: "closed", closed_at: new Date().toISOString() })
@@ -219,12 +224,13 @@ serve(async (req) => {
       return json(200, { ok: true, stage: "spend", round_number: nextRound, conflicts_created: 0 });
     }
 
-    const newStage = nextStage(stage);
+    const newStage = nextStage(effectiveStage);
     let conflicts_created = 0;
 
-    // Detect conflicts when movement phase closes (movement → conflicts).
-    // All moves are submitted by this point; we now find zone/sector clashes.
-    if (stage === "movement") {
+    // Detect conflicts when movement phase closes (movement -> missions).
+    // All moves are submitted by this point; find zone/sector clashes.
+    // Also handles legacy "conflicts" stage being advanced (effectiveStage = "movement").
+    if (effectiveStage === "movement") {
       conflicts_created = await detectConflicts(admin, campaign_id, campaign.round_number);
     }
 
@@ -235,10 +241,9 @@ serve(async (req) => {
       .eq("round_number", campaign.round_number);
 
     // Evaluate zone effects after transitions where sector ownership can change:
-    //   movement → conflicts : units have moved, some sectors may be newly controlled
-    //   results  → publish   : battle outcomes resolved, sector control may have shifted
-    // evaluateZoneEffects is non-blocking — errors do not affect the response.
-    if (stage === "movement" || stage === "results") {
+    //   movement -> missions : units have moved, some sectors may be newly controlled
+    //   results  -> publish  : battle outcomes resolved, sector control may have shifted
+    if (effectiveStage === "movement" || effectiveStage === "results") {
       await evaluateZoneEffects(campaign_id);
     }
 
