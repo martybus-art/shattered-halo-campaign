@@ -2,6 +2,9 @@
 // src/app/page.tsx
 //
 // changelog:
+//   2026-03-16 -- RENAME: /conflicts route renamed to /missions.
+//                navTo("/conflicts") -> navTo("/missions") and button label
+//                "Conflicts" -> "Missions" in the campaign nav buttons.
 //   2026-03-08 — SECURITY: all campaign nav anchors (Dashboard, Map, Conflicts,
 //                Lead Controls) converted to buttons that call setCampaignSession
 //                then navigate to the clean path. Campaign IDs are no longer
@@ -457,10 +460,10 @@ export default function Home() {
                         Map
                       </button>
                       <button
-                        onClick={() => navTo("/conflicts", m.campaign_id)}
+                        onClick={() => navTo("/missions", m.campaign_id)}
                         className="px-3 py-1.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-xs"
                       >
-                        Conflicts
+                        Missions
                       </button>
                       {(m.role === "lead" || m.role === "admin") && (
                         <button

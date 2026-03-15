@@ -3,6 +3,9 @@
 // App shell: top bar + campaign nav strip.
 //
 // changelog:
+//   2026-03-16 -- RENAME: "Conflicts" nav item renamed to "Missions".
+//                key, label, path updated from conflicts -> missions.
+//                currentPage type union updated to match.
 //   2026-03-08 — SECURITY: campaign nav links converted from <a href="?campaign=UUID">
 //                to JS navigation (button onClick). setCampaignSession ensures the ID
 //                is in sessionStorage before navigating so the URL stays clean.
@@ -20,7 +23,7 @@ type FrameProps = {
   /** Pass the user's role to show/hide Lead Controls link */
   role?: string;
   /** Current page key — used to highlight the active nav item */
-  currentPage?: "home" | "dashboard" | "map" | "conflicts" | "lead" | "campaigns";
+  currentPage?: "home" | "dashboard" | "map" | "missions" | "lead" | "campaigns";
   /** Hide the + New Campaign link (e.g. on the unauthenticated landing view) */
   hideNewCampaign?: boolean;
 };
@@ -29,7 +32,7 @@ type FrameProps = {
 const CAMPAIGN_NAV = [
   { key: "dashboard", label: "Dashboard", path: "/dashboard" },
   { key: "map",       label: "Map",        path: "/map"       },
-  { key: "conflicts", label: "Conflicts",  path: "/conflicts" },
+  { key: "missions",  label: "Missions",   path: "/missions"  },
 ] as const;
 
 /** Navigate to a campaign page without exposing the campaign ID in the URL. */

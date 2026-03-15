@@ -1,6 +1,13 @@
 "use client";
-// src/app/conflicts/page.tsx
+// src/app/missions/page.tsx
 //
+// changelog:
+//   2026-03-16 -- RENAME: File moved from app/conflicts/page.tsx to
+//                app/missions/page.tsx. ConflictsPage -> MissionsPage.
+//                currentPage="conflicts" -> "missions" (3 occurrences).
+//                Nav now shows "Missions" tab via Frame.tsx update.
+//                User-facing "No conflicts scheduled" and "Conflicts are
+//                generated" strings updated to "engagements" language.//
 // changelog:
 //   2026-03-09 — FIX: \u2026 in bare JSX text "Consulting the war records" rendered
 //                as literal \u2026 — changed to &hellip; HTML entity in both pre and
@@ -393,7 +400,7 @@ function BattlefieldLayout({
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function ConflictsPage() {
+export default function MissionsPage() {
   const supabase     = useMemo(() => supabaseBrowser(), []);
   const [campaignId] = useState<string>(() => bootstrapCampaignId());
 
@@ -1383,7 +1390,7 @@ export default function ConflictsPage() {
 
   if (!authChecked) {
     return (
-      <Frame title="Engagements" currentPage="conflicts" hideNewCampaign>
+      <Frame title="Engagements" currentPage="missions" hideNewCampaign>
         <div className="flex items-center justify-center py-24">
           <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
         </div>
@@ -1393,7 +1400,7 @@ export default function ConflictsPage() {
 
   if (!campaignId) {
     return (
-      <Frame title="Engagements" currentPage="conflicts" hideNewCampaign>
+      <Frame title="Engagements" currentPage="missions" hideNewCampaign>
         <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
           <p className="text-parchment/50">No campaign selected.</p>
           <a href="/"
@@ -1409,7 +1416,7 @@ export default function ConflictsPage() {
   const pastConflicts    = conflicts.filter((c) => c.round_number < roundNumber);
 
   return (
-    <Frame title="Engagements" campaignId={campaignId} role={role} currentPage="conflicts">
+    <Frame title="Engagements" campaignId={campaignId} role={role} currentPage="missions">
       <div className="space-y-6">
 
         {currentConflicts.length > 0 && (
@@ -1429,8 +1436,8 @@ export default function ConflictsPage() {
         {currentConflicts.length === 0 && (
           <Card title="No Active Engagements">
             <p className="text-parchment/50 text-sm">
-              No conflicts scheduled for Round {roundNumber || "\u2014"}.
-              Conflicts are generated when two players move to the same sector.
+              No engagements scheduled for Round {roundNumber || "\u2014"}.
+              Engagements are generated when two players move to the same sector.
             </p>
           </Card>
         )}
