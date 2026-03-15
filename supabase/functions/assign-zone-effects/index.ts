@@ -112,11 +112,10 @@ async function assignZoneEffects(
 
   // 4. Build rows
   const rows: {
-    campaign_id:           string;
-    zone_key:              string;
-    zone_name:             string;
-    zone_effect_id:        string;
-    global_uses_remaining: number | null;
+    campaign_id:    string;
+    zone_key:       string;
+    zone_name:      string;
+    zone_effect_id: string;
   }[] = [];
 
   for (const zone of zonesNeedingEffects) {
@@ -130,7 +129,6 @@ async function assignZoneEffects(
       zone_key:              zone.key,
       zone_name:             zone.name ?? zone.key,
       zone_effect_id:        effect.id,
-      global_uses_remaining: (effect.scope as string) === "one_time" ? 1 : null,
     });
 
     usedEffectIds.add(effect.id as string);

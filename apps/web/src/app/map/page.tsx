@@ -1,675 +1,156 @@
-// apps/web/src/app/map/page.tsx
-// Tactical Hololith — campaign map viewer with movement order submission.
+"use client";
+// apps/web/src/app/dashboard/page.tsx
+// Player dashboard: status, war bulletin, faction resources, campaign map.
 //
 // changelog:
-//   2026-03-15 — FIX: CampaignZoneEffect cast changed to `as unknown as CampaignZoneEffect[]`
-//                to satisfy TypeScript — Supabase infers its own type for nested
-//                join results that doesn't directly match our hand-written type.
-//   2026-03-15 — FEATURE: Zone effects integrated into map overlay and popup panel.
-//                New type ZoneEffectSummary imported from CampaignMapOverlay.
-//                load() adds queries 12-13: campaign_zone_effects (joined to
-//                zone_effects) and zone_effect_reveals for the current user.
-//                Derived state: zoneEffectsByKey (fog-of-war pre-filter using
-//                reveal rows), oneTimeUsedByZone (from zone_effect_events),
-//                zoneEffectSummaries array passed to both CampaignMapOverlay
-//                call sites as the new zoneEffectSummaries prop.
-//                SectorInfoPopupPanel: new "Zone Effect" CollapsibleSection
-//                shows revealed effect name, tier badge, benefit text, scope,
-//                lore, and major-benefit teaser when minor tier applies.
-//   2026-03-15 — FEATURE: Sector info popup panel. Three new components added:
-//                TagCard (renders a single SectorTag in brass card style),
-//                CollapsibleSection (reusable ◈ toggle panel matching
-//                CampaignMapOverlay's CalibrationPanel styling), and
-//                SectorInfoPopupPanel (full intel display for a clicked zone/sector).
-//                SectorInfoPopupPanel passes as popupSidePanel= prop to the
-//                fullscreen map popup's CampaignMapOverlay so that clicking any
-//                sector on the overlay fills the right column with grouped intel:
-//                Field Unit, Defenses, Zone Benefits, Relics Discovered, Resources,
-//                and Sector Intel sections — all collapsible, all data-driven.
-//                CampaignMapOverlay.tsx gains popupSidePanel?: React.ReactNode prop;
-//                all five layout branches render it when calibrationLocked=true.
-//   2026-03-15 — FEATURE: Fullscreen map calibration popup. mapPopupOpen state
-//                added. Right-column map thumbnail now has a hover expand hint;
-//                clicking it opens a fixed fullscreen modal with CampaignMapOverlay
-//                in popupMode (map left, calibration sliders right, always open).
-//                Clicking the backdrop or ✕ closes the popup. Non-leads see the
-//                expanded map without sliders (calibrationLocked=true when started).
-//   2026-03-14 — UPDATE: isOverlayLayout extended to include "continent" and
-//                "void_ship" layouts. normaliseLayout now also maps "ship_line"
-//                -> "void_ship" for legacy DB rows. Both layouts use the full
-//                2-column grid (action cards left, overlay map right) and pass
-//                through to CampaignMapOverlay with isLead / campaignId props.
-//   2026-03-11 — FIX: Normalise "spoke" -> "spokes" at load time. DB may store
-//                either spelling; code and isOverlayLayout check require "spokes".
-//   2026-03-11 — LAYOUT: For ring/spokes layouts, restructured to 2-column grid:
-//                left col = My Units / Movement / Deploy / Pending Orders cards,
-//                right col = CampaignMapOverlay map card. Non-ring layouts keep
-//                existing single-column stacked layout.
-//   2026-03-11 — FIX: Overlay condition was ring-only (mapLayout === "ring").
-//                Changed to (mapLayout === "ring" || mapLayout === "spokes") so
-//                spokes campaigns also use CampaignMapOverlay instead of falling
-//                through to the side-by-side Hololith layout.
-//                FIX: layout prop was hardcoded "ring"; now layout={mapLayout as any}.
-//                STYLE: Overlay block wrapped in max-w-xl mx-auto container to
-//                reduce map footprint on page.
-//   2026-03-10 — INTEGRATION: CampaignMapOverlay replaces the side-by-side
-//                Tactical Hololith + AI Theatre Map for ring layout campaigns
-//                that have a generated AI map image. The new overlay renders
-//                the AI image with a live SVG ring-sector overlay on top,
-//                wired to the same toZone/toSector movement state. Non-ring
-//                layouts and campaigns without an AI image continue to use
-//                the original TacticalMap + MapImageDisplay 2-column layout.
-//                bg_image_path now fetched from maps table; signed URL stored
-//                in mapImageUrl state and passed to CampaignMapOverlay.
-//   2026-03-09 — LAYOUT: Tactical Hololith and AI Theatre Map placed side-by-side
-//                in a 2-column grid (lg:grid-cols-2). Hololith on the left, map
-//                image on the right. Single-column on mobile; right column hidden
-//                when no mapId is present.
-//   2026-03-08 — FEATURE: Replaced zone/sector dropdowns with an interactive
-//                SVG Tactical Layout Map. Design rules:
-//                  • ALL zones always visible — layout shape reflects map type
-//                    (ring / spoke / continent / void_ship)
-//                  • ALL sectors (A/B/C/D) rendered as a 2×2 grid inside every
-//                    zone node — always visible but colour-coded by state
-//                  • Sectors are only CLICKABLE/SELECTABLE when the active unit
-//                    is adjacent (or deep-strike is active) — out-of-range
-//                    sectors appear greyed and non-interactive
-//                  • Sector intel (tags: relics, NIP bonuses, hazards) is only
-//                    shown in the intel panel when YOUR unit currently occupies
-//                    that sector (occupation-gated intel reveal)
-//                  • Fog-of-war still hides sector ownership from unknown zones,
-//                    but the zone node and its 4 cells remain visible
-//                  • Undiscovered zones rendered as dark fog-placeholder nodes
-//                    using zone_count from the maps table to fill out topology
-//   2026-03-07 — Reads rules_overrides.fog.enabled from campaign.
-//   2026-03-05 — Initial movement orders panel, unit deployment, My Units card.
+//   2026-03-15 — FIX: Schema alignment — CampaignZoneEffect type updated to use
+//                real DB column names (minor_charges_used, major_charges_used,
+//                global_charges_used integers). ZoneEffectEvent type and
+//                zoneEffectEvents state removed — zone_effect_events table does
+//                not exist; consumed status derived directly from charge integer
+//                columns on campaign_zone_effects. campaign_zone_effects select
+//                string updated to match real columns.
+//   2026-03-15 — FIX: CampaignZoneEffect cast changed from `as CampaignZoneEffect[]`
+//                to `as unknown as CampaignZoneEffect[]`. Supabase infers its own
+//                generated type for nested join results (zone_effects(...) select)
+//                which TypeScript rejects as an unsafe direct cast. The double-cast
+//                pattern matches existing usage in this codebase (e.g. sectors as any).
+//   2026-03-15 — FEATURE: Zone Effects system integrated into Faction Resources card.
+//                New types: CampaignZoneEffect, ZoneEffectReveal, ZoneEffectEvent.
+//                load() queries campaign_zone_effects (joined to zone_effects),
+//                zone_effect_reveals (fog-of-war — RLS returns only this player's
+//                own reveals), and zone_effect_events (one-time use audit log).
+//                Faction Resources card gains "Zone Effects" section below
+//                Round Purchases. Shows only revealed effects; one-time scope
+//                effects display Used/Available badge matching existing token UX.
+//                PostTagBadge extended with "zone_effect" (purple) case.
+//                Realtime subscription extended to also reload zone effects on
+//                zone_effect_reveals INSERT so the card updates without a page
+//                refresh when a reveal is written by the backend.
+//   2026-03-13 — FEATURE: War Bulletin filter bar (All / 🌐 Public / 🔒 Private)
+//                matching lead/page.tsx design. bulletinFilter state added.
+//                PostTagBadge extended with "movement" (blue) and "stage_advance"
+//                (grey) tags. Timestamps updated to DD/MM/YYYY HH:MM 24hr format.
+//   2026-03-09 — FEATURE: War Bulletin now shows private + public posts.
+//                Private posts (🔒) are visible only to audience_user_id.
+//                Public posts visible to all members. Merged & sorted newest-first.
+//                NIP purchases now auto-post a private "Resources Acquired" entry.
+//                PostTagBadge expanded: instability, battle_log, purchase, relic,
+//                dispatch, alliance, chronicle, phase.
+//   2026-03-09 — FEATURE: Round Purchases now shows Used/Available badge on
+//                trackable tokens (Deep Strike, Recon). Fetches this round's
+//                moves in load() and builds a usedTokens Set. safe_passage has
+//                no move_type counterpart so no badge is shown for it.
+//   2026-03-09 — LAYOUT: Restructured from 2 stacked rows to a single 2-column grid.
+//                LEFT col: Your Status + War Bulletin.
+//                RIGHT col: Faction Resources + Theatre Map (directly stacked, no gap).
+//              — UX: Removed "Fog of war" disclaimer text from the Theatre Map
+//                territory legend (both the visible-territory and no-territory variants).
+//   2026-03-08 — SECURITY: authChecked state added. load() now redirects
+//                unauthenticated users to / immediately rather than silently
+//                rendering an empty page. Spinner shown while auth resolves.
+//   2026-03-08 — FEATURE: War Bulletin now shows the 5 most recent public posts
+//                rather than just the latest one. Posts tagged "chronicle" show
+//                a ✦ Chronicle badge; posts tagged "alliance" show a ⚜ Pact badge.
+//                Post type updated to include `tags` field.
+//   2026-03-08 — FEATURE: Realtime subscription on player_state for the current
+//                user. NIP and NCP balances in the Faction Resources card update
+//                live when resolve-conflict (or any other edge function) writes
+//                to player_state — no page refresh required.
+//   2026-03-07 -- FIX: Dashboard now also queries player_state_secret for
+//                 secret_location. Location card shows the player's real
+//                 starting location (zone:sector from secret_location) when
+//                 current_zone_key is still "unknown". Once movement begins
+//                 and submit-move updates current_zone_key, that takes over.
+//   2026-03-06 -- Added inline ToastContainer + addToast (consistent with
+//                 campaigns/page.tsx and lead/page.tsx patterns). Replaced all
+//                 alert() calls and bare addToast references with the proper
+//                 toast hook. Fixed TS compile error: "Cannot find name
+//                 'addToast'" at line 247.
+//   2026-03-05 -- Removed My Campaigns card (campaignId from URL param).
+//                 Removed Catch-up Choice card (now a conditional card driven
+//                 by lead offer). Status (top-left) + War Bulletin (top-right).
+//                 Added stage strip to Status card. Added Faction Resources
+//                 card with NIP/NCP balances and spend-phase shopping cart.
+//                 Added Campaign Map preview card with territory legend.
+//                 Underdog catchup offer appears as dedicated card when pending.
+//                 Removed prompt-copy helper functions. Cleaned up debug code.
+//                 Removed Quick Links card. Nav fixed: Frame now receives
+//                 campaignId and role props so all nav links render correctly.
+//                 Theatre Map image is now a link to /map page.
 
-"use client";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 import { bootstrapCampaignId } from "@/lib/campaignSession";
 import { Frame } from "@/components/Frame";
 import { Card } from "@/components/Card";
-import { MapImageDisplay } from "@/components/MapImageDisplay";
-import CampaignMapOverlay, { ZoneEffectSummary } from "@/components/CampaignMapOverlay";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Stage order (must match advance-round edge function) -------------------
+const STAGE_ORDER = ["spend", "recon", "movement", "conflicts", "missions", "results", "publish"] as const;
+type Stage = typeof STAGE_ORDER[number];
 
-const SECTOR_KEYS = ["a", "b", "c", "d"];
+// -- NIP shop items ---------------------------------------------------------
+// These are the purchasable abilities in the spend phase.
+const SHOP_ITEMS = [
+  { id: "deep_strike",       label: "Deep Strike",       nip: 1,
+    desc: "Move to any unoccupied sector this round, ignoring adjacency." },
+  { id: "recon",             label: "Recon",             nip: 1,
+    desc: "Reveal the zone of one enemy commander in range." },
+  { id: "mission_selection", label: "Mission Selection", nip: 2,
+    desc: "Choose or veto your mission in the next conflict." },
+  { id: "safe_passage",      label: "Safe Passage",      nip: 1,
+    desc: "Your movement this round cannot be intercepted." },
+] as const;
 
-const UNIT_NIP_COST: Record<string, number> = {
-  scout: 1,
-  occupation: 2,
-};
+// -- Catchup options (shown to the underdog player) ------------------------
+const CATCHUP_OPTIONS = [
+  "+2 NIP",
+  "+1 NCP next battle",
+  "Free Recon",
+  "Safe Passage (1 move cannot be intercepted)",
+] as const;
 
-// SVG node geometry — all values in SVG user-unit pixels
-const CELL   = 22;                      // individual sector cell side length
-const GAP    = 3;                       // gap between cells in 2×2 grid
-const PAD    = 6;                       // padding inside zone node border
-const LBL_H  = 13;                      // zone label height at bottom of node
-const GRID_W = CELL * 2 + GAP;         // 47 — two-cell row width
-const GRID_H = CELL * 2 + GAP;         // 47 — two-cell column height
-const NODE_W = GRID_W + PAD * 2;       // 59 — zone node total width
-const NODE_H = GRID_H + PAD * 2 + LBL_H; // 72 — zone node total height
-const SVG_W  = 600;
-const SVG_H  = 480;
+// -- Toast system (consistent with campaigns/page.tsx + lead/page.tsx) ------
 
-// Grimdark colour tokens
-const COL_BRASS      = "#c9a84c";
-const COL_BRASS_DIM  = "#7a5f22";
-const COL_BLOOD      = "#7a1515";
-const COL_GOLD       = "#f5c842";
-const COL_GREEN      = "#3a6b3a";
-const COL_GREEN_DIM  = "#1b2b1b";
-const COL_EDGE_DIM   = "#252535";
-const COL_EDGE_LIT   = "#3a3a5a";
+type ToastType = "success" | "error" | "info";
+interface Toast { id: number; type: ToastType; title: string; body?: string }
+let _toastId = 0;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-type SectorTag = {
-  type:         string;
-  label:        string;
-  description?: string;
-  value?:       number;
-  icon?:        string;
-};
-
-type Sector = {
-  zone_key:        string;
-  sector_key:      string;
-  owner_user_id:   string | null;
-  revealed_public: boolean;
-  fortified:       boolean;
-  tags?:           SectorTag[] | null;
-};
-
-type MapZone = {
-  key:      string;
-  name:     string;
-  sectors?: { key: string; name?: string }[];
-};
-
-type Unit = {
-  id:             string;
-  unit_type:      "scout" | "occupation";
-  zone_key:       string;
-  sector_key:     string;
-  status:         string;
-  round_deployed: number;
-};
-
-type Move = {
-  id:              string;
-  unit_id:         string | null;
-  from_zone_key:   string;
-  from_sector_key: string;
-  to_zone_key:     string;
-  to_sector_key:   string;
-  move_type:       string;
-  submitted_at:    string;
-};
-
-type Member = {
-  user_id:        string;
-  commander_name: string | null;
-  faction_name:   string | null;
-};
-
-// Zone effects — data loaded for overlay + popup panel
-type CampaignZoneEffect = {
-  id:                      string;
-  zone_key:                string;
-  zone_name:               string;
-  minor_one_time_consumed: boolean;
-  major_one_time_consumed: boolean;
-  global_uses_remaining:   number | null;
-  zone_effects: {
-    slug:           string;
-    name:           string;
-    category:       string;
-    scope:          string;
-    lore:           string;
-    minor_benefit:  string;
-    major_benefit:  string;
-    global_benefit: string;
-    power_rating:   number;
-  };
-};
-
-type ZoneEffectReveal = {
-  zone_key:       string;
-  zone_effect_id: string;
-  tier:           "minor" | "major" | "global";
-};
-
-// ── Adjacency builder ─────────────────────────────────────────────────────────
-// Returns Map<zone_key, Set<adjacent_zone_key>>. Self-adjacency always included.
-//
-//  "ring"      — circular: each zone → prev + next, wrapping
-//  "spoke"     — zones[0] is the hub, connects to every outer zone;
-//                outer zones also ring among themselves
-//  "void_ship" — 2 parallel corridors (port / starboard), bridged at
-//                bow (zones[0] ↔ zones[perCol]) and stern (zones[perCol-1] ↔ zones[n-1])
-//  "continent" — clusters of ~3 internally ring-connected, bridged at one
-//                chokepoint per cluster boundary
-
-function buildAdjacency(zones: MapZone[], layout = "ring"): Map<string, Set<string>> {
-  const adj = new Map<string, Set<string>>();
-  const n   = zones.length;
-  for (const z of zones) adj.set(z.key, new Set([z.key]));
-  if (n <= 1) return adj;
-
-  const link = (a: string, b: string) => {
-    adj.get(a)!.add(b);
-    adj.get(b)!.add(a);
-  };
-
-  switch (layout) {
-    case "spoke": {
-      const hub = zones[0].key;
-      for (let i = 1; i < n; i++) {
-        link(hub, zones[i].key);
-        link(zones[i].key, zones[i === 1 ? n - 1 : i - 1].key);
-      }
-      break;
-    }
-    case "void_ship": {
-      const perCol = Math.ceil(n / 2);
-      for (let i = 0; i < perCol - 1; i++) link(zones[i].key, zones[i + 1].key);
-      for (let i = perCol; i < n - 1; i++) link(zones[i].key, zones[i + 1].key);
-      if (n > perCol) link(zones[0].key, zones[perCol].key);
-      if (perCol > 1 && n > perCol) link(zones[perCol - 1].key, zones[n - 1].key);
-      break;
-    }
-    case "continent": {
-      const cs = Math.max(2, Math.round(n / Math.ceil(n / 3)));
-      const nc = Math.ceil(n / cs);
-      for (let c = 0; c < nc; c++) {
-        const s = c * cs, e = Math.min(s + cs, n);
-        const cl = zones.slice(s, e);
-        for (let i = 0; i < cl.length; i++) link(cl[i].key, cl[(i + 1) % cl.length].key);
-        if (c < nc - 1) link(cl[cl.length - 1].key, zones[e].key);
-      }
-      break;
-    }
-    case "ring":
-    default: {
-      for (let i = 0; i < n; i++) link(zones[i].key, zones[(i + 1) % n].key);
-      break;
-    }
-  }
-  return adj;
-}
-
-// ── Zone SVG positions ────────────────────────────────────────────────────────
-// Returns the SVG canvas centre {x, y} for each zone's node bounding box.
-
-function computePositions(zones: MapZone[], layout: string): Map<string, { x: number; y: number }> {
-  const pos = new Map<string, { x: number; y: number }>();
-  const n   = zones.length;
-  if (n === 0) return pos;
-  const cx = SVG_W / 2, cy = SVG_H / 2;
-
-  switch (layout) {
-    case "spoke": {
-      pos.set(zones[0].key, { x: cx, y: cy });
-      const r = 175;
-      for (let i = 1; i < n; i++) {
-        const a = ((i - 1) / Math.max(n - 1, 1)) * 2 * Math.PI - Math.PI / 2;
-        pos.set(zones[i].key, { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
-      }
-      break;
-    }
-    case "void_ship": {
-      const perCol = Math.ceil(n / 2);
-      const colX   = [SVG_W * 0.28, SVG_W * 0.72];
-      const startY = 70;
-      const step   = perCol > 1 ? (SVG_H - 120) / (perCol - 1) : 0;
-      for (let i = 0; i < n; i++) {
-        const col = i < perCol ? 0 : 1;
-        const row = col === 0 ? i : i - perCol;
-        pos.set(zones[i].key, { x: colX[col], y: startY + row * step });
-      }
-      break;
-    }
-    case "continent": {
-      const cs = Math.max(2, Math.round(n / 3));
-      const centres = [
-        { x: cx * 0.58, y: cy * 0.70 },
-        { x: cx * 1.42, y: cy * 0.62 },
-        { x: cx,        y: cy * 1.52 },
-      ];
-      for (let i = 0; i < n; i++) {
-        const ci = Math.min(Math.floor(i / cs), centres.length - 1);
-        const ri = i % cs;
-        const cc = centres[ci];
-        const r  = cs <= 1 ? 0 : 82;
-        const a  = (ri / cs) * 2 * Math.PI - Math.PI / 2;
-        pos.set(zones[i].key, { x: cc.x + r * Math.cos(a), y: cc.y + r * Math.sin(a) });
-      }
-      break;
-    }
-    case "ring":
-    default: {
-      const r = 168;
-      for (let i = 0; i < n; i++) {
-        const a = (i / n) * 2 * Math.PI - Math.PI / 2;
-        pos.set(zones[i].key, { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
-      }
-      break;
-    }
-  }
-  return pos;
-}
-
-// ── TacticalMap ───────────────────────────────────────────────────────────────
-
-interface TacticalMapProps {
-  zones:          MapZone[];
-  layout:         string;
-  adj:            Map<string, Set<string>>;
-  sectors:        Sector[];
-  uid:            string;
-  memberById:     Map<string, Member>;
-  myUnits:        Unit[];
-  selectedUnit:   Unit | null;
-  toZone:         string;
-  toSector:       string;
-  fogEnabled:     boolean;
-  canMove:        boolean;
-  hasDeepStrike:  boolean;
-  onSelectSector: (zone: string, sector: string) => void;
-}
-
-function TacticalMap({
-  zones, layout, adj, sectors, uid, memberById,
-  myUnits, selectedUnit, toZone, toSector,
-  fogEnabled, canMove, hasDeepStrike, onSelectSector,
-}: TacticalMapProps) {
-  const positions = useMemo(() => computePositions(zones, layout), [zones, layout]);
-
-  const sectorLookup = useMemo(() => {
-    const m = new Map<string, Sector>();
-    for (const s of sectors) m.set(`${s.zone_key}:${s.sector_key}`, s);
-    return m;
-  }, [sectors]);
-
-  // Zones where I currently have a unit
-  const myUnitZones = useMemo(() => new Set(myUnits.map((u) => u.zone_key)), [myUnits]);
-
-  // Valid destination zones for the selected unit
-  const validZones = useMemo(() => {
-    if (!selectedUnit || !canMove) return new Set<string>();
-    if (hasDeepStrike) return new Set(zones.map((z) => z.key));
-    return adj.get(selectedUnit.zone_key) ?? new Set<string>();
-  }, [selectedUnit, canMove, hasDeepStrike, adj, zones]);
-
-  // Deduplicated edges for connector lines
-  const edges = useMemo(() => {
-    const seen = new Set<string>(), out: [string, string][] = [];
-    for (const [zk, nb] of adj.entries())
-      for (const n of nb) {
-        if (n === zk) continue;
-        const k = [zk, n].sort().join("|");
-        if (!seen.has(k)) { seen.add(k); out.push([zk, n]); }
-      }
-    return out;
-  }, [adj]);
-
-  // Determine visual state of a sector cell
-  const cellState = (zk: string, sk: string) => {
-    if (zk.startsWith("_fog_")) return "fog";
-    if (toZone === zk && toSector === sk) return "selected";
-    const s         = sectorLookup.get(`${zk}:${sk}`);
-    const hasMyUnit = myUnits.some((u) => u.zone_key === zk && u.sector_key === sk);
-    const zoneKnown = myUnitZones.has(zk) || !fogEnabled;
-
-    if (hasMyUnit)                   return "mine_unit";
-    if (s?.owner_user_id === uid)    return "mine_empty";
-    if (s?.owner_user_id && s.owner_user_id !== uid) {
-      if (!zoneKnown && !s.revealed_public) return "fog_cell";
-      return "enemy";
-    }
-    if (!zoneKnown && !(s?.revealed_public)) return "fog_cell";
-    // Unclaimed / unknown — only green/reachable if a unit is selected and range allows
-    return (canMove && selectedUnit && validZones.has(zk)) ? "reachable" : "empty";
-  };
-
-  type CellState = ReturnType<typeof cellState>;
-
-  const cellFill = (st: CellState): string => ({
-    selected:  "#3d3000",
-    mine_unit: "#5a3d08",
-    mine_empty:"#221800",
-    enemy:     "#3a0a0a",
-    reachable: COL_GREEN_DIM,
-    fog_cell:  "#0a0a10",
-    fog:       "#0a0a10",
-    empty:     "#0f0f1a",
-  }[st] ?? "#0f0f1a");
-
-  const cellStroke = (st: CellState): string => ({
-    selected:  COL_GOLD,
-    mine_unit: COL_BRASS,
-    mine_empty:COL_BRASS_DIM,
-    enemy:     COL_BLOOD,
-    reachable: COL_GREEN,
-    fog_cell:  "#181826",
-    fog:       "#181826",
-    empty:     COL_EDGE_DIM,
-  }[st] ?? COL_EDGE_DIM);
-
-  const cellTextFill = (st: CellState): string => ({
-    selected:  COL_GOLD,
-    mine_unit: COL_BRASS,
-    mine_empty:COL_BRASS_DIM,
-    enemy:     "#c04040",
-    reachable: "#5aaa5a",
-    fog_cell:  "#1e1e30",
-    fog:       "#1e1e30",
-    empty:     "#2e2e45",
-  }[st] ?? "#2e2e45");
-
-  // 2×2 grid cell positions relative to top-left of grid area
-  const CELLS = [
-    { key: "a", col: 0, row: 0 },
-    { key: "b", col: 1, row: 0 },
-    { key: "c", col: 0, row: 1 },
-    { key: "d", col: 1, row: 1 },
-  ] as const;
-
-  if (zones.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-28 rounded border border-brass/10 bg-void/40">
-        <p className="text-parchment/30 text-sm italic">Awaiting tactical data…</p>
-      </div>
-    );
-  }
-
-  const isHubSpoke = (z: MapZone) => layout === "spoke" && zones.indexOf(z) === 0;
-
+function ToastContainer({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
+  if (!toasts.length) return null;
   return (
-    <svg
-      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-      className="w-full select-none"
-      style={{ background: "transparent" }}
-      aria-label="Tactical layout map"
-    >
-      {/* Adjacency connector lines */}
-      {edges.map(([a, b]) => {
-        const pa = positions.get(a), pb = positions.get(b);
-        if (!pa || !pb) return null;
-        const highlight = selectedUnit && canMove && (
-          (validZones.has(a) && myUnitZones.has(b)) ||
-          (validZones.has(b) && myUnitZones.has(a))
-        );
-        return (
-          <line
-            key={`${a}|${b}`}
-            x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
-            stroke={highlight ? "#4a6a4a" : COL_EDGE_DIM}
-            strokeWidth={highlight ? 1.5 : 0.6}
-            strokeDasharray={highlight ? undefined : "3 5"}
-            opacity={highlight ? 0.8 : 0.35}
-          />
-        );
-      })}
-
-      {/* Zone nodes */}
-      {zones.map((zone) => {
-        const p = positions.get(zone.key);
-        if (!p) return null;
-
-        const isFog   = zone.key.startsWith("_fog_");
-        const isMine  = myUnitZones.has(zone.key);
-        const isReach = validZones.has(zone.key);
-        const isHub   = isHubSpoke(zone);
-        const scale   = isHub ? 1.15 : 1.0;
-
-        const nw = NODE_W * scale, nh = NODE_H * scale;
-        const nx = p.x - nw / 2, ny = p.y - nh / 2;
-        const gx = nx + PAD * scale, gy = ny + PAD * scale;
-
-        const nodeBorder = isMine  ? COL_BRASS
-                         : isReach ? COL_GREEN
-                         : isFog   ? "#14141e"
-                         :           "#222235";
-        const nodeFill   = isMine  ? "#120e00"
-                         : isFog   ? "#07070e"
-                         :           "#0b0b14";
-
-        return (
-          <g key={zone.key}>
-            {/* Node background */}
-            <rect
-              x={nx} y={ny} width={nw} height={nh} rx={3}
-              fill={nodeFill}
-              stroke={nodeBorder}
-              strokeWidth={isMine || isHub ? 1.5 : 0.7}
-              opacity={isFog ? 0.5 : 1}
-            />
-
-            {/* 2×2 sector grid (not drawn for fog placeholder nodes) */}
-            {!isFog && CELLS.map(({ key: sk, col, row }) => {
-              const cw  = CELL * scale, ch = CELL * scale;
-              const cx2 = gx + col * (cw + GAP);
-              const cy2 = gy + row * (ch + GAP);
-              const st  = cellState(zone.key, sk);
-              const fill   = cellFill(st);
-              const stroke = cellStroke(st);
-              const tclr   = cellTextFill(st);
-
-              // A sector cell is interactive only when:
-              //   1. A unit is selected AND it's the movement phase
-              //   2. This zone is within adjacency range (or deep-strike)
-              //   3. This is not a fog-placeholder zone
-              const interactive = isReach && canMove && !!selectedUnit;
-
-              const s       = sectorLookup.get(`${zone.key}:${sk}`);
-              const hasUnit = myUnits.some((u) => u.zone_key === zone.key && u.sector_key === sk);
-
-              return (
-                <g
-                  key={sk}
-                  style={{ cursor: interactive ? "pointer" : "default" }}
-                  onClick={() => interactive && onSelectSector(zone.key, sk)}
-                >
-                  {/* Cell background */}
-                  <rect
-                    x={cx2} y={cy2} width={cw} height={ch} rx={2}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={st === "selected" ? 2 : 1}
-                  />
-                  {/* Sector key label */}
-                  <text
-                    x={cx2 + cw / 2} y={cy2 + ch / 2 + 1}
-                    textAnchor="middle" dominantBaseline="middle"
-                    fontSize={7.5 * scale}
-                    fontFamily="monospace"
-                    fontWeight={st === "selected" ? "bold" : "normal"}
-                    fill={tclr}
-                    style={{ pointerEvents: "none" }}
-                  >
-                    {(st === "fog_cell") ? "?" : sk.toUpperCase()}
-                  </text>
-                  {/* Gold dot — my unit present in this cell */}
-                  {hasUnit && (
-                    <circle
-                      cx={cx2 + cw - 4 * scale}
-                      cy={cy2 + 4 * scale}
-                      r={2.5 * scale}
-                      fill={COL_GOLD}
-                      style={{ pointerEvents: "none" }}
-                    />
-                  )}
-                  {/* Fortification indicator */}
-                  {s?.fortified && st !== "fog_cell" && (
-                    <text
-                      x={cx2 + 2.5} y={cy2 + ch - 2}
-                      fontSize={6 * scale} fill={COL_BLOOD}
-                      style={{ pointerEvents: "none" }}
-                    >⬡</text>
-                  )}
-                  {/* Subtle hover glow for reachable cells */}
-                  {interactive && st !== "selected" && (
-                    <rect
-                      x={cx2} y={cy2} width={cw} height={ch} rx={2}
-                      fill="transparent"
-                      stroke={COL_GREEN}
-                      strokeWidth={0.4}
-                      opacity={0.5}
-                      style={{ pointerEvents: "none" }}
-                    />
-                  )}
-                </g>
-              );
-            })}
-
-            {/* Fog node interior text */}
-            {isFog && (
-              <text
-                x={p.x} y={p.y}
-                textAnchor="middle" dominantBaseline="middle"
-                fontSize={12} fontFamily="monospace" fill="#1c1c2e"
-                style={{ pointerEvents: "none" }}
-              >???</text>
-            )}
-
-            {/* Zone name label at bottom of node */}
-            {!isFog && (
-              <text
-                x={p.x} y={ny + nh - 2}
-                textAnchor="middle" dominantBaseline="auto"
-                fontSize={6.5} fontFamily="monospace" letterSpacing={0.4}
-                fill={isMine ? COL_BRASS : isReach ? "#5aaa5a" : "#3a3a52"}
-                style={{ pointerEvents: "none" }}
-              >
-                {zone.name.slice(0, 15).toUpperCase()}
-              </text>
-            )}
-
-            {/* Hub badge for spoke layout centre */}
-            {isHub && (
-              <text
-                x={p.x} y={ny - 4}
-                textAnchor="middle" dominantBaseline="auto"
-                fontSize={6} fontFamily="monospace" fill={COL_BRASS_DIM}
-                style={{ pointerEvents: "none" }}
-              >▲ SPIRE</text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-// ── SectorIntelPanel ──────────────────────────────────────────────────────────
-// Only renders when a unit occupies the given sector AND it has tags or fortification.
-
-function SectorIntelPanel({
-  zoneKey, sectorKey, sector,
-}: {
-  zoneKey: string;
-  sectorKey: string;
-  sector: Sector | undefined;
-}) {
-  if (!sector) return null;
-  const tags: SectorTag[] = Array.isArray(sector.tags) ? sector.tags : [];
-  if (tags.length === 0 && !sector.fortified) return null;
-
-  const fmtKey = (k: string) => k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-  return (
-    <div className="mt-3 pt-3 border-t border-brass/15 space-y-1.5">
-      <p className="text-xs text-brass/50 uppercase tracking-widest font-mono">
-        ◈ Intel — {fmtKey(zoneKey)} / {sectorKey.toUpperCase()}
-      </p>
-      {sector.fortified && (
-        <div className="flex items-start gap-2.5 px-3 py-2 rounded border border-blood/30 bg-blood/5">
-          <span className="text-blood/80 shrink-0 mt-0.5">⬡</span>
-          <div>
-            <p className="text-sm text-blood/80 font-semibold">Fortified Position</p>
-            <p className="text-xs text-parchment/40 mt-0.5">
-              Attacking forces suffer a defensive penalty. Siege assets or overwhelming numbers recommended.
-            </p>
-          </div>
-        </div>
-      )}
-      {tags.map((tag, i) => (
-        <div key={i} className="flex items-start gap-2.5 px-3 py-2 rounded border border-brass/20 bg-brass/5">
-          <span className="text-brass shrink-0 mt-0.5">{tag.icon ?? "◈"}</span>
-          <div>
-            <p className="text-sm text-brass/90 font-semibold">{tag.label}</p>
-            {tag.description && (
-              <p className="text-xs text-parchment/55 mt-0.5">{tag.description}</p>
-            )}
-            {tag.value !== undefined && (
-              <p className="text-xs text-brass/55 font-mono mt-0.5">
-                {tag.type === "nip_bonus" ? `+${tag.value} NIP / round` : `Value: ${tag.value}`}
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto rounded border px-4 py-3 shadow-2xl shadow-black/60 backdrop-blur-sm
+            ${t.type === "success" ? "bg-void border-brass/60" : ""}
+            ${t.type === "error"   ? "bg-void border-blood/60" : ""}
+            ${t.type === "info"    ? "bg-void border-brass/30" : ""}
+          `}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className={`text-sm font-semibold uppercase tracking-widest
+                ${t.type === "success" ? "text-brass"    : ""}
+                ${t.type === "error"   ? "text-blood"    : ""}
+                ${t.type === "info"    ? "text-brass/70" : ""}
+              `}>
+                {t.type === "success" && "⚙ "}
+                {t.type === "error"   && "☠ "}
+                {t.type === "info"    && "✦ "}
+                {t.title}
               </p>
-            )}
+              {t.body && (
+                <p className="mt-1 text-xs text-parchment/60 leading-relaxed">{t.body}</p>
+              )}
+            </div>
+            <button
+              onClick={() => dismiss(t.id)}
+              className="text-parchment/30 hover:text-parchment/70 text-lg leading-none mt-0.5 shrink-0"
+            >
+              ×
+            </button>
           </div>
         </div>
       ))}
@@ -677,631 +158,622 @@ function SectorIntelPanel({
   );
 }
 
-// ── TagCard ───────────────────────────────────────────────────────────────────
-// Renders a single sector / zone tag in the grimdark card style.
-// Reused by SectorInfoPopupPanel and SectorIntelPanel logic.
+// -- Types ------------------------------------------------------------------
 
-function TagCard({ tag }: { tag: SectorTag }) {
-  return (
-    <div className="flex items-start gap-2.5 px-3 py-2 rounded border border-brass/20 bg-brass/5">
-      <span className="text-brass shrink-0 mt-0.5">{tag.icon ?? "◈"}</span>
-      <div>
-        <p className="text-sm text-brass/90 font-semibold">{tag.label}</p>
-        {tag.description && (
-          <p className="text-xs text-parchment/55 mt-0.5">{tag.description}</p>
-        )}
-        {tag.value !== undefined && (
-          <p className="text-xs text-brass/55 font-mono mt-0.5">
-            {tag.type === "nip_bonus" ? `+${tag.value} NIP / round` : `Value: ${tag.value}`}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
+type Campaign = {
+  id:           string;
+  name:         string;
+  phase:        number;
+  round_number: number;
+  instability:  number;
+  map_id:       string | null;
+  campaign_narrative: string | null;
+};
 
-// ── CollapsibleSection ────────────────────────────────────────────────────────
-// Reusable collapsible panel with a brass ◈ toggle, matching the visual style
-// of CampaignMapOverlay's CalibrationPanel for consistency in the map popup.
+type PlayerState = {
+  nip:                number;
+  ncp:                number;
+  status:             string;
+  current_zone_key:   string;
+  current_sector_key: string;
+};
 
-function CollapsibleSection({
-  title,
-  defaultOpen = false,
-  badge,
-  children,
-}: {
-  title:        string;
-  defaultOpen?: boolean;
-  badge?:       React.ReactNode;
-  children:     React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="rounded-lg border border-brass/20 bg-iron/80 text-sm overflow-hidden">
-      <button
-        onClick={() => setOpen((p) => !p)}
-        className="w-full flex items-center gap-2 px-4 py-3 hover:bg-brass/5 transition-colors text-left group"
-        aria-expanded={open}
-      >
-        <span
-          className={`text-brass/60 text-xs shrink-0 transition-transform duration-200 inline-block ${open ? "" : "-rotate-90"}`}
-        >
-          ◈
-        </span>
-        <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase group-hover:text-brass/80 transition-colors flex-1">
-          {title}
-        </span>
-        {badge && <span className="shrink-0 ml-1">{badge}</span>}
-      </button>
-      {open && (
-        <div className="px-4 pb-4 border-t border-brass/15 pt-3 space-y-2">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
+type Round  = { stage: string };
 
-// ── SectorInfoPopupPanel ──────────────────────────────────────────────────────
-// Shown in the right column of the fullscreen map popup (popupMode=true) once
-// the campaign has started and calibration is locked.
-//
-// Displays structured intel for the currently clicked zone / sector, grouped
-// into collapsible sections that match CalibrationPanel's visual style:
-//   • Zone / sector header  — ownership badge, fortification status
-//   • Field Unit            — scout or occupation, round deployed
-//   • Defenses              — fortified position + defensive tags
-//   • Zone Benefits         — zone_benefit tags aggregated from zone's sectors
-//   • Relics Discovered     — relic tags on this sector
-//   • Resources             — nip_bonus tags + zone-wide NIP total
-//   • Sector Intel          — all other tags
-//
-// All sections render only when relevant data exists; a placeholder is shown
-// when nothing has been clicked yet.
+// tags is a jsonb array from the DB — typed as string[] for our purposes.
+type Post   = {
+  id:               string;
+  title:            string;
+  body:             string;
+  round_number:     number;
+  created_at:       string;
+  tags:             string[];
+  visibility:       string;        // 'public' | 'private'
+  audience_user_id: string | null; // set on private posts — the recipient
+};
 
-function SectorInfoPopupPanel({
-  zoneKey,
-  sectorKey,
-  sectors,
-  zones,
-  myUnits,
-  memberById,
-  uid,
-  czeByZone,
-  revealTierByZone,
-}: {
-  zoneKey:          string;
-  sectorKey:        string;
-  sectors:          Sector[];
-  zones:            MapZone[];
-  myUnits:          Unit[];
-  memberById:       Map<string, Member>;
-  uid:              string;
-  /** Full campaign_zone_effects lookup — for zone effect detail panel. */
-  czeByZone:        Map<string, CampaignZoneEffect>;
-  /** Highest reveal tier per zone for current player — fog-of-war gate. */
-  revealTierByZone: Map<string, "minor" | "major" | "global">;
-}) {
-  // ── Empty state ─────────────────────────────────────────────────────────
-  if (!zoneKey || !sectorKey) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12 text-parchment/25 text-sm text-center font-mono space-y-2 px-4">
-        <span className="text-3xl opacity-20">◈</span>
-        <p className="leading-relaxed">
-          Click a sector on the map<br />to view its intelligence report.
-        </p>
-      </div>
-    );
-  }
+type Spend  = { spend_type: string; nip_spent: number };
+type Member = { user_id: string; commander_name: string | null; faction_name: string | null; role: string };
+type Sector = { zone_key: string; sector_key: string; owner_user_id: string | null; revealed_public: boolean };
 
-  // ── Data resolution ──────────────────────────────────────────────────────
-  const zone        = zones.find((z) => z.key === zoneKey);
-  const sector      = sectors.find((s) => s.zone_key === zoneKey && s.sector_key === sectorKey);
-  const zoneSectors = sectors.filter((s) => s.zone_key === zoneKey);
-  const myUnit      = myUnits.find((u) => u.zone_key === zoneKey && u.sector_key === sectorKey);
-  const isMine      = sector?.owner_user_id === uid;
-  const isRevealed  = !!(sector?.revealed_public || isMine || myUnit);
+// Zone effects — joined shape returned by the campaign_zone_effects select
+type ZoneEffectDetail = {
+  slug:           string;
+  name:           string;
+  category:       string;
+  scope:          string;   // 'permanent' | 'per_battle' | 'per_round' | 'one_time'
+  lore:           string;
+  minor_benefit:  string;
+  major_benefit:  string;
+  global_benefit: string;
+  power_rating:   number;
+};
 
-  const ownerInfo = sector?.owner_user_id
-    ? (sector.owner_user_id === uid
-        ? { label: "You", mine: true }
-        : { label: memberById.get(sector.owner_user_id)?.commander_name ?? "Enemy Commander", mine: false })
-    : null;
+type CampaignZoneEffect = {
+  id:                   string;
+  zone_key:             string;
+  zone_name:            string;
+  minor_charges_used:   number;  // incremented each time the minor one-time benefit is used
+  major_charges_used:   number;  // incremented each time the major one-time benefit is used
+  global_charges_used:  number;  // incremented each time the global one-time benefit is used
+  zone_effects:         ZoneEffectDetail;
+};
 
-  // ── Tag buckets (sector-level) ───────────────────────────────────────────
-  const tags: SectorTag[]  = Array.isArray(sector?.tags) ? sector!.tags! : [];
-  const defTags   = tags.filter((t) => t.type === "defensive");
-  const relicTags = tags.filter((t) => t.type === "relic");
-  const nipTags   = tags.filter((t) => t.type === "nip_bonus");
-  const otherTags = tags.filter(
-    (t) => !["defensive", "relic", "nip_bonus", "zone_benefit"].includes(t.type),
-  );
+// Per-player fog-of-war reveal record (RLS returns only this player's own rows)
+type ZoneEffectReveal = {
+  zone_key:       string;
+  zone_effect_id: string;
+  tier:           "minor" | "major" | "global";
+  revealed_at:    string;
+};
 
-  // ── Zone benefits — deduplicated zone_benefit tags from visible sectors ──
-  const seenBenefits   = new Set<string>();
-  const zoneBenefitTags: SectorTag[] = [];
-  for (const zs of zoneSectors) {
-    const canSee = zs.owner_user_id === uid
-      || zs.revealed_public
-      || myUnits.some((u) => u.zone_key === zoneKey && u.sector_key === zs.sector_key);
-    if (!canSee) continue;
-    const ztags: SectorTag[] = Array.isArray(zs.tags) ? zs.tags : [];
-    for (const t of ztags) {
-      if (t.type === "zone_benefit" && !seenBenefits.has(t.label)) {
-        seenBenefits.add(t.label);
-        zoneBenefitTags.push(t);
-      }
-    }
-  }
+// ZoneEffectEvent type removed — zone_effect_events table does not exist in DB.
+// Consumed status is derived from minor_charges_used / major_charges_used on
+// campaign_zone_effects directly.
 
-  // ── Zone-wide NIP total from owned sectors ───────────────────────────────
-  const zoneNipTotal = zoneSectors.reduce((sum, zs) => {
-    if (zs.owner_user_id !== uid) return sum;
-    const ztags: SectorTag[] = Array.isArray(zs.tags) ? zs.tags : [];
-    return sum + ztags
-      .filter((t) => t.type === "nip_bonus")
-      .reduce((s, t) => s + (t.value ?? 0), 0);
-  }, 0);
+type UnderdogChoice = {
+  id:            string;
+  chosen_option: string | null;
+  status:        string;
+};
 
-  // ── Zone effect for this zone (fog-of-war: only shown if revealed) ────────
-  const revealedTier  = revealTierByZone.get(zoneKey) ?? null;
-  const cze           = czeByZone.get(zoneKey) ?? null;
-  const zoneEffect    = (revealedTier && cze) ? cze.zone_effects : null;
-
-  const hasNoFeatures = !myUnit && !sector?.fortified
-    && defTags.length === 0 && zoneBenefitTags.length === 0
-    && relicTags.length === 0 && nipTags.length === 0 && otherTags.length === 0
-    && !zoneEffect;
-
-  return (
-    <div className="space-y-2">
-
-      {/* ── Zone / sector header ── */}
-      <div className="rounded-lg border border-brass/30 bg-iron/80 px-4 py-3 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-brass/60 text-xs uppercase tracking-widest font-mono shrink-0">
-            ◈ {fmtKey(zoneKey)} / {sectorKey.toUpperCase()}
-          </p>
-          {zone && zone.name !== fmtKey(zoneKey) && (
-            <span className="text-parchment/30 text-xs font-mono truncate">{zone.name}</span>
-          )}
-        </div>
-
-        {!isRevealed ? (
-          <p className="text-parchment/30 italic text-xs">
-            Unknown. Deploy a scout to gather intel on this sector.
-          </p>
-        ) : ownerInfo ? (
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded border ${
-            ownerInfo.mine
-              ? "border-brass/30 bg-brass/10 text-brass/80"
-              : "border-blood/30 bg-blood/10 text-blood/80"
-          }`}>
-            <span className="font-semibold text-sm">
-              {ownerInfo.mine ? "Held by you" : `Held by ${ownerInfo.label}`}
-            </span>
-            {sector?.fortified && (
-              <span className="ml-auto text-xs border border-blood/30 px-1.5 py-0.5 rounded font-mono">
-                ⬡ Fortified
-              </span>
-            )}
-          </div>
-        ) : (
-          <p className="text-parchment/45 text-xs italic">Uncontrolled sector.</p>
-        )}
-      </div>
-
-      {/* ── Sections only when sector is visible ── */}
-      {isRevealed && (
-        <>
-          {/* Field Unit */}
-          {myUnit && (
-            <CollapsibleSection title="Field Unit" defaultOpen>
-              <div className={`flex items-center gap-2 px-3 py-2 rounded border ${
-                myUnit.unit_type === "scout"
-                  ? "border-blue-400/30 bg-blue-500/10"
-                  : "border-brass/30 bg-brass/10"
-              }`}>
-                <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase font-semibold ${
-                  myUnit.unit_type === "scout"
-                    ? "bg-blue-500/20 border-blue-400/40 text-blue-300"
-                    : "bg-brass/20 border-brass/40 text-brass"
-                }`}>
-                  {myUnit.unit_type}
-                </span>
-                <span className="text-parchment/60 text-xs">unit present</span>
-                <span className="ml-auto text-parchment/30 text-xs font-mono">
-                  R{myUnit.round_deployed}
-                </span>
-              </div>
-              <p className="text-parchment/40 text-xs leading-relaxed">
-                {myUnit.unit_type === "scout"
-                  ? "Scout unit — grants zone visibility and may move during the recon phase."
-                  : "Occupation unit — holds this sector and defends it when attacked."}
-              </p>
-            </CollapsibleSection>
-          )}
-
-          {/* Defenses */}
-          {(sector?.fortified || defTags.length > 0) && (
-            <CollapsibleSection title="Defenses" defaultOpen>
-              {sector?.fortified && (
-                <div className="flex items-start gap-2.5 px-3 py-2 rounded border border-blood/30 bg-blood/5">
-                  <span className="text-blood/80 shrink-0 mt-0.5">⬡</span>
-                  <div>
-                    <p className="text-sm text-blood/80 font-semibold">Fortified Position</p>
-                    <p className="text-xs text-parchment/40 mt-0.5">
-                      Attackers suffer a defensive penalty. Siege assets or overwhelming force recommended.
-                    </p>
-                  </div>
-                </div>
-              )}
-              {defTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
-            </CollapsibleSection>
-          )}
-
-          {/* Zone Effect — revealed via fog-of-war system */}
-          {zoneEffect && revealedTier && (
-            <CollapsibleSection
-              title="Zone Effect"
-              defaultOpen
-              badge={
-                <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${
-                  revealedTier === "major"
-                    ? "border-yellow-400/60 bg-yellow-400/15 text-yellow-300"
-                    : revealedTier === "minor"
-                    ? "border-brass/50 bg-brass/15 text-brass"
-                    : "border-purple-400/40 bg-purple-500/15 text-purple-300/80"
-                }`}>
-                  {revealedTier === "major" ? "★ Major" : revealedTier === "minor" ? "◆ Minor" : "◈ Global"}
-                </span>
-              }
-            >
-              {/* Effect name + category */}
-              <div className="flex items-start justify-between gap-2 flex-wrap">
-                <div>
-                  <p className="text-parchment/85 text-sm font-semibold">{zoneEffect.name}</p>
-                  <p className="text-parchment/35 text-xs font-mono">{zoneEffect.category}</p>
-                </div>
-                <span className="text-xs px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/40 font-mono shrink-0">
-                  {zoneEffect.scope === "permanent"  && "Always active"}
-                  {zoneEffect.scope === "per_battle" && "Per battle"}
-                  {zoneEffect.scope === "per_round"  && "Per round"}
-                  {zoneEffect.scope === "one_time"   && "One-time use"}
-                </span>
-              </div>
-
-              {/* Active benefit text */}
-              <div className={`px-3 py-2.5 rounded border space-y-1 ${
-                revealedTier === "major"
-                  ? "border-yellow-400/25 bg-yellow-400/5"
-                  : revealedTier === "minor"
-                  ? "border-brass/20 bg-brass/5"
-                  : "border-purple-400/20 bg-purple-500/5"
-              }`}>
-                <p className="text-parchment/40 text-xs font-mono uppercase tracking-wide">
-                  {revealedTier === "major" ? "Full Control Benefit" : revealedTier === "minor" ? "Partial Control Benefit" : "Global Effect (Consolation)"}
-                </p>
-                <p className="text-parchment/75 text-xs leading-relaxed">
-                  {revealedTier === "major"
-                    ? zoneEffect.major_benefit
-                    : revealedTier === "minor"
-                    ? zoneEffect.minor_benefit
-                    : zoneEffect.global_benefit}
-                </p>
-              </div>
-
-              {/* Major benefit teaser — shown only for minor-tier players */}
-              {revealedTier === "minor" && (
-                <div className="px-3 py-2 rounded border border-parchment/10 bg-parchment/3 space-y-1 opacity-50">
-                  <p className="text-parchment/35 text-xs font-mono uppercase tracking-wide">
-                    [★ Locked — Full Control]
-                  </p>
-                  <p className="text-parchment/40 text-xs leading-relaxed italic">
-                    {zoneEffect.major_benefit}
-                  </p>
-                  <p className="text-parchment/25 text-xs">
-                    Capture all sectors in this zone to unlock.
-                  </p>
-                </div>
-              )}
-
-              {/* Lore */}
-              <p className="text-parchment/25 text-xs italic leading-relaxed border-t border-parchment/8 pt-2">
-                {zoneEffect.lore.length > 160 ? zoneEffect.lore.slice(0, 160) + "…" : zoneEffect.lore}
-              </p>
-            </CollapsibleSection>
-          )}
-
-          {/* Zone Benefits */}
-          {zoneBenefitTags.length > 0 && (
-            <CollapsibleSection title="Zone Benefits" defaultOpen>
-              {zoneBenefitTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
-            </CollapsibleSection>
-          )}
-
-          {/* Relics */}
-          {relicTags.length > 0 && (
-            <CollapsibleSection title="Relics Discovered" defaultOpen>
-              {relicTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
-            </CollapsibleSection>
-          )}
-
-          {/* Resources / NIP income */}
-          {(nipTags.length > 0 || zoneNipTotal > 0) && (
-            <CollapsibleSection title="Resources" defaultOpen>
-              {nipTags.length > 0 && (
-                <div className="space-y-1.5">
-                  <p className="text-parchment/40 text-xs font-mono uppercase tracking-wide">
-                    Sector Income
-                  </p>
-                  {nipTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
-                </div>
-              )}
-              {zoneNipTotal > 0 && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded border border-brass/20 bg-brass/5">
-                  <span className="text-brass/70 text-xs font-mono">⊕</span>
-                  <span className="text-parchment/60 text-xs">Zone NIP income (all held sectors)</span>
-                  <span className="ml-auto text-brass font-mono font-semibold text-sm">
-                    +{zoneNipTotal} / round
-                  </span>
-                </div>
-              )}
-            </CollapsibleSection>
-          )}
-
-          {/* Other / miscellaneous intel tags */}
-          {otherTags.length > 0 && (
-            <CollapsibleSection title="Sector Intel">
-              {otherTags.map((tag, i) => <TagCard key={i} tag={tag} />)}
-            </CollapsibleSection>
-          )}
-
-          {/* No-data state */}
-          {hasNoFeatures && (
-            <div className="px-4 py-6 text-center text-parchment/25 text-xs font-mono italic border border-brass/10 rounded-lg">
-              No special features recorded for this sector.
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------------------
 
 function fmtKey(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// Stable colour per player index for territory display
+const PLAYER_COLOURS = [
+  "bg-brass/30 border-brass/60 text-brass",
+  "bg-blood/30 border-blood/60 text-blood/90",
+  "bg-blue-500/25 border-blue-400/50 text-blue-300",
+  "bg-green-600/25 border-green-500/50 text-green-300",
+  "bg-purple-500/25 border-purple-400/50 text-purple-300",
+  "bg-orange-500/25 border-orange-400/50 text-orange-300",
+  "bg-pink-500/25 border-pink-400/50 text-pink-300",
+  "bg-teal-500/25 border-teal-400/50 text-teal-300",
+];
 
-export default function MapPage() {
-  const supabase   = useMemo(() => supabaseBrowser(), []);
+// Post tag badge — visual indicator for post category
+function PostTagBadge({ tags }: { tags: string[] }) {
+  if (tags.includes("instability")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/40 bg-blood/10 text-blood/70 font-mono uppercase tracking-wider">
+        ⚡ Instability
+      </span>
+    );
+  }
+  if (tags.includes("battle_log")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/25 bg-parchment/5 text-parchment/50 font-mono uppercase tracking-wider">
+        ⚔ Battle
+      </span>
+    );
+  }
+  if (tags.includes("purchase")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/25 bg-brass/8 text-brass/60 font-mono uppercase tracking-wider">
+        ◈ Purchase
+      </span>
+    );
+  }
+  if (tags.includes("relic")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/40 bg-brass/15 text-brass/80 font-mono uppercase tracking-wider">
+        ✸ Relic
+      </span>
+    );
+  }
+  if (tags.includes("dispatch")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
+        📡 Dispatch
+      </span>
+    );
+  }
+  if (tags.includes("alliance")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-brass/30 bg-brass/10 text-brass/70 font-mono uppercase tracking-wider">
+        ⚜ Pact
+      </span>
+    );
+  }
+  if (tags.includes("chronicle")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
+        ✦ Chronicle
+      </span>
+    );
+  }
+  if (tags.includes("movement")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blue-400/30 bg-blue-500/8 text-blue-300/60 font-mono uppercase tracking-wider">
+        ➤ Movement
+      </span>
+    );
+  }
+  if (tags.includes("stage_advance")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-parchment/20 bg-parchment/5 text-parchment/40 font-mono uppercase tracking-wider">
+        ◉ Stage
+      </span>
+    );
+  }
+  if (tags.includes("zone_effect")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-purple-400/35 bg-purple-500/10 text-purple-300/70 font-mono uppercase tracking-wider">
+        ◈ Zone Effect
+      </span>
+    );
+  }
+  if (tags.includes("phase")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border border-blood/30 bg-blood/8 text-blood/60 font-mono uppercase tracking-wider">
+        ◉ Phase Shift
+      </span>
+    );
+  }
+  return null;
+}
+
+// -- Main Component ---------------------------------------------------------
+
+export default function Dashboard() {
+  const supabase = useMemo(() => supabaseBrowser(), []);
+
+  // campaignId is read directly from URL so nav links are always populated
   const [campaignId] = useState<string>(() => bootstrapCampaignId());
 
-  const [mapId,         setMapId]         = useState<string | null>(null);
-  const [role,          setRole]          = useState<string>("player");
-  const [uid,           setUid]           = useState<string>("");
-  const [authChecked,   setAuthChecked]   = useState(false);
-  const [zones,         setZones]         = useState<MapZone[]>([]);
-  const [mapZoneCount,  setMapZoneCount]  = useState<number | null>(null);
-  const [sectors,       setSectors]       = useState<Sector[]>([]);
-  const [myUnits,       setMyUnits]       = useState<Unit[]>([]);
-  const [myMoves,       setMyMoves]       = useState<Move[]>([]);
-  const [members,       setMembers]       = useState<Member[]>([]);
-  const [roundNumber,   setRoundNumber]   = useState<number>(1);
-  const [stage,         setStage]         = useState<string | null>(null);
-  const [myNip,         setMyNip]         = useState<number>(0);
-  const [hasDeepStrike, setHasDeepStrike] = useState(false);
-  const [hasRecon,      setHasRecon]      = useState(false);
-  const [fogEnabled,    setFogEnabled]    = useState<boolean>(true);
-  const [mapLayout,     setMapLayout]     = useState<string>("ring");
-  const [mapImageUrl,   setMapImageUrl]   = useState<string | null>(null);
-  const [pageError,     setPageError]     = useState<string | null>(null);
-  const [loading,       setLoading]       = useState(false);
-
-  // Zone effects state — loaded in load(), derived into zoneEffectSummaries
+  const [authChecked,     setAuthChecked]     = useState(false);
+  const [campaign,        setCampaign]        = useState<Campaign | null>(null);
+  const [playerState,     setPlayerState]     = useState<PlayerState | null>(null);
+  const [round,           setRound]           = useState<Round | null>(null);
+  const [role,            setRole]            = useState<string>("player");
+  // Bulletin now holds the 10 most recent posts (public + own private) for this player
+  const [bulletinPosts,   setBulletinPosts]   = useState<Post[]>([]);
+  const [bulletinFilter,  setBulletinFilter]  = useState<"all" | "public" | "private">("all");
+  const [spends,          setSpends]          = useState<Spend[]>([]);
+  const [usedTokens,      setUsedTokens]      = useState<Set<string>>(new Set());
+  const [mapUrl,          setMapUrl]          = useState<string | null>(null);
+  const [sectors,         setSectors]         = useState<Sector[]>([]);
+  const [members,         setMembers]         = useState<Member[]>([]);
+  const [underdogChoice,  setUnderdogChoice]  = useState<UnderdogChoice | null>(null);
+  const [cart,            setCart]            = useState<Record<string, boolean>>({});
+  const [secretLocation,  setSecretLocation]  = useState<string | null>(null);
+  const [myUnits,         setMyUnits]         = useState<{ id: string; unit_type: string; zone_key: string; sector_key: string }[]>([]);
+  // Zone effects state — campaign_zone_effects + per-player reveals
   const [campaignZoneEffects, setCampaignZoneEffects] = useState<CampaignZoneEffect[]>([]);
   const [myZoneReveals,       setMyZoneReveals]       = useState<ZoneEffectReveal[]>([]);
+  const [purchasing,      setPurchasing]      = useState(false);
+  const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
+  const [accepting,       setAccepting]       = useState(false);
+  const [uid,             setUid]             = useState<string>("");
 
-  // Movement order state
-  const [selectedUnit,  setSelectedUnit]  = useState<Unit | null>(null);
-  const [toZone,        setToZone]        = useState<string>("");
-  const [toSector,      setToSector]      = useState<string>("");
-  const [submitting,    setSubmitting]    = useState(false);
-  const [moveResult,    setMoveResult]    = useState<string | null>(null);
+  // -- Toast state ----------------------------------------------------------
+  const [toasts,    setToasts]    = useState<Toast[]>([]);
 
-  // Clicked sector state — always active regardless of phase; drives the info
-  // panel shown when a player clicks any sector on the SVG overlay.
-  const [clickedZone,   setClickedZone]   = useState<string>("");
-  const [clickedSector, setClickedSector] = useState<string>("");
+  const addToast = useCallback((type: ToastType, title: string, body?: string) => {
+    const id = ++_toastId;
+    setToasts((prev) => [...prev, { id, type, title, body }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
+  }, []);
 
-  // Map calibration popup — fullscreen overlay with map left / sliders right
-  const [mapPopupOpen,  setMapPopupOpen]  = useState(false);
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
-  // Deploy unit state
-  const [deployType,    setDeployType]    = useState<"scout" | "occupation">("scout");
-  const [deployZone,    setDeployZone]    = useState<string>("");
-  const [deploySector,  setDeploySector]  = useState<string>("");
-  const [deploying,     setDeploying]     = useState(false);
-  const [deployResult,  setDeployResult]  = useState<string | null>(null);
-
-  // ── Load ──────────────────────────────────────────────────────────────────
-
-  const load = useCallback(async () => {
-    setLoading(true); setPageError(null);
+  // -- Accept invites on load -----------------------------------------------
+  const acceptInvites = async (token: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { window.location.href = "/"; return; }
-      setUid(user.id); setAuthChecked(true);
-      if (!campaignId) return;
-
-      // Role
-      const { data: mem } = await supabase
-        .from("campaign_members").select("role")
-        .eq("campaign_id", campaignId).eq("user_id", user.id).maybeSingle();
-      setRole(mem?.role ?? "player");
-
-      // Campaign
-      const { data: c, error: ce } = await supabase
-        .from("campaigns").select("map_id,round_number,rules_overrides")
-        .eq("id", campaignId).single();
-      if (ce) throw new Error(ce.message);
-      setMapId((c as any)?.map_id ?? null);
-      const rn = (c as any)?.round_number ?? 1;
-      setRoundNumber(rn);
-      const ro = ((c as any)?.rules_overrides ?? {}) as Record<string, any>;
-      setFogEnabled((ro.fog as any)?.enabled !== false);
-      // Normalise layout spelling — DB may store older variants.
-      // "spoke" -> "spokes", "ship_line" -> "void_ship" (legacy alias)
-      const normaliseLayout = (l: string): string => {
-        if (l === "spoke")     return "spokes";
-        if (l === "ship_line") return "void_ship";
-        return l;
-      };
-      setMapLayout(normaliseLayout((ro.map_layout as string | undefined) ?? "ring"));
-
-      // Round stage
-      const { data: rnd } = await supabase
-        .from("rounds").select("stage")
-        .eq("campaign_id", campaignId).eq("round_number", rn).maybeSingle();
-      setStage(rnd?.stage ?? null);
-
-      // Map zones
-      if ((c as any)?.map_id) {
-        const { data: mapRow } = await supabase
-          .from("maps").select("map_json,zone_count,layout,bg_image_path")
-          .eq("id", (c as any).map_id).maybeSingle();
-        const zoneList: MapZone[] = (mapRow?.map_json as any)?.zones ?? [];
-        setZones(zoneList);
-        setMapZoneCount((mapRow?.zone_count as number | null) ?? null);
-        // Fall back to map table layout if rules_overrides doesn't set one
-        if (!ro.map_layout && (mapRow as any)?.layout) {
-          setMapLayout(normaliseLayout((mapRow as any).layout as string));
+      const resp = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/accept-invites`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
         }
-        // Fetch signed URL for AI map image
-        if ((mapRow as any)?.bg_image_path) {
-          const { data: signed } = await supabase.storage
-            .from("campaign-maps")
-            .createSignedUrl((mapRow as any).bg_image_path, 3600);
-          setMapImageUrl(signed?.signedUrl ?? null);
-        } else {
-          setMapImageUrl(null);
-        }
+      );
+      if (!resp.ok) console.warn("[dashboard] accept-invites returned", resp.status);
+    } catch (e) {
+      console.warn("[dashboard] accept-invites failed:", e);
+    }
+  };
+
+  // -- Load all dashboard data ----------------------------------------------
+  const load = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { window.location.href = "/"; return; }
+    setAuthChecked(true);
+    setUid(user.id);
+    const cid = campaignId;
+    if (!cid) return;
+
+    // 1. Campaign basics
+    const { data: c } = await supabase
+      .from("campaigns")
+      .select("id,name,phase,round_number,instability,map_id,campaign_narrative")
+      .eq("id", cid).single();
+    if (!c) return;
+    setCampaign(c as Campaign);
+
+    // 2. My role
+    const { data: mem } = await supabase
+      .from("campaign_members").select("role")
+      .eq("campaign_id", cid).eq("user_id", user.id).single();
+    setRole(mem?.role ?? "player");
+
+    // 3. My player state
+    const { data: ps } = await supabase
+      .from("player_state").select("nip,ncp,status,current_zone_key,current_sector_key")
+      .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
+    setPlayerState(ps ?? null);
+
+    // 3b. My secret location (real starting/current position, fog-of-war safe)
+    // current_zone_key in player_state is "unknown" until submit-move runs.
+    // secret_location is the authoritative source for the player's own position.
+    const { data: pss } = await supabase
+      .from("player_state_secret").select("secret_location")
+      .eq("campaign_id", cid).eq("user_id", user.id).maybeSingle();
+    setSecretLocation(pss?.secret_location ?? null);
+
+    // 4. Current round / stage
+    const { data: r } = await supabase
+      .from("rounds").select("stage")
+      .eq("campaign_id", cid).eq("round_number", c.round_number).maybeSingle();
+    setRound(r ?? null);
+
+    // 5. War bulletin — last 10 posts visible to this player:
+    //    • All public posts in the campaign
+    //    • Private posts where audience_user_id = this player
+    //    Merged, deduplicated, and sorted newest-first.
+    const [{ data: publicPosts }, { data: privatePosts }] = await Promise.all([
+      supabase.from("posts")
+        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
+        .eq("campaign_id", cid).eq("visibility", "public")
+        .order("created_at", { ascending: false }).limit(10),
+      supabase.from("posts")
+        .select("id,title,body,round_number,created_at,tags,visibility,audience_user_id")
+        .eq("campaign_id", cid).eq("visibility", "private").eq("audience_user_id", user.id)
+        .order("created_at", { ascending: false }).limit(10),
+    ]);
+    const allPosts = [...(publicPosts ?? []), ...(privatePosts ?? [])]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 10);
+    setBulletinPosts(allPosts as Post[]);
+
+    // 6. My spends this round
+    const { data: spendRows } = await supabase
+      .from("round_spends").select("spend_type,nip_spent")
+      .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
+    setSpends(spendRows ?? []);
+
+    // 6b. My moves this round — used to show which purchased tokens have been spent
+    const { data: moveRows } = await supabase
+      .from("moves").select("move_type")
+      .eq("campaign_id", cid).eq("round_number", c.round_number).eq("user_id", user.id);
+    setUsedTokens(new Set((moveRows ?? []).map((m: { move_type: string }) => m.move_type)));
+
+    // 7. Map signed URL (if campaign has a map)
+    if (c.map_id) {
+      const { data: mapRow } = await supabase
+        .from("maps").select("bg_image_path,image_path")
+        .eq("id", c.map_id).single();
+      const path = mapRow?.bg_image_path ?? mapRow?.image_path;
+      if (path) {
+        const { data: urlData } = await supabase.storage
+          .from("campaign-maps").createSignedUrl(path, 3600);
+        setMapUrl(urlData?.signedUrl ?? null);
       }
-
-      // Sectors (includes tags)
-      const { data: sd } = await supabase
-        .from("sectors")
-        .select("zone_key,sector_key,owner_user_id,revealed_public,fortified,tags")
-        .eq("campaign_id", campaignId);
-      setSectors(sd ?? []);
-
-      // Members
-      const { data: md } = await supabase
-        .from("campaign_members").select("user_id,commander_name,faction_name")
-        .eq("campaign_id", campaignId);
-      setMembers(md ?? []);
-
-      // My units
-      const { data: ud } = await supabase
-        .from("units").select("id,unit_type,zone_key,sector_key,status,round_deployed")
-        .eq("campaign_id", campaignId).eq("user_id", user.id).eq("status", "active");
-      const units = (ud ?? []) as Unit[];
-      setMyUnits(units);
-
-      // My moves
-      const { data: mvd } = await supabase
-        .from("moves")
-        .select("id,unit_id,from_zone_key,from_sector_key,to_zone_key,to_sector_key,move_type,submitted_at")
-        .eq("campaign_id", campaignId).eq("round_number", rn).eq("user_id", user.id);
-      setMyMoves((mvd ?? []) as Move[]);
-
-      // NIP + tokens
-      const { data: ps } = await supabase
-        .from("player_state").select("nip")
-        .eq("campaign_id", campaignId).eq("user_id", user.id).maybeSingle();
-      setMyNip(ps?.nip ?? 0);
-
-      const { data: sp } = await supabase
-        .from("round_spends").select("spend_type")
-        .eq("campaign_id", campaignId).eq("round_number", rn).eq("user_id", user.id);
-      const st = new Set((sp ?? []).map((s: any) => s.spend_type));
-      setHasDeepStrike(st.has("deep_strike"));
-      setHasRecon(st.has("recon"));
-
-      // Seed deploy zone
-      if (!deployZone && ud && ud.length > 0) {
-        const owned = (sd ?? []).filter((s: any) => s.owner_user_id === user.id);
-        if (owned.length > 0) setDeployZone((owned[0] as any).zone_key);
-      }
-
-      // Zone effects — all assignments for this campaign (fog-of-war enforced
-      // client-side using reveal rows below; we load all so the panel can show
-      // future reveals without a separate query).
-      const { data: czeRows } = await supabase
-        .from("campaign_zone_effects")
-        .select("id,zone_key,zone_name,minor_one_time_consumed,major_one_time_consumed,global_uses_remaining,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
-        .eq("campaign_id", campaignId);
-      setCampaignZoneEffects((czeRows ?? []) as unknown as CampaignZoneEffect[]);
-
-      // Zone effect reveals — RLS returns only this player's own rows.
-      // Used to enforce fog-of-war: only zones with a reveal are shown.
-      const { data: revealRows } = await supabase
-        .from("zone_effect_reveals")
-        .select("zone_key,zone_effect_id,tier")
-        .eq("campaign_id", campaignId)
-        .eq("user_id", user.id);
-      setMyZoneReveals((revealRows ?? []) as ZoneEffectReveal[]);
-
-    } catch (e: any) {
-      setPageError(e?.message ?? String(e));
-    } finally {
-      setLoading(false);
     }
-  }, [campaignId, supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { load(); }, [load]);
-
-  // ── Derived ───────────────────────────────────────────────────────────────
-
-  const effectiveZones = useMemo<MapZone[]>(() => {
-    if (zones.length > 0) return zones;
-    const seen = new Set<string>(), out: MapZone[] = [];
-    for (const s of sectors) {
-      if (!seen.has(s.zone_key)) { seen.add(s.zone_key); out.push({ key: s.zone_key, name: fmtKey(s.zone_key) }); }
-    }
-    for (const u of myUnits) {
-      if (!seen.has(u.zone_key)) { seen.add(u.zone_key); out.push({ key: u.zone_key, name: fmtKey(u.zone_key) }); }
-    }
-    return out;
-  }, [zones, sectors, myUnits]);
-
-  // Full zone list including fog stubs for undiscovered zones
-  const allZones = useMemo<MapZone[]>(() => {
-    if (!mapZoneCount || effectiveZones.length >= mapZoneCount) return effectiveZones;
-    const fogStubs = Array.from(
-      { length: mapZoneCount - effectiveZones.length },
-      (_, i) => ({ key: `_fog_${i}`, name: "Unknown" }),
+    // 8. Sectors visible to this player (RLS: own + revealed_public).
+    //    Client-side filter applied as defense-in-depth — ensures no unrevealed
+    //    enemy sectors are ever displayed even if RLS were misconfigured.
+    const { data: sectorRows } = await supabase
+      .from("sectors").select("zone_key,sector_key,owner_user_id,revealed_public")
+      .eq("campaign_id", cid);
+    const visibleSectors = ((sectorRows ?? []) as Sector[]).filter(
+      (s) => s.owner_user_id === user.id || s.revealed_public
     );
-    return [...effectiveZones, ...fogStubs];
-  }, [effectiveZones, mapZoneCount]);
+    setSectors(visibleSectors);
 
-  const adj = useMemo(() => buildAdjacency(allZones, mapLayout), [allZones, mapLayout]);
+    // 9. Members (for territory display and commander names)
+    const { data: memberRows } = await supabase
+      .from("campaign_members").select("user_id,commander_name,faction_name,role")
+      .eq("campaign_id", cid);
+    setMembers((memberRows ?? []) as Member[]);
 
-  // Ordered zone keys for CampaignMapOverlay (derived from effectiveZones which comes from map_json.zones)
-  const zoneKeys = useMemo(() => effectiveZones.map((z) => z.key), [effectiveZones]);
-  const zoneNames = useMemo(() => effectiveZones.map((z) => z.name), [effectiveZones]); 
+    // 10. Pending underdog choice for this player
+    const { data: udChoice } = await supabase
+      .from("underdog_choices").select("id,chosen_option,status")
+      .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "pending")
+      .maybeSingle();
+    setUnderdogChoice(udChoice ?? null);
 
-  // Combined sector ID for CampaignMapOverlay ("zoneKey:sectorKey" format)
-  // Movement target takes priority; falls back to last clicked sector for info panel.
-  const selectedSectorId = toZone && toSector
-    ? `${toZone}:${toSector}`
-    : clickedZone && clickedSector
-    ? `${clickedZone}:${clickedSector}`
-    : null;
+    // 11. My active units (for Current Troop Locations display)
+    const { data: unitRows } = await supabase
+      .from("units").select("id,unit_type,zone_key,sector_key")
+      .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "active");
+    setMyUnits(unitRows ?? []);
+
+    // 12. Campaign zone effects — full join so we have effect details for display.
+    // 12. Campaign zone effects — joined to zone_effects for display details.
+    //     Fog-of-war enforced client-side using myZoneReveals.
+    const { data: czeRows } = await supabase
+      .from("campaign_zone_effects")
+      .select("id,zone_key,zone_name,minor_charges_used,major_charges_used,global_charges_used,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
+      .eq("campaign_id", cid);
+    setCampaignZoneEffects((czeRows ?? []) as unknown as CampaignZoneEffect[]);
+
+    // 13. My zone effect reveals — RLS enforces that only this player's own
+    //     reveal rows are returned, so no client-side filtering required.
+    const { data: revealRows } = await supabase
+      .from("zone_effect_reveals")
+      .select("zone_key,zone_effect_id,tier,revealed_at")
+      .eq("campaign_id", cid)
+      .eq("user_id", user.id);
+    setMyZoneReveals((revealRows ?? []) as ZoneEffectReveal[]);
+  };
+
+  useEffect(() => {
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) await acceptInvites(session.access_token);
+      await load();
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -- Realtime: player_state NIP/NCP live updates --------------------------
+  // Subscribes once uid is available (set inside load()). Updates the
+  // playerState balance in-place so the Faction Resources card reflects
+  // changes from resolve-conflict and any other edge function immediately,
+  // without needing a page refresh.
+  useEffect(() => {
+    if (!uid || !campaignId) return;
+
+    const channel = supabase
+      .channel(`player_state_live_${uid}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "player_state",
+          filter: `user_id=eq.${uid}`,
+        },
+        (payload) => {
+          const updated = payload.new as any;
+          // Only apply if this update is for our campaign
+          if (updated.campaign_id !== campaignId) return;
+          setPlayerState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  nip:    updated.nip    ?? prev.nip,
+                  ncp:    updated.ncp    ?? prev.ncp,
+                  status: updated.status ?? prev.status,
+                }
+              : null
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [uid, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -- Realtime: zone_effect_reveals — reload when a new reveal is written -----
+  // The backend writes to zone_effect_reveals when sector control thresholds are
+  // met. Subscribing here means the Zone Effects section updates live without
+  // requiring a page refresh.
+  useEffect(() => {
+    if (!uid || !campaignId) return;
+
+    const revealChannel = supabase
+      .channel(`zone_effect_reveals_live_${uid}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "zone_effect_reveals",
+          filter: `user_id=eq.${uid}`,
+        },
+        () => {
+          // A new reveal has been written for this player — reload zone effect data
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(revealChannel);
+    };
+  }, [uid, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -- Purchase cart --------------------------------------------------------
+
+  const toggleCart = (itemId: string) => {
+    setCart((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
+  };
+
+  const cartItems     = SHOP_ITEMS.filter((i) => cart[i.id]);
+  const cartTotal     = cartItems.reduce((sum, i) => sum + i.nip, 0);
+  const alreadyBought = new Set(spends.map((s) => s.spend_type));
+
+  const purchaseCart = async () => {
+    if (!cartItems.length || !campaign || !playerState) return;
+    if (cartTotal > playerState.nip) {
+      addToast("error", "Insufficient NIP", "Not enough NIP to complete this purchase.");
+      return;
+    }
+    setPurchasing(true);
+    try {
+      // Insert spend records
+      const { error: spendErr } = await supabase.from("round_spends").insert(
+        cartItems.map((i) => ({
+          campaign_id:  campaign.id,
+          round_number: campaign.round_number,
+          user_id:      uid,
+          spend_type:   i.id,
+          nip_spent:    i.nip,
+        }))
+      );
+      if (spendErr) throw spendErr;
+      // Deduct NIP from player state (player_state_update_self RLS allows this)
+      const { error: nipErr } = await supabase
+        .from("player_state")
+        .update({ nip: playerState.nip - cartTotal })
+        .eq("campaign_id", campaign.id)
+        .eq("user_id", uid);
+      if (nipErr) throw nipErr;
+      // Post a private bulletin entry for this player only
+      const itemNames = cartItems.map((i) => i.label).join(", ");
+      await supabase.from("posts").insert({
+        campaign_id:      campaign.id,
+        round_number:     campaign.round_number,
+        visibility:       "private",
+        audience_user_id: uid,
+        title:            `Resources Acquired — Round ${campaign.round_number}`,
+        body:             `Spent ${cartTotal} NIP to activate: ${itemNames}.`,
+        tags:             ["purchase"],
+        created_by:       uid,
+      });
+      setCart({});
+      addToast("success", "Purchase complete", `${cartItems.length} ability${cartItems.length !== 1 ? "s" : ""} activated for this round.`);
+      await load();
+    } catch (e: any) {
+      addToast("error", "Purchase failed", e?.message ?? String(e));
+    } finally {
+      setPurchasing(false);
+    }
+  };
+
+  // -- Accept catchup choice ------------------------------------------------
+
+  const acceptCatchup = async () => {
+    if (!underdogChoice || !campaign) return;
+    setAccepting(true);
+    try {
+      // Record the choice
+      const { error: choiceErr } = await supabase
+        .from("underdog_choices")
+        .update({ chosen_option: catchupOption, chosen_at: new Date().toISOString(), status: "accepted" })
+        .eq("id", underdogChoice.id);
+      if (choiceErr) throw choiceErr;
+
+      // Apply the benefit directly where possible
+      if (catchupOption === "+2 NIP" && playerState) {
+        await supabase.from("player_state")
+          .update({ nip: playerState.nip + 2 })
+          .eq("campaign_id", campaign.id).eq("user_id", uid);
+      }
+      if (catchupOption === "Free Recon") {
+        // Insert a zero-cost recon spend for this round
+        await supabase.from("round_spends").insert({
+          campaign_id:  campaign.id,
+          round_number: campaign.round_number,
+          user_id:      uid,
+          spend_type:   "recon",
+          nip_spent:    0,
+          payload:      { source: "underdog_bonus" },
+        });
+      }
+      if (catchupOption === "Safe Passage (1 move cannot be intercepted)") {
+        await supabase.from("round_spends").insert({
+          campaign_id:  campaign.id,
+          round_number: campaign.round_number,
+          user_id:      uid,
+          spend_type:   "safe_passage",
+          nip_spent:    0,
+          payload:      { source: "underdog_bonus" },
+        });
+      }
+      // "+1 NCP next battle" is recorded in the choice and applied by lead manually.
+
+      setUnderdogChoice(null);
+      addToast("success", "Bonus accepted", `${catchupOption} has been applied to your faction.`);
+      await load();
+    } catch (e: any) {
+      addToast("error", "Failed to accept", e?.message ?? String(e));
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  // -- Derived state --------------------------------------------------------
+
+  const campaignStarted = round !== null;
+  const currentStage    = (round?.stage ?? null) as Stage | null;
+  const stageIndex      = currentStage ? STAGE_ORDER.indexOf(currentStage) : -1;
+  const inSpendPhase    = currentStage === "spend";
+
+  // Build member colour index for territory display
+  const memberColour = useMemo(() => {
+    const map = new Map<string, string>();
+    members.forEach((m, i) => map.set(m.user_id, PLAYER_COLOURS[i % PLAYER_COLOURS.length]));
+    return map;
+  }, [members]);
+
+  // Group visible sectors by zone_key, then by owner
+  const territoryByZone = useMemo(() => {
+    const zones = new Map<string, Map<string, number>>();
+    for (const s of sectors) {
+      if (!s.owner_user_id) continue;
+      if (!zones.has(s.zone_key)) zones.set(s.zone_key, new Map());
+      const owners = zones.get(s.zone_key)!;
+      owners.set(s.owner_user_id, (owners.get(s.owner_user_id) ?? 0) + 1);
+    }
+    return zones;
+  }, [sectors]);
+
+  const mySectorCount = sectors.filter((s) => s.owner_user_id === uid).length;
+
+  // Zone control: player with strictly more sectors than any other controls the zone.
+  // Rule: majority wins; if tied at the top (e.g. 2v2 in a 4-sector zone) = contested.
+  const zoneController = useMemo(() => {
+    const result = new Map<string, string | null>(); // zone_key -> uid or null (contested)
+    for (const [zoneKey, owners] of territoryByZone.entries()) {
+      const ranked = Array.from(owners.entries()).sort((a, b) => b[1] - a[1]);
+      if (ranked.length === 0) {
+        result.set(zoneKey, null);
+      } else if (ranked.length === 1 || ranked[0][1] > ranked[1][1]) {
+        result.set(zoneKey, ranked[0][0]); // strict winner
+      } else {
+        result.set(zoneKey, null); // tied — contested
+      }
+    }
+    return result;
+  }, [territoryByZone]);
+
+  const myZoneCount = Array.from(zoneController.values()).filter((uid_) => uid_ === uid).length;
 
   const memberById = useMemo(() => {
     const m = new Map<string, Member>();
@@ -1309,177 +781,59 @@ export default function MapPage() {
     return m;
   }, [members]);
 
-  const mySectors = useMemo(() => sectors.filter((s) => s.owner_user_id === uid), [sectors, uid]);
+  // -- Zone effects derived state --------------------------------------------
 
-  // ── Zone effect derived state ──────────────────────────────────────────────
-  // Build a map of zone_key → highest reveal tier for this player.
-  // RLS already filtered reveal rows to this user; we just index them.
-  const revealTierByZone = useMemo(() => {
-    const m = new Map<string, "minor" | "major" | "global">();
-    // Priority order: major > minor > global (only store the highest tier)
-    const priority = { major: 3, minor: 2, global: 1 } as const;
+  // Index reveals by zone_key, collecting all tiers revealed for this player.
+  // e.g. { "ash_wastes": Set { "minor", "global" } }
+  const myRevealsByZone = useMemo(() => {
+    const m = new Map<string, Set<"minor" | "major" | "global">>();
     for (const r of myZoneReveals) {
-      const current  = m.get(r.zone_key);
-      const incoming = r.tier as "minor" | "major" | "global";
-      if (!current || priority[incoming] > priority[current]) {
-        m.set(r.zone_key, incoming);
-      }
+      if (!m.has(r.zone_key)) m.set(r.zone_key, new Set());
+      m.get(r.zone_key)!.add(r.tier);
     }
     return m;
   }, [myZoneReveals]);
 
-  // Build the ZoneEffectSummary array passed to CampaignMapOverlay.
-  // Only zones with a reveal row are included — fog-of-war enforced here.
-  const zoneEffectSummaries = useMemo<ZoneEffectSummary[]>(() => {
-    return campaignZoneEffects
-      .filter((cze) => revealTierByZone.has(cze.zone_key))
-      .map((cze) => {
-        const tier    = revealTierByZone.get(cze.zone_key)!;
-        const effect  = cze.zone_effects;
-        const isOneTime = effect.scope === "one_time";
-        // Consumed = minor or major one-time flag set (whichever applies to this tier)
-        const isConsumed = isOneTime
-          ? (tier === "major" ? cze.major_one_time_consumed : cze.minor_one_time_consumed)
-          : false;
-        return {
-          zone_key:      cze.zone_key,
-          effect_name:   effect.name,
-          tier,
-          scope:         effect.scope,
-          is_consumed:   isConsumed,
-          major_benefit: effect.major_benefit,
-        } satisfies ZoneEffectSummary;
-      });
-  }, [campaignZoneEffects, revealTierByZone]);
-
-  // Per-zone effect lookup (for SectorInfoPopupPanel — full detail needed there)
-  const czeByZone = useMemo(() => {
-    const m = new Map<string, CampaignZoneEffect>();
-    for (const cze of campaignZoneEffects) m.set(cze.zone_key, cze);
-    return m;
+  // Derive consumed status from campaign_zone_effects integer charge columns.
+  // minor_charges_used > 0 or major_charges_used > 0 means the one-time
+  // benefit for that tier has been activated at least once.
+  // No separate events table needed — the DB tracks this directly.
+  const oneTimeUsedByZone = useMemo(() => {
+    const used = new Set<string>();
+    for (const cze of campaignZoneEffects) {
+      if (cze.minor_charges_used > 0 || cze.major_charges_used > 0) {
+        used.add(cze.zone_key);
+      }
+    }
+    return used;
   }, [campaignZoneEffects]);
 
-  const inMovementPhase = stage === "movement";
-  const inReconPhase    = stage === "recon";
-  const canMove         = inMovementPhase || (inReconPhase && hasRecon);
-  const inSpendPhase    = stage === "spend";
-  // Overlay calibration is locked once the campaign has started (round_number > 0)
-  const calibrationLocked = roundNumber > 0;
+  // Build the list of zone effects that are visible to this player —
+  // i.e. zones where this player has at least one reveal tier.
+  // Sorted by reveal time (most recent first) using zone_key as stable fallback.
+  const visibleZoneEffects = useMemo(() => {
+    return campaignZoneEffects
+      .filter((cze) => myRevealsByZone.has(cze.zone_key))
+      .sort((a, b) => {
+        // Sort by the most recent reveal time for each zone
+        const latestA = myZoneReveals
+          .filter((r) => r.zone_key === a.zone_key)
+          .reduce((max, r) => (r.revealed_at > max ? r.revealed_at : max), "");
+        const latestB = myZoneReveals
+          .filter((r) => r.zone_key === b.zone_key)
+          .reduce((max, r) => (r.revealed_at > max ? r.revealed_at : max), "");
+        return latestB.localeCompare(latestA);
+      });
+  }, [campaignZoneEffects, myRevealsByZone, myZoneReveals]);
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // -- Render ----------------------------------------------------------------
 
-  const getToken = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token ?? null;
-  };
+  const isLeadOrAdmin = role === "lead" || role === "admin";
 
-  const submitMove = async () => {
-    if (!selectedUnit || !toZone || !toSector) return;
-    setSubmitting(true); setMoveResult(null);
-    try {
-      const token = await getToken();
-      if (!token) throw new Error("Not authenticated");
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/submit-move`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ campaign_id: campaignId, unit_id: selectedUnit.id, to_zone_key: toZone, to_sector_key: toSector }),
-        },
-      );
-      const data = await resp.json();
-      if (!data.ok) throw new Error(data.error);
-      let msg = `Order confirmed: ${selectedUnit.unit_type} → ${fmtKey(toZone)} / ${toSector.toUpperCase()}`;
-      if (data.auto_transfer)   msg += " — territory captured";
-      if (data.conflict_id)     msg += " — ⚔️ CONFLICT initiated";
-      if (data.defensive_bonus) msg += " (defender bonus — zone unscouted)";
-      setMoveResult(msg);
-      setSelectedUnit(null); setToZone(""); setToSector("");
-      await load();
-    } catch (e: any) {
-      setMoveResult(`Error: ${e?.message ?? String(e)}`);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const deployUnit = async () => {
-    if (!deployZone || !deploySector) return;
-    setDeploying(true); setDeployResult(null);
-    try {
-      const token = await getToken();
-      if (!token) throw new Error("Not authenticated");
-      const resp = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/deploy-unit`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ campaign_id: campaignId, unit_type: deployType, zone_key: deployZone, sector_key: deploySector }),
-        },
-      );
-      const data = await resp.json();
-      if (!data.ok) throw new Error(data.error);
-      setDeployResult(`${fmtKey(deployType)} unit deployed. ${data.nip_remaining} NIP remaining.`);
-      await load();
-    } catch (e: any) {
-      setDeployResult(`Error: ${e?.message ?? String(e)}`);
-    } finally {
-      setDeploying(false);
-    }
-  };
-
-  // ── Render helpers ────────────────────────────────────────────────────────
-
-  const sectorAt   = (zk: string, sk: string) => sectors.find((s) => s.zone_key === zk && s.sector_key === sk);
-  const ownerLabel = (ownerId: string | null) => {
-    if (!ownerId) return null;
-    if (ownerId === uid) return { label: "You", mine: true };
-    const m = memberById.get(ownerId);
-    return { label: m?.commander_name ?? "Enemy", mine: false };
-  };
-  const unitMoveThisRound = (unitId: string) => myMoves.find((m) => m.unit_id === unitId) ?? null;
-
-  const targetThreat = useMemo(() => {
-    if (!toZone || !toSector) return null;
-    const s = sectorAt(toZone, toSector);
-    const o = ownerLabel(s?.owner_user_id ?? null);
-    if (!o || o.mine) return null;
-    return { owner: o, fortified: s?.fortified ?? false };
-  }, [toZone, toSector, sectors, uid, memberById]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Intel shown for currently-targeted sector (only when my unit occupies it)
-  const targetIntel = useMemo(() => {
-    if (!toZone || !toSector) return null;
-    if (!myUnits.some((u) => u.zone_key === toZone && u.sector_key === toSector)) return null;
-    return sectorAt(toZone, toSector) ?? null;
-  }, [toZone, toSector, myUnits, sectors]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Info shown when a player clicks any sector on the overlay (always active).
-  // Shows what the current player can see: own sectors show full intel,
-  // enemy revealed sectors show owner + fortification, fogged sectors show nothing.
-  const clickedSectorInfo = useMemo(() => {
-    if (!clickedZone || !clickedSector) return null;
-    const s = sectorAt(clickedZone, clickedSector);
-    const myUnit = myUnits.find((u) => u.zone_key === clickedZone && u.sector_key === clickedSector);
-    const isMine = s?.owner_user_id === uid;
-    const isRevealed = s?.revealed_public || isMine || !!myUnit;
-    const owner = ownerLabel(s?.owner_user_id ?? null);
-    return { s, myUnit, isMine, isRevealed, owner };
-  }, [clickedZone, clickedSector, sectors, myUnits, uid, memberById]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Render ────────────────────────────────────────────────────────────────
-
+  // Auth loading gate — show spinner until getUser() resolves
   if (!authChecked) {
     return (
-      <Frame title="Tactical Hololith" currentPage="map" hideNewCampaign>
+      <Frame title="Command Throne" currentPage="dashboard" hideNewCampaign>
         <div className="flex items-center justify-center py-24">
           <div className="w-8 h-8 border-4 border-brass/20 border-t-brass rounded-full animate-spin" />
         </div>
@@ -1487,557 +841,551 @@ export default function MapPage() {
     );
   }
 
+  // No campaign in session (e.g. opened in a new tab without a ?campaign= link)
   if (!campaignId) {
     return (
-      <Frame title="Tactical Hololith" currentPage="map" hideNewCampaign>
+      <Frame title="Command Throne" currentPage="dashboard" hideNewCampaign>
         <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
           <p className="text-parchment/50">No campaign selected.</p>
-          <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">Return to Home</a>
+          <a href="/" className="px-4 py-2 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-brass text-sm">
+            Return to Home
+          </a>
         </div>
       </Frame>
     );
   }
 
-  // True when the AI map image + SVG overlay should be used.
-  // Controls whether to render a 2-column grid (map right, action cards left) vs stacked layout.
-  // Covers all four implemented overlay layouts: ring, spokes, continent, void_ship.
-  const isOverlayLayout = !loading &&
-    (mapLayout === "ring" || mapLayout === "spokes" || mapLayout === "continent" || mapLayout === "void_ship") &&
-    !!mapId && !!mapImageUrl;
-
   return (
-    <Frame title="Tactical Hololith" campaignId={campaignId} role={role} currentPage="map">
-      <div className="space-y-4">
-
-        {pageError && (
-          <Card title="Error"><p className="text-blood text-sm">{pageError}</p></Card>
+    <Frame title="Command Throne" currentPage="dashboard" campaignId={campaignId} role={role}>
+      <div className="space-y-6">
+        {/* ── Single Column - Campaign Narrative────────────────────────────── */}
+        {campaign?.campaign_narrative && (
+          <Card title="Campaign Narrative">
+            <p className="text-brass text-xs uppercase tracking-widest mb-2">
+              Strategic Briefing
+            </p>
+            <p className="text-parchment/70 leading-relaxed whitespace-pre-wrap">
+              {campaign.campaign_narrative}
+            </p>
+          </Card>
         )}
-        {loading && (
-          <p className="text-parchment/50 animate-pulse text-sm px-1">Loading tactical data…</p>
-        )}
 
-        {/* ── Main layout: 2-col for overlay maps, stacked for others ── */}
-        {/* Left / full-width col always has action cards.             */}
-        {/* Right col has the SVG overlay map for ring/spokes layouts. */}
-        <div className={isOverlayLayout
-          ? "grid lg:grid-cols-[1fr_minmax(0,520px)] gap-6 items-start"
-          : "space-y-4"
-        }>
 
-          {/* ── LEFT / single col ──────────────────────────────────────── */}
-          <div className="space-y-4">
+        {/* ── Main 2-column layout ─────────────────────────────────────────── */}
+        <div className="grid md:grid-cols-2 gap-6 items-start">
 
-            {/* Non-overlay layouts: side-by-side Tactical Hololith + AI image */}
-            {!isOverlayLayout && !loading && (
-              <div className={`grid gap-4 items-start ${mapId ? "lg:grid-cols-2" : "grid-cols-1"}`}>
+          {/* ══ LEFT COLUMN: Your Status + War Bulletin ══ */}
+          <div className="space-y-6">
 
-                {/* LEFT: Tactical Hololith */}
-                <Card title={
-                    allZones.length > 0 && mapZoneCount
-                      ? `Tactical Hololith — ${effectiveZones.length} / ${mapZoneCount} Zones Surveyed`
-                      : "Tactical Hololith"
-                  }>
-                    {/* Colour legend */}
-                    <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-xs font-mono">
-                      <span className="flex items-center gap-1.5">
-                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#5a3d08", borderColor: "#c9a84c" }} />
-                        <span className="text-parchment/50">Unit present</span>
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#221800", borderColor: "#7a5f22" }} />
-                        <span className="text-parchment/50">Held (empty)</span>
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#3a0a0a", borderColor: "#7a1515" }} />
-                        <span className="text-parchment/50">Enemy</span>
-                      </span>
-                      {canMove && selectedUnit && (
-                        <span className="flex items-center gap-1.5">
-                          <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#1b2b1b", borderColor: "#3a6b3a" }} />
-                          <span className="text-green-400/70">Reachable — click to target</span>
-                        </span>
+          {/* Your Status */}
+          <Card title="Your Status">
+            {campaign && playerState ? (
+              <div className="space-y-3">
+                <div className="space-y-0.5">
+                  <p className="text-parchment font-semibold">{campaign.name}</p>
+                  <p className="text-parchment/50 text-xs">
+                    Phase {campaign.phase} &bull; Round {campaign.round_number} &bull; Instability {campaign.instability}/10
+                  </p>
+                  <p className="text-parchment/40 text-xs">Role: {role}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-brass/10 text-sm">
+                  <div>
+                    <p className="text-parchment/40 text-xs">Status</p>
+                    <p className="text-parchment/80 capitalize">{playerState.status}</p>
+                    <p className="text-parchment/40 text-xs">
+                      {mySectorCount} sector{mySectorCount !== 1 ? "s" : ""} held
+                      {myZoneCount > 0 && (
+                        <span className="ml-1.5 text-brass">· {myZoneCount} zone{myZoneCount !== 1 ? "s" : ""} controlled</span>
                       )}
-                      <span className="flex items-center gap-1.5">
-                        <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: "#0a0a10", borderColor: "#181826" }} />
-                        <span className="text-parchment/30">Fog / unknown</span>
-                      </span>
-                      <span className="ml-auto text-parchment/25 hidden sm:flex items-center gap-2">
-                        <span style={{ color: "#f5c842" }}>●</span>unit
-                        <span className="text-blood/50">⬡</span>fort
-                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Current Troop Locations */}
+                <div className="pt-2 border-t border-brass/10">
+                  <p className="text-xs text-parchment/40 mb-2">Current Troop Locations</p>
+                  {myUnits.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {myUnits.map((u) => (
+                        <div key={u.id} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded bg-void border border-brass/10">
+                          <span className={`text-xs px-1.5 py-0.5 rounded border font-mono uppercase shrink-0 ${
+                            u.unit_type === "scout"
+                              ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
+                              : "bg-brass/15 border-brass/40 text-brass"
+                          }`}>
+                            {u.unit_type === "scout" ? "◈ Scout" : "⬡ Occ."}
+                          </span>
+                          <span className="text-parchment/80 text-sm">{fmtKey(u.zone_key)}</span>
+                          <span className="text-parchment/40 text-xs font-mono">/ {u.sector_key.toUpperCase()}</span>
+                        </div>
+                      ))}
                     </div>
+                  ) : (
+                    (() => {
+                      // No active units yet — show starting location from secret_location or player_state
+                      const useSecret =
+                        (!playerState.current_zone_key || playerState.current_zone_key === "unknown") &&
+                        !!secretLocation;
+                      const [dispZone, dispSector] = useSecret
+                        ? secretLocation!.split(":")
+                        : [playerState.current_zone_key, playerState.current_sector_key];
+                      return (
+                        <div className="px-2.5 py-1.5 rounded bg-void border border-brass/10">
+                          <p className="text-parchment/40 text-xs mb-0.5">Starting Position</p>
+                          <span className="text-parchment/70 text-sm">{fmtKey(dispZone ?? "unknown")}</span>
+                          <span className="text-parchment/40 text-xs font-mono ml-2">/ {(dispSector ?? "—").toUpperCase()}</span>
+                        </div>
+                      );
+                    })()
+                  )}
+                </div>
 
-                    {/* SVG layout */}
-                    <TacticalMap
-                      zones={allZones}
-                      layout={mapLayout}
-                      adj={adj}
-                      sectors={sectors}
-                      uid={uid}
-                      memberById={memberById}
-                      myUnits={myUnits}
-                      selectedUnit={selectedUnit}
-                      toZone={toZone}
-                      toSector={toSector}
-                      fogEnabled={fogEnabled}
-                      canMove={canMove}
-                      hasDeepStrike={hasDeepStrike}
-                      onSelectSector={(zone, sector) => { setToZone(zone); setToSector(sector); }}
-                    />
+                {/* Stage strip */}
+                {campaignStarted && (
+                  <div className="pt-1 border-t border-brass/10">
+                    <p className="text-xs text-parchment/40 mb-1.5">Current Stage</p>
+                    <div className="flex gap-1 flex-wrap">
+                      {STAGE_ORDER.map((s, i) => (
+                        <span key={s} className={`px-2 py-0.5 rounded text-xs font-mono uppercase ${
+                          s === currentStage
+                            ? "bg-brass/30 border border-brass/60 text-brass font-bold"
+                            : i < stageIndex
+                              ? "bg-void border border-parchment/10 text-parchment/25 line-through"
+                              : "bg-void border border-parchment/10 text-parchment/35"
+                        }`}>{s}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-                    {/* Sector intel for the targeted sector (occupation-gated) */}
-                    {targetIntel && (
-                      <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
-                    )}
+                {!campaignStarted && (
+                  <p className="text-parchment/30 text-xs italic">Campaign not yet started.</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-parchment/40 text-sm italic">Loading status...</p>
+            )}
+          </Card>
 
-                    {/* Sector intel for all other occupied sectors */}
-                    {myUnits
-                      .filter((u) => !(u.zone_key === toZone && u.sector_key === toSector))
-                      .map((u) => {
-                        const s = sectorAt(u.zone_key, u.sector_key);
-                        if (!s) return null;
+          {/* War Bulletin — public + private posts for this player */}
+          <Card title="War Bulletin">
+            {/* Filter bar — matches lead/page.tsx bulletin design */}
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <span className="text-xs text-parchment/40 uppercase tracking-widest font-semibold">Show:</span>
+              {(["all", "public", "private"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setBulletinFilter(f)}
+                  className={`px-3 py-1 rounded text-xs font-semibold border transition-colors ${
+                    bulletinFilter === f
+                      ? "bg-brass/25 border-brass/50 text-brass"
+                      : "bg-void border-parchment/15 text-parchment/50 hover:border-brass/30"
+                  }`}
+                >
+                  {f === "all" ? "All" : f === "public" ? "🌐 Public" : "🔒 Private"}
+                </button>
+              ))}
+              <span className="ml-auto text-xs text-parchment/25 font-mono">
+                {bulletinPosts.filter((p) => bulletinFilter === "all" || p.visibility === bulletinFilter).length} post(s)
+              </span>
+            </div>
+
+            {(() => {
+              const filtered = bulletinPosts.filter(
+                (p) => bulletinFilter === "all" || p.visibility === bulletinFilter
+              );
+              if (filtered.length === 0) {
+                return (
+                  <p className="text-parchment/30 text-sm italic">
+                    {bulletinPosts.length === 0
+                      ? "No bulletins posted yet. The silence of the void is deafening."
+                      : "No posts match this filter."}
+                  </p>
+                );
+              }
+              return (
+                <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
+                  {filtered.map((post, idx) => {
+                    const tags: string[]    = Array.isArray(post.tags) ? post.tags : [];
+                    const isPrivate         = post.visibility === "private";
+                    return (
+                      <div
+                        key={post.id}
+                        className={`${idx > 0 ? "pt-4 border-t border-brass/10" : ""} ${isPrivate ? "rounded px-2 py-1 bg-void/60 border border-parchment/8" : ""}`}
+                      >
+                        {/* Title row */}
+                        <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
+                          <p className="text-parchment font-semibold leading-snug flex-1">{post.title}</p>
+                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                            {isPrivate && (
+                              <span className="text-xs px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/35 font-mono">
+                                🔒 Private
+                              </span>
+                            )}
+                            <PostTagBadge tags={tags} />
+                            <span className="text-xs text-parchment/30 font-mono">R{post.round_number}</span>
+                          </div>
+                        </div>
+                        {/* Body */}
+                        <p className="text-parchment/65 text-sm leading-relaxed whitespace-pre-wrap">
+                          {idx === 0
+                            ? (post.body.length > 500 ? post.body.slice(0, 500) + "…" : post.body)
+                            : (post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body)
+                          }
+                        </p>
+                        <p className="text-parchment/25 text-xs mt-1">
+                          {(() => {
+                            const d = new Date(post.created_at);
+                            const p = (n: number) => String(n).padStart(2, "0");
+                            return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+                          })()}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </Card>
+
+
+
+          </div>
+          {/* end LEFT COLUMN */}
+
+          {/* ══ RIGHT COLUMN: Faction Resources + Theatre Map ══ */}
+          <div className="space-y-6">
+
+          {/* Faction Resources */}
+          <Card title="Faction Resources">
+            {playerState ? (
+              <div className="space-y-4">
+
+                {/* NIP / NCP balances — updated live via realtime subscription */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="px-3 py-2.5 rounded bg-brass/10 border border-brass/25 text-center">
+                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NIP</p>
+                    <p className="text-2xl font-bold text-brass">{playerState.nip}</p>
+                    <p className="text-xs text-parchment/30">Influence Points</p>
+                  </div>
+                  <div className="px-3 py-2.5 rounded bg-parchment/5 border border-parchment/15 text-center">
+                    <p className="text-xs text-parchment/40 uppercase tracking-widest">NCP</p>
+                    <p className="text-2xl font-bold text-parchment/80">{playerState.ncp}</p>
+                    <p className="text-xs text-parchment/30">Campaign Points</p>
+                  </div>
+                </div>
+
+                {/* Purchased abilities this round -- always visible after spend */}
+                {spends.length > 0 && (
+                  <div>
+                    <p className="text-xs text-parchment/40 mb-1.5 font-semibold uppercase tracking-widest">
+                      Round {campaign?.round_number} Purchases
+                    </p>
+                    <div className="space-y-1">
+                      {spends.map((s, i) => {
+                        const item = SHOP_ITEMS.find((x) => x.id === s.spend_type);
+                        // Tokens that are consumed by a move get a used/available status.
+                        // safe_passage has no move_type counterpart so no status shown.
+                        const isTrackable = s.spend_type === "deep_strike" || s.spend_type === "recon";
+                        const wasUsed     = isTrackable && usedTokens.has(s.spend_type);
                         return (
-                          <SectorIntelPanel
-                            key={u.id}
-                            zoneKey={u.zone_key}
-                            sectorKey={u.sector_key}
-                            sector={s}
-                          />
+                          <div key={i} className="flex items-center justify-between px-2.5 py-1.5 rounded bg-brass/5 border border-brass/15 text-sm">
+                            <span className="text-parchment/75">{item?.label ?? fmtKey(s.spend_type)}</span>
+                            <div className="flex items-center gap-2">
+                              {isTrackable && (
+                                wasUsed
+                                  ? <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/30">Used</span>
+                                  : <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-brass/35 bg-brass/10 text-brass/70">Available</span>
+                              )}
+                              {s.nip_spent > 0
+                                ? <span className="text-parchment/35 text-xs font-mono">{s.nip_spent} NIP</span>
+                                : <span className="text-brass/60 text-xs font-mono">Free</span>
+                              }
+                            </div>
+                          </div>
                         );
                       })}
-                </Card>
+                    </div>
+                  </div>
+                )}
 
-                {/* RIGHT: AI Theatre Map (generated image) */}
-                {mapId && (
-                  <div className="min-w-0">
-                    <MapImageDisplay mapId={mapId} campaignId={campaignId} isLead={role === "lead" || role === "admin"} />
+                {/* ── Zone Effects ── revealed effects for this player ──── */}
+                {/* Fog-of-war enforced: only effects with a matching reveal  */}
+                {/* row in zone_effect_reveals are shown here.                */}
+                {visibleZoneEffects.length > 0 && (
+                  <div className="border-t border-brass/10 pt-3 space-y-2">
+                    <p className="text-xs text-parchment/40 font-semibold uppercase tracking-widest">
+                      Zone Effects
+                    </p>
+                    <div className="space-y-2">
+                      {visibleZoneEffects.map((cze) => {
+                        const effect        = cze.zone_effects;
+                        const tiers         = myRevealsByZone.get(cze.zone_key) ?? new Set();
+                        const hasMajor      = tiers.has("major");
+                        const hasMinor      = tiers.has("minor");
+                        const hasGlobal     = tiers.has("global");
+                        const isOneTime     = effect.scope === "one_time";
+                        const wasUsed       = isOneTime && oneTimeUsedByZone.has(cze.zone_key);
+
+                        // Determine the active tier label and benefit text for this player
+                        const activeTier = hasMajor ? "major" : hasMinor ? "minor" : "global";
+                        const benefitText =
+                          hasMajor  ? effect.major_benefit  :
+                          hasMinor  ? effect.minor_benefit  :
+                          effect.global_benefit;
+
+                        // Tier badge colours
+                        const tierStyles: Record<string, string> = {
+                          major:  "border-brass/60 bg-brass/20 text-brass",
+                          minor:  "border-brass/35 bg-brass/10 text-brass/70",
+                          global: "border-purple-400/40 bg-purple-500/15 text-purple-300/80",
+                        };
+
+                        // Scope label for display
+                        const scopeLabel: Record<string, string> = {
+                          permanent: "Always active",
+                          per_battle: "Per battle",
+                          per_round: "Per round",
+                          one_time: "One-time use",
+                        };
+
+                        return (
+                          <div
+                            key={cze.zone_key}
+                            className={`rounded border px-3 py-2.5 space-y-1.5 ${
+                              hasMajor
+                                ? "border-brass/35 bg-brass/5"
+                                : hasMinor
+                                  ? "border-brass/20 bg-void"
+                                  : "border-purple-400/20 bg-purple-500/5"
+                            }`}
+                          >
+                            {/* Header row: zone name + tier badge */}
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="min-w-0">
+                                <p className="text-parchment/85 text-sm font-semibold truncate">
+                                  {cze.zone_name}
+                                </p>
+                                <p className="text-parchment/40 text-xs font-mono">{effect.name}</p>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                <span className={`text-xs px-1.5 py-0.5 rounded border font-mono uppercase ${tierStyles[activeTier]}`}>
+                                  {activeTier === "major"  && "★ Major"}
+                                  {activeTier === "minor"  && "◆ Minor"}
+                                  {activeTier === "global" && "◈ Global"}
+                                </span>
+                                {isOneTime && (
+                                  wasUsed
+                                    ? <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-parchment/15 bg-parchment/5 text-parchment/30">Used</span>
+                                    : <span className="text-xs font-mono px-1.5 py-0.5 rounded border border-brass/35 bg-brass/10 text-brass/70">Available</span>
+                                )}
+                                <span className="text-xs text-parchment/25 font-mono">
+                                  {scopeLabel[effect.scope] ?? effect.scope}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Active benefit text */}
+                            <p className="text-parchment/65 text-xs leading-relaxed">
+                              {benefitText}
+                            </p>
+
+                            {/* Lore — collapsed, small */}
+                            <p className="text-parchment/25 text-xs italic leading-relaxed border-t border-parchment/8 pt-1.5">
+                              {effect.lore.length > 120 ? effect.lore.slice(0, 120) + "…" : effect.lore}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Shopping cart -- spend phase only */}
+                {inSpendPhase && (
+                  <div className="border-t border-brass/10 pt-3 space-y-3">
+                    <p className="text-xs text-parchment/40 font-semibold uppercase tracking-widest">Spend NIP</p>
+                    <div className="space-y-2">
+                      {SHOP_ITEMS.filter((i) => !alreadyBought.has(i.id)).map((item) => {
+                        const inCart    = !!cart[item.id];
+                        const canAfford = cart[item.id]
+                          ? true
+                          : playerState.nip - cartTotal >= item.nip;
+                        return (
+                          <div key={item.id}
+                            className={`flex items-start gap-3 px-3 py-2 rounded border transition-colors ${
+                              inCart
+                                ? "bg-brass/15 border-brass/50"
+                                : "bg-void border-brass/15 hover:border-brass/30"
+                            }`}>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-baseline gap-2">
+                                <p className="text-parchment/85 text-sm font-semibold">{item.label}</p>
+                                <p className="text-brass/80 text-xs font-mono">{item.nip} NIP</p>
+                              </div>
+                              <p className="text-parchment/40 text-xs mt-0.5">{item.desc}</p>
+                            </div>
+                            <button
+                              onClick={() => toggleCart(item.id)}
+                              disabled={!canAfford && !inCart}
+                              className={`shrink-0 px-3 py-1 rounded text-xs font-semibold border transition-colors disabled:opacity-30 ${
+                                inCart
+                                  ? "bg-brass/30 border-brass/60 text-brass"
+                                  : "bg-void border-parchment/20 hover:border-brass/40 text-parchment/60 hover:text-parchment/90"
+                              }`}>
+                              {inCart ? "Remove" : "Add"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Cart total + checkout */}
+                    {cartItems.length > 0 && (
+                      <div className="pt-2 border-t border-brass/15 space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-parchment/50">
+                            {cartItems.length} item{cartItems.length !== 1 ? "s" : ""} selected
+                          </span>
+                          <span className="text-brass font-bold font-mono">{cartTotal} NIP</span>
+                        </div>
+                        {cartTotal > playerState.nip && (
+                          <p className="text-blood/70 text-xs">Insufficient NIP ({playerState.nip} available).</p>
+                        )}
+                        <button
+                          onClick={purchaseCart}
+                          disabled={purchasing || cartTotal > playerState.nip}
+                          className="w-full px-4 py-2 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
+                          {purchasing ? "Purchasing..." : `Spend ${cartTotal} NIP`}
+                        </button>
+                      </div>
+                    )}
+
+                    {SHOP_ITEMS.every((i) => alreadyBought.has(i.id)) && (
+                      <p className="text-parchment/30 text-xs italic">All available abilities purchased this round.</p>
+                    )}
+                  </div>
+                )}
+
+                {!inSpendPhase && spends.length === 0 && (
+                  <p className="text-parchment/25 text-xs italic">No purchases this round.</p>
+                )}
+
+              </div>
+            ) : (
+              <p className="text-parchment/40 text-sm italic">Loading resources...</p>
+            )}
+          </Card>
+
+          <Card title={campaign ? `${campaign.name} — Theatre Map` : "Campaign Map"}>
+            {mapUrl ? (
+              <div className="space-y-3">
+                <a href="/map" onClick={(e) => { e.preventDefault(); import("@/lib/campaignSession").then(m => { m.setCampaignSession(campaignId); window.location.href = "/map"; }); }} title="Open Tactical Hololith" className="cursor-pointer">
+                  <img
+                    src={mapUrl}
+                    alt="Campaign theatre map"
+                    className="w-full rounded border border-brass/20 object-cover hover:border-brass/50 transition-colors cursor-pointer"
+                    style={{ maxHeight: "260px" }}
+                  />
+                </a>
+
+                {/* Territory legend */}
+                {territoryByZone.size > 0 && (
+                  <div>
+                    <p className="text-xs text-parchment/35 mb-2 uppercase tracking-widest">Visible Territory</p>
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {Array.from(territoryByZone.entries()).map(([zoneKey, owners]) => {
+                        const controller = zoneController.get(zoneKey) ?? null;
+                        const contested  = Array.from(owners.values()).filter(c => c > 0).length > 1
+                          && controller === null;
+                        return (
+                          <div key={zoneKey} className="flex items-start gap-2">
+                            <div className="w-32 shrink-0 pt-0.5">
+                              <span className="text-parchment/40 text-xs font-mono">{fmtKey(zoneKey)}</span>
+                              {controller !== null && (
+                                <span className={`block text-xs font-mono ${controller === uid ? "text-brass" : "text-parchment/30"}`}>
+                                  {controller === uid ? "⚑ Controlled" : "⚑ Enemy held"}
+                                </span>
+                              )}
+                              {contested && (
+                                <span className="block text-xs font-mono text-orange-400/70">⚔ Contested</span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {Array.from(owners.entries()).map(([ownerId, count]) => {
+                                const m      = memberById.get(ownerId);
+                                const colour = memberColour.get(ownerId) ?? PLAYER_COLOURS[0];
+                                return (
+                                  <span key={ownerId}
+                                    className={`px-1.5 py-0.5 rounded border text-xs font-mono ${colour}`}>
+                                    {m?.commander_name ?? "Unknown"} ×{count}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 
               </div>
+            ) : campaign?.map_id ? (
+              <p className="text-parchment/40 text-sm italic">Loading map...</p>
+            ) : (
+              <p className="text-parchment/30 text-sm italic">
+                No map generated yet. The theatre of war awaits its cartographer.
+              </p>
             )}
+          </Card>
 
-            {/* ── My Units ── */}
-            {myUnits.length > 0 && (
-              <Card title="My Units">
-                <div className="space-y-2">
-                  {myUnits.map((u) => {
-                    const pending = unitMoveThisRound(u.id);
-                    return (
-                      <div key={u.id}
-                        className={`flex items-center gap-3 px-3 py-2.5 rounded border transition-colors ${
-                          selectedUnit?.id === u.id
-                            ? "bg-brass/15 border-brass/50"
-                            : "bg-void border-parchment/15 hover:border-brass/30"
-                        }`}>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase ${
-                              u.unit_type === "scout"
-                                ? "bg-blue-500/15 border-blue-400/40 text-blue-300"
-                                : "bg-brass/15 border-brass/40 text-brass"
-                            }`}>{u.unit_type}</span>
-                            <span className="text-parchment/70 text-sm">{fmtKey(u.zone_key)} / {u.sector_key.toUpperCase()}</span>
-                            <span className="text-parchment/30 text-xs font-mono">R{u.round_deployed}</span>
-                          </div>
-                          {pending && (
-                            <p className="text-xs text-brass/70 mt-0.5 font-mono">
-                              → {fmtKey(pending.to_zone_key)} / {pending.to_sector_key.toUpperCase()} ({pending.move_type})
-                            </p>
-                          )}
-                        </div>
-                        {canMove && !pending && (
-                          <button
-                            onClick={() => { setSelectedUnit(u); setToZone(u.zone_key); setToSector(u.sector_key); setMoveResult(null); }}
-                            className="shrink-0 px-3 py-1 rounded text-xs border border-brass/40 hover:bg-brass/20 text-parchment/60 hover:text-parchment/90 transition-colors">
-                            Select
-                          </button>
-                        )}
-                        {canMove && pending && (
-                          <button
-                            onClick={() => { setSelectedUnit(u); setToZone(pending.to_zone_key); setToSector(pending.to_sector_key); setMoveResult(null); }}
-                            className="shrink-0 px-3 py-1 rounded text-xs border border-parchment/20 hover:bg-parchment/10 text-parchment/40 transition-colors">
-                            Edit
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+          </div>
+          {/* end RIGHT COLUMN */}
 
-                {/* Token row */}
-                <div className="mt-3 pt-3 border-t border-parchment/10 flex gap-3 flex-wrap">
-                  <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasDeepStrike ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/10 text-parchment/25"}`}>
-                    {hasDeepStrike ? "✓ Deep Strike" : "No Deep Strike"}
-                  </span>
-                  <span className={`text-xs px-2 py-0.5 rounded border font-mono ${hasRecon ? "bg-blue-500/15 border-blue-400/40 text-blue-300" : "bg-void border-parchment/10 text-parchment/25"}`}>
-                    {hasRecon ? "✓ Recon Token" : "No Recon Token"}
-                  </span>
-                  {!fogEnabled && (
-                    <span className="text-xs px-2 py-0.5 rounded border font-mono bg-parchment/10 border-parchment/30 text-parchment/50">Fog Off</span>
-                  )}
-                  <span className="text-xs px-2 py-0.5 rounded border border-parchment/10 text-parchment/35 font-mono ml-auto">{myNip} NIP</span>
-                </div>
-              </Card>
-            )}
+        </div>
+        {/* end main 2-column layout */}
 
-            {/* ── Movement Order ── */}
-            {selectedUnit && canMove && (
-              <Card title={`Movement Order — ${fmtKey(selectedUnit.unit_type)} Unit`}>
-                <div className="space-y-4">
-                  <div className="text-sm text-parchment/60">
-                    <span>Moving from: <span className="text-parchment/85">{fmtKey(selectedUnit.zone_key)} / {selectedUnit.sector_key.toUpperCase()}</span></span>
-                    {toZone && toSector
-                      ? <span className="ml-3 text-brass/80">→ <span className="font-semibold">{fmtKey(toZone)} / {toSector.toUpperCase()}</span></span>
-                      : <span className="block mt-1 text-parchment/35 text-xs">Click a highlighted sector on the map to set your destination.</span>
-                    }
-                    {hasDeepStrike && <span className="ml-2 text-brass text-xs font-mono">Deep Strike — any zone valid</span>}
-                  </div>
-
-                  {targetThreat && (
-                    <div className="px-3 py-2 rounded border border-blood/30 bg-blood/10 text-sm text-blood/80">
-                      ⚠️ <span className="font-semibold">{targetThreat.owner.label}</span> controls this sector.
-                      {targetThreat.fortified && " Fortified."}
-                      {selectedUnit.unit_type === "occupation"
-                        ? " Triggers a conflict if defended, or captures if undefended."
-                        : " Scouting gathers intel and may trigger a conflict."}
-                    </div>
-                  )}
-
-                  {moveResult && (
-                    <p className={`text-sm px-3 py-2 rounded border ${
-                      moveResult.startsWith("Error") ? "border-blood/30 bg-blood/10 text-blood/80" : "border-brass/30 bg-brass/10 text-brass/80"
-                    }`}>{moveResult}</p>
-                  )}
-
-                  <div className="flex gap-3">
-                    <button
-                      onClick={submitMove}
-                      disabled={submitting || !toZone || !toSector}
-                      className="flex-1 px-4 py-2.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
-                      {submitting ? "Submitting…" : "Confirm Order"}
-                    </button>
-                    <button
-                      onClick={() => { setSelectedUnit(null); setToZone(""); setToSector(""); setMoveResult(null); }}
-                      className="px-4 py-2.5 rounded bg-void border border-parchment/20 hover:border-parchment/40 text-parchment/50 text-sm transition-colors">
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {/* ── No movement phase message ── */}
-            {myUnits.length > 0 && !canMove && stage && (
-              <Card title="Movement Orders">
-                <p className="text-parchment/40 text-sm italic">
-                  {stage === "spend"
-                    ? "Movement orders open in the movement phase. Use this phase to purchase Deep Strike or Recon tokens."
-                    : stage === "recon" && !hasRecon
-                    ? "You need a Recon token to move during this phase. Purchase one during the next spend phase."
-                    : `Movement is not available during the ${stage} phase.`}
-                </p>
-              </Card>
-            )}
-
-            {/* ── Deploy New Unit ── */}
-            {inSpendPhase && mySectors.length > 0 && (
-              <Card title="Deploy New Unit">
-                <div className="space-y-4">
-                  <p className="text-parchment/60 text-sm">
-                    Deploy a new unit to one of your held sectors. Deducted from your NIP balance ({myNip} available).
-                  </p>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Unit Type</label>
-                      <div className="flex gap-2">
-                        {(["scout", "occupation"] as const).map((ut) => (
-                          <button key={ut} onClick={() => setDeployType(ut)}
-                            className={`flex-1 px-3 py-2 rounded border text-sm font-semibold transition-colors ${
-                              deployType === ut ? "bg-brass/20 border-brass/50 text-brass" : "bg-void border-parchment/20 text-parchment/50 hover:border-brass/30"
-                            }`}>
-                            {fmtKey(ut)}
-                            <span className="block text-xs font-mono mt-0.5 opacity-70">{UNIT_NIP_COST[ut]} NIP</span>
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-xs text-parchment/35 mt-1.5">
-                        {deployType === "scout"
-                          ? "Explores territory, gains intel. Can move in recon phase."
-                          : "Holds territory. Required to defend sectors you own."}
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <div>
-                        <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Zone</label>
-                        <select className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
-                          value={deployZone} onChange={(e) => { setDeployZone(e.target.value); setDeploySector(""); }}>
-                          <option value="">-- select --</option>
-                          {Array.from(new Set(mySectors.map((s) => s.zone_key))).map((zk) => (
-                            <option key={zk} value={zk}>{fmtKey(zk)}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs text-parchment/40 uppercase tracking-widest block mb-1.5">Sector</label>
-                        <select className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
-                          value={deploySector} disabled={!deployZone} onChange={(e) => setDeploySector(e.target.value)}>
-                          <option value="">-- select --</option>
-                          {mySectors.filter((s) => s.zone_key === deployZone).map((s) => (
-                            <option key={s.sector_key} value={s.sector_key}>{s.sector_key.toUpperCase()}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                  {deployResult && (
-                    <p className={`text-sm px-3 py-2 rounded border ${
-                      deployResult.startsWith("Error") ? "border-blood/30 bg-blood/10 text-blood/80" : "border-brass/30 bg-brass/10 text-brass/80"
-                    }`}>{deployResult}</p>
-                  )}
-                  <button onClick={deployUnit}
-                    disabled={deploying || !deployZone || !deploySector || (myNip < UNIT_NIP_COST[deployType]!)}
-                    className="w-full px-4 py-2.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/35 disabled:opacity-40 text-parchment/80 font-semibold text-sm transition-colors">
-                    {deploying ? "Deploying…" : `Deploy ${fmtKey(deployType)} — ${UNIT_NIP_COST[deployType]} NIP`}
-                  </button>
-                  {myNip < UNIT_NIP_COST[deployType]! && (
-                    <p className="text-blood/60 text-xs">Insufficient NIP ({myNip} available, need {UNIT_NIP_COST[deployType]}).</p>
-                  )}
-                </div>
-              </Card>
-            )}
-
-            {/* ── Pending Orders ── */}
-            {myMoves.length > 0 && (
-              <Card title={`Round ${roundNumber} Orders`}>
-                <div className="space-y-1.5">
-                  {myMoves.map((m) => {
-                    const unit = myUnits.find((u) => u.id === m.unit_id);
-                    return (
-                      <div key={m.id} className="flex items-center gap-3 text-sm px-2 py-1.5 rounded bg-parchment/5 border border-parchment/10">
-                        {unit && (
-                          <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${
-                            unit.unit_type === "scout" ? "bg-blue-500/15 border-blue-400/30 text-blue-300" : "bg-brass/15 border-brass/30 text-brass"
-                          }`}>{unit.unit_type}</span>
-                        )}
-                        <span className="text-parchment/50 text-xs font-mono">{fmtKey(m.from_zone_key)}/{m.from_sector_key.toUpperCase()}</span>
-                        <span className="text-parchment/25">→</span>
-                        <span className="text-parchment/75 text-xs font-mono">{fmtKey(m.to_zone_key)}/{m.to_sector_key.toUpperCase()}</span>
-                        <span className={`ml-auto text-xs font-mono px-1.5 py-0.5 rounded border ${
-                          m.move_type === "deep_strike" ? "border-brass/40 text-brass/70"
-                          : m.move_type === "recon"     ? "border-blue-400/30 text-blue-300/70"
-                          :                               "border-parchment/15 text-parchment/30"
-                        }`}>{m.move_type}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-            )}
-
-          </div>{/* end LEFT col */}
-
-          {/* ── RIGHT col: overlay map thumbnail + expand to popup ──── */}
-          {isOverlayLayout && (
-            <div className="space-y-3 lg:sticky lg:top-4">
-
-              {/* Thumbnail inside a Card — clicking opens the calibration popup */}
-              <Card title="Theatre Map">
-                <div className="relative cursor-pointer rounded-lg overflow-hidden -mx-1"
-                  onClick={() => setMapPopupOpen(true)}
-                  title={role === "lead" && !calibrationLocked ? "Expand / Calibrate" : "Expand map"}
+        {/* ── Row 3: Catchup Offer (conditional — underdog only) ───────── */}
+        {underdogChoice && (
+          <Card title="Catch-up Offer — Underdog Bonus">
+            <div className="space-y-4">
+              <p className="text-parchment/70 text-sm leading-relaxed">
+                The campaign lead has identified you as the current underdog. Choose one benefit
+                to apply before the next round begins.
+              </p>
+              <div className="space-y-2">
+                <p className="text-xs text-parchment/40 uppercase tracking-widest">Select your benefit</p>
+                <select
+                  className="w-full px-3 py-2 rounded bg-void border border-brass/30 focus:outline-none focus:border-brass/60 text-sm text-parchment/85"
+                  value={catchupOption}
+                  onChange={(e) => setCatchupOption(e.target.value)}
                 >
-                  <CampaignMapOverlay
-                    mapUrl={mapImageUrl!}
-                    layout={mapLayout as any}
-                    zoneCount={mapZoneCount ?? effectiveZones.length}
-                    zoneKeys={zoneKeys}
-                    zoneNames={zoneNames}
-                    sectors={sectors as any}
-                    units={roundNumber > 0 ? (myUnits as any) : []}
-                    currentUserId={uid || null}
-                    selectedSectorId={selectedSectorId}
-                    onSectorClick={(zone, sector) => {
-                      setClickedZone(zone);
-                      setClickedSector(sector);
-                      if (canMove && selectedUnit) {
-                        setToZone(zone);
-                        setToSector(sector);
-                      }
-                    }}
-                    showZoneLabels
-                    isLead={role === "lead"}
-                    campaignId={campaignId}
-                    calibrationLocked={true}
-                    zoneEffectSummaries={zoneEffectSummaries}
-                  />
-                </div>
-              </Card>
-
-              {/* Sector intel panels — shown below thumbnail */}
-              {targetIntel && (
-                <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
-              )}
-              {myUnits
-                .filter((u) => !(u.zone_key === toZone && u.sector_key === toSector))
-                .map((u) => {
-                  const s = sectorAt(u.zone_key, u.sector_key);
-                  if (!s) return null;
-                  return (
-                    <SectorIntelPanel
-                      key={u.id}
-                      zoneKey={u.zone_key}
-                      sectorKey={u.sector_key}
-                      sector={s}
-                    />
-                  );
-                })}
-
-              {/* ── Sector click info panel ── */}
-              {clickedSectorInfo && (
-                <div className="rounded border border-brass/20 bg-void/80 p-4 space-y-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <p className="text-brass/60 text-xs uppercase tracking-widest font-mono">
-                      ◈ {fmtKey(clickedZone)} / {clickedSector.toUpperCase()}
-                    </p>
-                    <button
-                      onClick={() => { setClickedZone(""); setClickedSector(""); }}
-                      className="text-parchment/25 hover:text-parchment/60 text-xs px-1 transition-colors">
-                      ✕
-                    </button>
-                  </div>
-
-                  {!clickedSectorInfo.isRevealed ? (
-                    <p className="text-parchment/30 italic text-xs">
-                      Unknown. Deploy a scout to gather intel on this sector.
-                    </p>
-                  ) : (
-                    <>
-                      {clickedSectorInfo.owner ? (
-                        <div className={`flex items-center gap-2 px-3 py-1.5 rounded border ${
-                          clickedSectorInfo.isMine
-                            ? "border-brass/30 bg-brass/10 text-brass/80"
-                            : "border-blood/30 bg-blood/10 text-blood/80"
-                        }`}>
-                          <span className="font-semibold">
-                            {clickedSectorInfo.isMine ? "Held by you" : `Held by ${clickedSectorInfo.owner.label}`}
-                          </span>
-                          {clickedSectorInfo.s?.fortified && (
-                            <span className="ml-auto text-xs border border-blood/30 px-1.5 py-0.5 rounded font-mono">⬡ Fortified</span>
-                          )}
-                        </div>
-                      ) : (
-                        <p className="text-parchment/45 text-xs italic px-1">Uncontrolled sector.</p>
-                      )}
-                      {clickedSectorInfo.myUnit && (
-                        <div className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded border ${
-                          clickedSectorInfo.myUnit.unit_type === "scout"
-                            ? "border-blue-400/30 bg-blue-500/10 text-blue-300"
-                            : "border-brass/30 bg-brass/10 text-brass/80"
-                        }`}>
-                          <span className="uppercase font-mono">{clickedSectorInfo.myUnit.unit_type}</span>
-                          <span className="text-parchment/40">unit present</span>
-                          <span className="ml-auto font-mono text-parchment/30">R{clickedSectorInfo.myUnit.round_deployed}</span>
-                        </div>
-                      )}
-                      {clickedSectorInfo.myUnit && clickedSectorInfo.s && (
-                        <SectorIntelPanel
-                          zoneKey={clickedZone}
-                          sectorKey={clickedSector}
-                          sector={clickedSectorInfo.s}
-                        />
-                      )}
-                      {canMove && selectedUnit && (
-                        <p className="text-green-400/60 text-xs italic px-1">
-                          Click selects this sector as movement target.
-                        </p>
-                      )}
-                      {canMove && !selectedUnit && (
-                        <p className="text-parchment/30 text-xs italic px-1">
-                          Select a unit in My Units to issue a movement order.
-                        </p>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
+                  {CATCHUP_OPTIONS.map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+                {catchupOption === "+1 NCP next battle" && (
+                  <p className="text-xs text-parchment/35 italic">
+                    This bonus is recorded and applied by the campaign lead at your next conflict.
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={acceptCatchup}
+                disabled={accepting}
+                className="w-full px-4 py-2.5 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-sm uppercase tracking-wider transition-colors">
+                {accepting ? "Accepting..." : "Accept Bonus"}
+              </button>
             </div>
-          )}
-
-        </div>{/* end main layout grid */}
+          </Card>
+        )}
 
       </div>
 
-      {/* ── Fullscreen map calibration popup ──────────────────────────────── */}
-      {/* Opens when the lead clicks the map thumbnail in the right column.    */}
-      {/* Map left, calibration sliders right. Click backdrop or ✕ to close.  */}
-      {mapPopupOpen && isOverlayLayout && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-          onClick={(e) => { if (e.target === e.currentTarget) setMapPopupOpen(false); }}
-        >
-          {/* Use site-native card styling: iron background, brass borders, parchment text */}
-          <div className="relative w-full max-w-[1400px] max-h-[94vh] flex flex-col bg-iron/95 backdrop-blur-[14px] border border-brass/30 rounded-2xl overflow-hidden shadow-reliquary">
-
-            {/* Header bar — matches Card.tsx style */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-brass/20 shrink-0">
-              <h2 className="font-gothic tracking-wide text-parchment">
-                ◈ Theatre Map — {mapLayout.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
-              </h2>
-              <button
-                onClick={() => setMapPopupOpen(false)}
-                className="text-parchment/40 hover:text-parchment transition-colors text-lg px-2 py-0.5 rounded hover:bg-brass/10 border border-transparent hover:border-brass/30"
-                aria-label="Close map popup"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Body — map left, sliders right. overflow-hidden keeps scrollbar away */}
-            <div className="flex-1 overflow-hidden p-4">
-              <CampaignMapOverlay
-                mapUrl={mapImageUrl!}
-                layout={mapLayout as any}
-                zoneCount={mapZoneCount ?? effectiveZones.length}
-                zoneKeys={zoneKeys}
-                zoneNames={zoneNames}
-                sectors={sectors as any}
-                units={roundNumber > 0 ? (myUnits as any) : []}
-                currentUserId={uid || null}
-                selectedSectorId={selectedSectorId}
-                onSectorClick={(zone, sector) => {
-                  setClickedZone(zone);
-                  setClickedSector(sector);
-                  if (canMove && selectedUnit) {
-                    setToZone(zone);
-                    setToSector(sector);
-                  }
-                }}
-                showZoneLabels
-                isLead={role === "lead"}
-                campaignId={campaignId}
-                calibrationLocked={calibrationLocked}
-                popupMode
-                zoneEffectSummaries={zoneEffectSummaries}
-                popupSidePanel={
-                  <SectorInfoPopupPanel
-                    zoneKey={clickedZone}
-                    sectorKey={clickedSector}
-                    sectors={sectors}
-                    zones={effectiveZones}
-                    myUnits={myUnits}
-                    memberById={memberById}
-                    uid={uid}
-                    czeByZone={czeByZone}
-                    revealTierByZone={revealTierByZone}
-                  />
-                }
-              />
-            </div>
-
-          </div>
-        </div>
-      )}
+      {/* ── Toast notifications ─────────────────────────────────────────── */}
+      <ToastContainer toasts={toasts} dismiss={dismissToast} />
 
     </Frame>
   );

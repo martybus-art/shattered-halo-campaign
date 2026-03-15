@@ -4,6 +4,10 @@
 // randomly assigns unique zone effects to every zone on the campaign map.
 //
 // changelog:
+//   2026-03-15 -- FIX: Removed global_uses_remaining from campaign_zone_effects
+//                 insert. Live DB uses minor_charges_used/major_charges_used/
+//                 global_charges_used (integers) not the boolean/nullable columns
+//                 from the original DDL draft.
 //   2026-03-15 -- Added assignZoneEffects(): after player allocation completes,
 //                 randomly assigns a unique zone_effect from the zone_effects
 //                 reference table to every zone defined in the campaign map_json.
@@ -115,11 +119,10 @@ async function assignZoneEffects(
 
   // 4. Build rows for each zone needing an assignment
   const rows: {
-    campaign_id:           string;
-    zone_key:              string;
-    zone_name:             string;
-    zone_effect_id:        string;
-    global_uses_remaining: number | null;
+    campaign_id:    string;
+    zone_key:       string;
+    zone_name:      string;
+    zone_effect_id: string;
   }[] = [];
 
   for (const zone of zonesNeedingEffects) {
@@ -134,8 +137,6 @@ async function assignZoneEffects(
       zone_key:              zone.key,
       zone_name:             zone.name ?? zone.key,
       zone_effect_id:        effect.id,
-      // one_time scope effects start with 1 global use; others are unlimited (null)
-      global_uses_remaining: (effect.scope as string) === "one_time" ? 1 : null,
     });
 
     // Mark as used so subsequent zones in this same batch prefer different effects

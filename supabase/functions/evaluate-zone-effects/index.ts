@@ -22,6 +22,12 @@
 // Returns: { ok: true, newReveals: number, bulletin_posts: number }
 //
 // changelog:
+//   2026-03-15 -- FIX: Updated ZoneEffectRow type and campaign_zone_effects select
+//                 to use real DB column names: minor_charges_used, major_charges_used,
+//                 global_charges_used (integers) instead of the boolean/nullable
+//                 columns from the original DDL draft. Removed zone_effect_events
+//                 writes — charge tracking is done via integer columns on
+//                 campaign_zone_effects, not a separate events table.
 //   2026-03-15 -- Initial creation. Implements fog-of-war reveal engine for
 //                 the zone effects system (migration 009). Reads sector counts
 //                 from the sectors table (same RLS-bypassed adminClient used
@@ -39,13 +45,13 @@ import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts
 // ---------------------------------------------------------------------------
 
 type ZoneEffectRow = {
-  id:                    string;
-  zone_key:              string;
-  zone_name:             string;
-  zone_effect_id:        string;
-  minor_one_time_consumed: boolean;
-  major_one_time_consumed: boolean;
-  global_uses_remaining: number | null;
+  id:                   string;
+  zone_key:             string;
+  zone_name:            string;
+  zone_effect_id:       string;
+  minor_charges_used:   number;
+  major_charges_used:   number;
+  global_charges_used:  number;
   zone_effects: {
     slug:           string;
     name:           string;
@@ -118,7 +124,7 @@ serve(async (req) => {
     // 3. Load all campaign zone effect assignments (joined with effect details)
     const { data: czeRows, error: czeErr } = await admin
       .from("campaign_zone_effects")
-      .select("id,zone_key,zone_name,zone_effect_id,minor_one_time_consumed,major_one_time_consumed,global_uses_remaining,zone_effects(slug,name,scope,minor_benefit,major_benefit,global_benefit,lore)")
+      .select("id,zone_key,zone_name,zone_effect_id,minor_charges_used,major_charges_used,global_charges_used,zone_effects(slug,name,scope,minor_benefit,major_benefit,global_benefit,lore)")
       .eq("campaign_id", campaign_id);
 
     if (czeErr) return json(500, { ok: false, error: czeErr.message });

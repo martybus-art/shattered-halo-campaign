@@ -8,6 +8,12 @@
 //                generated type for nested join results (zone_effects(...) select)
 //                which TypeScript rejects as an unsafe direct cast. The double-cast
 //                pattern matches existing usage in this codebase (e.g. sectors as any).
+//   2026-03-15 — FIX: Schema alignment — CampaignZoneEffect type updated to use
+//                real DB column names (minor_charges_used, major_charges_used,
+//                global_charges_used integers). ZoneEffectEvent type and
+//                zoneEffectEvents state removed — zone_effect_events table does
+//                not exist in DB; consumed status derived directly from charge
+//                integer columns on campaign_zone_effects. select string updated.
 //   2026-03-15 — FEATURE: Zone Effects system integrated into Faction Resources card.
 //                New types: CampaignZoneEffect, ZoneEffectReveal, ZoneEffectEvent.
 //                load() queries campaign_zone_effects (joined to zone_effects),
@@ -203,32 +209,26 @@ type ZoneEffectDetail = {
 };
 
 type CampaignZoneEffect = {
-  id:                      string;
-  zone_key:                string;
-  zone_name:               string;
-  minor_one_time_consumed: boolean;
-  major_one_time_consumed: boolean;
-  global_uses_remaining:   number | null;
-  zone_effects:            ZoneEffectDetail;
+  id:                   string;
+  zone_key:             string;
+  zone_name:            string;
+  minor_charges_used:   number;  // incremented each time the minor one-time benefit is used
+  major_charges_used:   number;  // incremented each time the major one-time benefit is used
+  global_charges_used:  number;  // incremented each time the global one-time benefit is used
+  zone_effects:         ZoneEffectDetail;
 };
 
 // Per-player fog-of-war reveal record (RLS returns only this player's own rows)
 type ZoneEffectReveal = {
-  id:             string;
   zone_key:       string;
   zone_effect_id: string;
   tier:           "minor" | "major" | "global";
   revealed_at:    string;
 };
 
-// Append-only event log — used for one-time use tracking on the resource card
-type ZoneEffectEvent = {
-  id:             string;
-  zone_key:       string;
-  zone_effect_id: string;
-  event_type:     string;
-  round_number:   number;
-};
+// ZoneEffectEvent type removed — zone_effect_events table does not exist in DB.
+// Consumed status is derived from minor_charges_used / major_charges_used on
+// campaign_zone_effects directly.
 
 type UnderdogChoice = {
   id:            string;
@@ -361,10 +361,9 @@ export default function Dashboard() {
   const [cart,            setCart]            = useState<Record<string, boolean>>({});
   const [secretLocation,  setSecretLocation]  = useState<string | null>(null);
   const [myUnits,         setMyUnits]         = useState<{ id: string; unit_type: string; zone_key: string; sector_key: string }[]>([]);
-  // Zone effects state — populated from three separate tables
+  // Zone effects state — campaign_zone_effects + per-player reveals
   const [campaignZoneEffects, setCampaignZoneEffects] = useState<CampaignZoneEffect[]>([]);
   const [myZoneReveals,       setMyZoneReveals]       = useState<ZoneEffectReveal[]>([]);
-  const [zoneEffectEvents,    setZoneEffectEvents]    = useState<ZoneEffectEvent[]>([]);
   const [purchasing,      setPurchasing]      = useState(false);
   const [catchupOption,   setCatchupOption]   = useState<string>(CATCHUP_OPTIONS[0]);
   const [accepting,       setAccepting]       = useState(false);
@@ -521,33 +520,21 @@ export default function Dashboard() {
       .eq("campaign_id", cid).eq("user_id", user.id).eq("status", "active");
     setMyUnits(unitRows ?? []);
 
-    // 12. Campaign zone effects — full join so we have effect details for display.
-    //     RLS on campaign_zone_effects: all campaign members can read.
-    //     The fog-of-war is enforced client-side using myZoneReveals — we load
-    //     all assignments but only render the ones that have a matching reveal row.
+    // 12. Campaign zone effects — full join for display details.
+    //     Fog-of-war enforced client-side using myZoneReveals.
     const { data: czeRows } = await supabase
       .from("campaign_zone_effects")
-      .select("id,zone_key,zone_name,minor_one_time_consumed,major_one_time_consumed,global_uses_remaining,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
+      .select("id,zone_key,zone_name,minor_charges_used,major_charges_used,global_charges_used,zone_effects(slug,name,category,scope,lore,minor_benefit,major_benefit,global_benefit,power_rating)")
       .eq("campaign_id", cid);
     setCampaignZoneEffects((czeRows ?? []) as unknown as CampaignZoneEffect[]);
 
-    // 13. My zone effect reveals — RLS enforces that only this player's own
-    //     reveal rows are returned, so no client-side filtering required.
+    // 13. My zone effect reveals — RLS enforces only this player's own rows.
     const { data: revealRows } = await supabase
       .from("zone_effect_reveals")
-      .select("id,zone_key,zone_effect_id,tier,revealed_at")
+      .select("zone_key,zone_effect_id,tier,revealed_at")
       .eq("campaign_id", cid)
       .eq("user_id", user.id);
     setMyZoneReveals((revealRows ?? []) as ZoneEffectReveal[]);
-
-    // 14. Zone effect events for this player — used to show one-time use status
-    //     on the Faction Resources card (mirrors the existing usedTokens pattern).
-    const { data: zeeRows } = await supabase
-      .from("zone_effect_events")
-      .select("id,zone_key,zone_effect_id,event_type,round_number")
-      .eq("campaign_id", cid)
-      .eq("user_id", user.id);
-    setZoneEffectEvents((zeeRows ?? []) as ZoneEffectEvent[]);
   };
 
   useEffect(() => {
@@ -804,15 +791,19 @@ export default function Dashboard() {
     return m;
   }, [myZoneReveals]);
 
-  // Index one_time_used events by zone_key so we can show Used/Available badge.
-  // one_time_used events indicate a one-time benefit has been consumed.
+  // Derive consumed status from campaign_zone_effects integer charge columns.
+  // minor_charges_used > 0 or major_charges_used > 0 means the one-time
+  // benefit for that tier has been activated at least once.
+  // No separate events table needed — the DB tracks this directly.
   const oneTimeUsedByZone = useMemo(() => {
     const used = new Set<string>();
-    for (const e of zoneEffectEvents) {
-      if (e.event_type === "one_time_used") used.add(e.zone_key);
+    for (const cze of campaignZoneEffects) {
+      if (cze.minor_charges_used > 0 || cze.major_charges_used > 0) {
+        used.add(cze.zone_key);
+      }
     }
     return used;
-  }, [zoneEffectEvents]);
+  }, [campaignZoneEffects]);
 
   // Build the list of zone effects that are visible to this player —
   // i.e. zones where this player has at least one reveal tier.
