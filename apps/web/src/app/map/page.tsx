@@ -1328,8 +1328,9 @@ export default function MapPage() {
 
               {/* Thumbnail inside a Card — clicking opens the calibration popup */}
               <Card title="Theatre Map">
-                <div className="relative group cursor-pointer rounded-lg overflow-hidden -mx-1"
+                <div className="relative cursor-pointer rounded-lg overflow-hidden -mx-1"
                   onClick={() => setMapPopupOpen(true)}
+                  title={role === "lead" && !calibrationLocked ? "Expand / Calibrate" : "Expand map"}
                 >
                   <CampaignMapOverlay
                     mapUrl={mapImageUrl!}
@@ -1338,7 +1339,7 @@ export default function MapPage() {
                     zoneKeys={zoneKeys}
                     zoneNames={zoneNames}
                     sectors={sectors as any}
-                    units={myUnits as any}
+                    units={roundNumber > 0 ? (myUnits as any) : []}
                     currentUserId={uid || null}
                     selectedSectorId={selectedSectorId}
                     onSectorClick={(zone, sector) => {
@@ -1354,14 +1355,6 @@ export default function MapPage() {
                     campaignId={campaignId}
                     calibrationLocked={true}
                   />
-                  {/* Expand hint overlay — visible on hover */}
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center pointer-events-none">
-                    <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs font-mono text-parchment/80 bg-black/60 rounded px-3 py-1.5 border border-zinc-600">
-                      {role === "lead" && !calibrationLocked
-                        ? "⛶  Expand / Calibrate"
-                        : "⛶  Expand map"}
-                    </span>
-                  </div>
                 </div>
               </Card>
 
@@ -1464,27 +1457,28 @@ export default function MapPage() {
       {/* Map left, calibration sliders right. Click backdrop or ✕ to close.  */}
       {mapPopupOpen && isOverlayLayout && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
           onClick={(e) => { if (e.target === e.currentTarget) setMapPopupOpen(false); }}
         >
-          <div className="relative w-full max-w-[1400px] max-h-[96vh] flex flex-col bg-zinc-950 border border-zinc-700 rounded-2xl overflow-hidden shadow-2xl">
+          {/* Use site-native card styling: iron background, brass borders, parchment text */}
+          <div className="relative w-full max-w-[1400px] max-h-[94vh] flex flex-col bg-iron/95 backdrop-blur-[14px] border border-brass/30 rounded-2xl overflow-hidden shadow-reliquary">
 
-            {/* Header bar */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 shrink-0">
-              <p className="text-brass font-mono text-sm tracking-widest uppercase">
-                ◈ Theatre Map — {mapLayout.replace(/_/g, " ")}
-              </p>
+            {/* Header bar — matches Card.tsx style */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-brass/20 shrink-0">
+              <h2 className="font-gothic tracking-wide text-parchment">
+                ◈ Theatre Map — {mapLayout.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+              </h2>
               <button
                 onClick={() => setMapPopupOpen(false)}
-                className="text-zinc-400 hover:text-parchment transition-colors text-lg px-2 py-0.5 rounded hover:bg-zinc-800"
+                className="text-parchment/40 hover:text-parchment transition-colors text-lg px-2 py-0.5 rounded hover:bg-brass/10 border border-transparent hover:border-brass/30"
                 aria-label="Close map popup"
               >
                 ✕
               </button>
             </div>
 
-            {/* Body — map left, sliders right (popupMode handles layout internally) */}
-            <div className="flex-1 overflow-auto p-4">
+            {/* Body — map left, sliders right. overflow-hidden keeps scrollbar away */}
+            <div className="flex-1 overflow-hidden p-4">
               <CampaignMapOverlay
                 mapUrl={mapImageUrl!}
                 layout={mapLayout as any}
@@ -1492,7 +1486,7 @@ export default function MapPage() {
                 zoneKeys={zoneKeys}
                 zoneNames={zoneNames}
                 sectors={sectors as any}
-                units={myUnits as any}
+                units={roundNumber > 0 ? (myUnits as any) : []}
                 currentUserId={uid || null}
                 selectedSectorId={selectedSectorId}
                 onSectorClick={(zone, sector) => {

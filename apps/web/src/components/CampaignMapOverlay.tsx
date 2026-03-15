@@ -2050,64 +2050,72 @@ function ContinentZoneOverridesPanel({
   overrides:  Array<{ sweepDeg: number; angleOffset: number }>;
   onChange:   (zi: number, field: "sweepDeg" | "angleOffset", value: number) => void;
 }) {
+  const [open, setOpen] = useState(true);
   return (
-    <div className="rounded-lg border border-brass/20 bg-black/75 p-4 space-y-4 text-sm">
-      <p className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
-        Per-Zone Shape Overrides
-      </p>
-      <p className="text-zinc-500 text-xs leading-snug">
-        Sweep Width 0° = auto (uses computed cluster width).
-        Angle Offset shifts start position ± independently.
-      </p>
-      <div className="space-y-3">
-        {Array.from({ length: zoneCount }, (_, zi) => {
-          const label    = zoneNames?.[zi] ?? (zoneKeys[zi] ?? `Zone ${zi}`).replace(/_/g, " ");
-          const ov       = overrides[zi] ?? { sweepDeg: 0, angleOffset: 0 };
-          const colour   = ZONE_COLOURS[zi % ZONE_COLOURS.length];
-          return (
-            <div key={zi} className="rounded border border-zinc-800 p-3 space-y-2">
-              <span
-                className="text-xs font-mono font-semibold"
-                style={{ color: colour }}
-              >
-                {label}
-              </span>
-              <div className="grid grid-cols-2 gap-4">
-                {/* Sweep width */}
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <label className="text-zinc-400 text-xs">Sweep Width (°)</label>
-                    <span className="text-brass font-mono text-xs tabular-nums">
-                      {ov.sweepDeg === 0 ? "auto" : `${ov.sweepDeg.toFixed(1)}°`}
-                    </span>
+    <div className="rounded-lg border border-brass/20 bg-iron/80 backdrop-blur-sm text-sm overflow-hidden">
+      <button
+        onClick={() => setOpen((p) => !p)}
+        className="w-full flex items-center gap-2 px-4 py-3 hover:bg-brass/5 transition-colors text-left group"
+        aria-expanded={open}
+      >
+        <span className={`text-brass/60 text-xs shrink-0 transition-transform duration-200 inline-block ${open ? "" : "-rotate-90"}`}>
+          ◈
+        </span>
+        <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase group-hover:text-brass/80 transition-colors">
+          Per-Zone Shape Overrides
+        </span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 space-y-3 border-t border-brass/15">
+          <p className="text-parchment/40 text-xs leading-snug pt-3">
+            Sweep Width 0° = auto. Angle Offset shifts start position ± independently.
+          </p>
+          <div className="space-y-3">
+            {Array.from({ length: zoneCount }, (_, zi) => {
+              const label    = zoneNames?.[zi] ?? (zoneKeys[zi] ?? `Zone ${zi}`).replace(/_/g, " ");
+              const ov       = overrides[zi] ?? { sweepDeg: 0, angleOffset: 0 };
+              const colour   = ZONE_COLOURS[zi % ZONE_COLOURS.length];
+              return (
+                <div key={zi} className="rounded border border-brass/15 p-3 space-y-2">
+                  <span className="text-xs font-mono font-semibold" style={{ color: colour }}>
+                    {label}
+                  </span>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <div className="flex justify-between">
+                        <label className="text-parchment/50 text-xs">Sweep Width (°)</label>
+                        <span className="text-brass font-mono text-xs tabular-nums">
+                          {ov.sweepDeg === 0 ? "auto" : `${ov.sweepDeg.toFixed(1)}°`}
+                        </span>
+                      </div>
+                      <input
+                        type="range" min={0} max={120} step={0.5}
+                        value={ov.sweepDeg}
+                        onChange={(e) => onChange(zi, "sweepDeg", parseFloat(e.target.value))}
+                        className="w-full h-1.5 rounded appearance-none bg-brass/20 accent-amber-400 cursor-pointer"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between">
+                        <label className="text-parchment/50 text-xs">Angle Offset (°)</label>
+                        <span className="text-brass font-mono text-xs tabular-nums">
+                          {ov.angleOffset > 0 ? "+" : ""}{ov.angleOffset.toFixed(1)}°
+                        </span>
+                      </div>
+                      <input
+                        type="range" min={-60} max={60} step={0.5}
+                        value={ov.angleOffset}
+                        onChange={(e) => onChange(zi, "angleOffset", parseFloat(e.target.value))}
+                        className="w-full h-1.5 rounded appearance-none bg-brass/20 accent-amber-400 cursor-pointer"
+                      />
+                    </div>
                   </div>
-                  <input
-                    type="range" min={0} max={120} step={0.5}
-                    value={ov.sweepDeg}
-                    onChange={(e) => onChange(zi, "sweepDeg", parseFloat(e.target.value))}
-                    className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
-                  />
                 </div>
-                {/* Angle offset */}
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <label className="text-zinc-400 text-xs">Angle Offset (°)</label>
-                    <span className="text-brass font-mono text-xs tabular-nums">
-                      {ov.angleOffset > 0 ? "+" : ""}{ov.angleOffset.toFixed(1)}°
-                    </span>
-                  </div>
-                  <input
-                    type="range" min={-60} max={60} step={0.5}
-                    value={ov.angleOffset}
-                    onChange={(e) => onChange(zi, "angleOffset", parseFloat(e.target.value))}
-                    className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2136,22 +2144,24 @@ function VoidshipZoneWidthPanel({
   const halfDefault = Math.round(defaultW / 2);
 
   return (
-    <div className="rounded-lg border border-brass/20 bg-black/75 text-sm overflow-hidden">
-      {/* Collapsible header */}
+    <div className="rounded-lg border border-brass/20 bg-iron/80 backdrop-blur-sm text-sm overflow-hidden">
+      {/* Collapsible header — ◈ icon on left */}
       <button
         onClick={() => setOpen((p) => !p)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 px-4 py-3 hover:bg-brass/5 transition-colors text-left group"
+        aria-expanded={open}
       >
-        <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
+        <span className={`text-brass/60 text-xs shrink-0 transition-transform duration-200 inline-block ${open ? "" : "-rotate-90"}`}>
+          ◈
+        </span>
+        <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase group-hover:text-brass/80 transition-colors">
           Per-Zone Width
         </span>
-        <span className="text-zinc-500 text-xs transition-transform duration-200 inline-block"
-          style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
       </button>
 
       {open && (
-        <div className="px-4 pb-4 space-y-3 border-t border-zinc-800/60">
-          <p className="text-zinc-500 text-xs leading-snug pt-3">
+        <div className="px-4 pb-4 space-y-3 border-t border-brass/15">
+          <p className="text-parchment/40 text-xs leading-snug pt-3">
             Slider = half-width from zone centre (0 = auto, {halfDefault}px each side).
           </p>
           {Array.from({ length: zoneCount }, (_, zi) => {
@@ -2171,7 +2181,7 @@ function VoidshipZoneWidthPanel({
                   type="range" min={0} max={350} step={1}
                   value={val}
                   onChange={(e) => onChange(zi, parseFloat(e.target.value))}
-                  className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+                  className="w-full h-1.5 rounded appearance-none bg-brass/20 accent-amber-400 cursor-pointer"
                 />
               </div>
             );
@@ -2209,23 +2219,25 @@ function CalibrationPanel({
   }, [buildCopySnippet]);
 
   return (
-    <div className="rounded-lg border border-brass/30 bg-black/85 text-sm overflow-hidden">
-      {/* Collapsible header */}
-      <div className="flex items-center justify-between gap-2 px-4 py-3">
+    <div className="rounded-lg border border-brass/30 bg-iron/80 backdrop-blur-sm text-sm overflow-hidden">
+      {/* Collapsible header — icon on left, title next, action buttons right */}
+      <div className="flex items-center gap-2 px-4 py-3">
         <button
           onClick={() => setOpen((p) => !p)}
-          className="flex items-center gap-2 flex-1 min-w-0 hover:text-parchment/80 transition-colors text-left"
+          className="flex items-center gap-2 flex-1 min-w-0 text-left group"
+          aria-expanded={open}
         >
-          <span className="text-zinc-500 text-xs transition-transform duration-200 inline-block shrink-0"
-            style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
-          <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase truncate">
+          <span className={`text-brass/60 text-xs shrink-0 transition-transform duration-200 inline-block ${open ? "" : "-rotate-90"}`}>
+            ◈
+          </span>
+          <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase truncate group-hover:text-brass/80 transition-colors">
             Map Calibration
           </span>
         </button>
         <div className="flex gap-2 shrink-0">
           <button
             onClick={onReset}
-            className="px-2.5 py-1 rounded border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+            className="px-2.5 py-1 rounded border border-brass/25 hover:border-brass/50 text-parchment/50 hover:text-parchment/80 text-xs transition-colors"
           >
             Reset
           </button>
@@ -2239,8 +2251,8 @@ function CalibrationPanel({
       </div>
 
       {open && (
-        <div className="px-4 pb-4 space-y-4 border-t border-zinc-800/60 pt-3">
-          <p className="text-zinc-500 text-xs">
+        <div className="px-4 pb-4 space-y-4 border-t border-brass/15 pt-3">
+          <p className="text-parchment/40 text-xs">
             Adjust sliders until the overlay aligns with the background image.
             {campaignId ? " Values are saved automatically." : ""}
           </p>
@@ -2251,7 +2263,7 @@ function CalibrationPanel({
               return (
                 <div key={key} className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <label className="text-zinc-300 text-xs font-mono">{label}</label>
+                    <label className="text-parchment/70 text-xs font-mono">{label}</label>
                     <span className="text-brass font-mono text-xs tabular-nums">
                       {displayValue}
                     </span>
@@ -2263,9 +2275,9 @@ function CalibrationPanel({
                     step={step}
                     value={value}
                     onChange={(e) => onChange(key, parseFloat(e.target.value))}
-                    className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+                    className="w-full h-1.5 rounded appearance-none bg-brass/20 accent-amber-400 cursor-pointer"
                   />
-                  <p className="text-zinc-600 text-xs leading-tight">{description}</p>
+                  <p className="text-parchment/30 text-xs leading-tight">{description}</p>
                 </div>
               );
             })}
