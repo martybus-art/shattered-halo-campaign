@@ -3,6 +3,12 @@
 // initial scout and occupation units, and seeds the sectors table.
 //
 // changelog:
+//   2026-03-15 — REFACTOR: Removed local fallbackMap(). map_json is now
+//                guaranteed populated by create-campaign via buildMapTemplate().
+//                start-campaign reads map_json as before; if map_json is still
+//                empty on a legacy campaign, it calls buildMapTemplate() as a
+//                safety net and backfills map_json into the DB so future calls
+//                (and generate-map) work correctly.
 //   2026-03-11 -- FIX: createInitialSectors sets revealed_public=false for ALL
 //                 sectors including the owner's starting sector. The owner sees
 //                 their own via owner_user_id===currentUserId on the frontend;
@@ -11,25 +17,19 @@
 //   2026-03-08 -- Added createInitialSectors(): at campaign start, all sectors
 //                 in each player's starting zone are inserted into the sectors
 //                 table. The player's own starting sector is marked as owned
-//                 (revealed_public=false — visible to owner only via ownership check);
-//                 the remaining sectors are seeded as open (owner=null, revealed_public=false).
-//                 This ensures effectiveZones fallback on map/page.tsx works
-//                 from round 1 even when no map has been generated.
+//                 (revealed_public=false); the remaining sectors are seeded as
+//                 open (owner=null, revealed_public=false).
 //                 Upsert uses ignoreDuplicates so it is safe if two players
 //                 share a zone, and safe to re-run (idempotent).
 //   2026-03-07 -- FIX: After creating rounds row, now also updates
 //                 campaigns.round_number = 1 so the frontend query
-//                 (rounds WHERE round_number = campaign.round_number)
-//                 can find the row. Campaigns created with round_number=0
-//                 were silently passing allocation but never showing as
-//                 Active because the rounds row and campaign round_number
-//                 were out of sync.
+//                 (rounds WHERE round_number = campaign.round_number) finds it.
 //   2026-03-05 -- Added unit creation: after each player's starting location
-//                 is allocated, insert 1 scout + 1 occupation unit at that
-//                 sector. Late mode also creates units for the late player.
+//                 is allocated, insert 1 scout + 1 occupation unit at that sector.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json, adminClient, requireUser } from "../_shared/utils.ts";
+import { buildMapTemplate } from "../_shared/mapTemplates.ts";
 
 type Body =
   | { campaign_id: string; mode?: "initial" }
@@ -38,27 +38,6 @@ type Body =
 type MapDef = {
   zones: { key: string; name: string; sectors: { key: string; name?: string }[] }[];
 };
-
-function fallbackMap(): MapDef {
-  const zones = [
-    { key: "vault_ruins",         name: "Vault Ruins" },
-    { key: "ash_wastes",          name: "Ash Wastes" },
-    { key: "halo_spire",          name: "Halo Spire" },
-    { key: "sunken_manufactorum", name: "Sunken Manufactorum" },
-    { key: "warp_scar_basin",     name: "Warp Scar Basin" },
-    { key: "obsidian_fields",     name: "Obsidian Fields" },
-    { key: "signal_crater",       name: "Signal Crater" },
-    { key: "xenos_forest",        name: "Xenos Forest" },
-  ];
-  const sectorLetters = ["a", "b", "c", "d"];
-  return {
-    zones: zones.map((z) => ({
-      ...z,
-      // Sector keys in map_json are stored as "zone_key:sector_letter"
-      sectors: sectorLetters.map((s) => ({ key: `${z.key}:${s}` })),
-    })),
-  };
-}
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -74,7 +53,6 @@ function parseLocation(loc: string) {
   return { zone_key, sector_key };
 }
 
-// Starting NIP grant for every player when a campaign begins
 const STARTING_NIP = 1;
 
 serve(async (req) => {
@@ -108,8 +86,9 @@ serve(async (req) => {
     if (leadErr) return json(500, { ok: false, error: leadErr.message });
     if (!leadRow || leadRow.role !== "lead") return json(403, { ok: false, error: "Lead only" });
 
-    // Load map via map_id FK
-    let map: MapDef = fallbackMap();
+    // Load map_json from the maps table.
+    // create-campaign now seeds map_json with buildMapTemplate() so this should
+    // always resolve. The safety net below handles legacy campaigns.
     const { data: camp, error: campErr } = await admin
       .from("campaigns")
       .select("id, map_id, round_number")
@@ -120,18 +99,41 @@ serve(async (req) => {
 
     const roundNumber = (camp as any)?.round_number;
 
+    let map: MapDef | null = null;
+
     if (camp?.map_id) {
       const { data: mapRow, error: mapErr } = await admin
         .from("maps")
-        .select("map_json")
+        .select("map_json, layout, zone_count")
         .eq("id", camp.map_id)
         .maybeSingle();
+
       if (!mapErr && mapRow?.map_json) {
         try {
           const mj = mapRow.map_json as any;
           if (mj?.zones?.length) map = mj as MapDef;
-        } catch { /* use fallback */ }
+        } catch { /* fall through */ }
       }
+
+      // Safety net for legacy campaigns: backfill map_json from template
+      if (!map && mapRow) {
+        const layout     = (mapRow as any)?.layout    as string ?? "ring";
+        const zone_count = (mapRow as any)?.zone_count as number ?? 8;
+        map = buildMapTemplate(layout, zone_count) as MapDef;
+
+        // Backfill so generate-map and future start-campaign calls work correctly
+        await admin
+          .from("maps")
+          .update({ map_json: map })
+          .eq("id", camp.map_id);
+
+        console.log(`[start-campaign] backfilled map_json for map ${camp.map_id} (legacy campaign)`);
+      }
+    }
+
+    // Final fallback when there is no map_id at all
+    if (!map) {
+      map = buildMapTemplate("ring", 8) as MapDef;
     }
 
     const { data: members, error: memErr } = await admin
@@ -167,14 +169,14 @@ serve(async (req) => {
       for (const sec of z.sectors) allLocations.push(sec.key);
 
     function pickFreeSectorInZone(zoneKey: string): string | null {
-      const zone = map.zones.find((z) => z.key === zoneKey);
-      if (!zone) return null;
-      const free = zone.sectors.map((s) => s.key).filter((k) => !usedSectors.has(k));
+      const z = map!.zones.find((z) => z.key === zoneKey);
+      if (!z) return null;
+      const free = z.sectors.map((s) => s.key).filter((k) => !usedSectors.has(k));
       return free.length ? shuffle(free)[0]! : null;
     }
 
     function pickUnusedZone(): string | null {
-      const candidates = map.zones
+      const candidates = map!.zones
         .map((z) => z.key)
         .filter((zk) => !usedZones.has(zk))
         .filter((zk) => pickFreeSectorInZone(zk) !== null);
@@ -205,19 +207,13 @@ serve(async (req) => {
       if (error) throw new Error(error.message);
     }
 
-    // Seeds the sectors table for the player's entire starting zone.
-    // The player's specific starting sector is marked owned + revealed.
-    // All other sectors in the zone are inserted as open (unowned, unrevealed).
-    // Uses ignoreDuplicates=true so it is safe when two players share a zone
-    // and safe to call multiple times (idempotent).
     async function createInitialSectors(uid: string, loc: string, mapDef: MapDef) {
       const { zone_key, sector_key } = parseLocation(loc);
       if (!zone_key || !sector_key) return;
 
-      const zone = mapDef.zones.find((z) => z.key === zone_key);
+      const z = mapDef.zones.find((z) => z.key === zone_key);
 
-      if (!zone) {
-        // Zone not in map_json (unusual) -- insert just the starting sector
+      if (!z) {
         const { error } = await admin.from("sectors").upsert(
           { campaign_id, zone_key, sector_key, owner_user_id: uid, revealed_public: false },
           { onConflict: "campaign_id,zone_key,sector_key", ignoreDuplicates: true }
@@ -226,20 +222,14 @@ serve(async (req) => {
         return;
       }
 
-      // Build one row per sector in the zone.
-      // Sector keys in map_json may be "zone_key:sector_letter" or just "sector_letter".
-      const rows = zone.sectors.map((sec) => {
-        const sk = sec.key.includes(":") ? sec.key.split(":").pop()! : sec.key;
+      const rows = z.sectors.map((sec) => {
+        const sk      = sec.key.includes(":") ? sec.key.split(":").pop()! : sec.key;
         const isOwned = sk === sector_key;
         return {
           campaign_id,
           zone_key,
-          sector_key:    sk,
-          owner_user_id: isOwned ? uid : null as string | null,
-          // Never set revealed_public=true at start — the owner sees their own
-          // sectors via owner_user_id === currentUserId in the frontend.
-          // revealed_public=true means OTHER players can see it, which breaks
-          // fog-of-war until a scout physically surveys the sector.
+          sector_key:      sk,
+          owner_user_id:   isOwned ? uid : null as string | null,
           revealed_public: false,
         };
       });
@@ -251,8 +241,6 @@ serve(async (req) => {
       if (error) console.error(`[start-campaign] sector insert error for ${uid}:`, error.message);
     }
 
-    // Creates initial scout + occupation units at the player's starting sector.
-    // Idempotent: skips creation if the player already has active units.
     async function createInitialUnits(uid: string, loc: string, roundNum: number) {
       const { zone_key, sector_key } = parseLocation(loc);
       if (!zone_key || !sector_key) return;
@@ -265,7 +253,7 @@ serve(async (req) => {
         .eq("status", "active")
         .limit(1);
 
-      if (existing?.length) return; // already has units
+      if (existing?.length) return;
 
       const { error } = await admin.from("units").insert([
         {
@@ -339,7 +327,7 @@ serve(async (req) => {
       return json(200, { ok: true, allocated: 1 });
     }
 
-    // ── Initial start: allocate all unassigned members ────────────────────────
+    // ── Initial start ─────────────────────────────────────────────────────────
 
     const toAllocate = memberIds.filter((uid) => !assignedByUser.has(uid));
     let allocated = 0;
@@ -367,7 +355,6 @@ serve(async (req) => {
       allocated++;
     }
 
-    // Open Round 1 / Spend phase in the rounds table
     const { error: roundErr } = await admin.from("rounds").upsert(
       { campaign_id, round_number: 1, stage: "spend" },
       { onConflict: "campaign_id,round_number" }
@@ -377,8 +364,6 @@ serve(async (req) => {
       return json(500, { ok: false, error: `Failed to create round: ${roundErr.message}` });
     }
 
-    // Sync campaigns.round_number = 1 so the frontend query
-    // (rounds WHERE round_number = campaign.round_number) finds the row.
     const { error: campUpdateErr } = await admin
       .from("campaigns")
       .update({ round_number: 1 })

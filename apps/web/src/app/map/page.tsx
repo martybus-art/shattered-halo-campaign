@@ -1337,6 +1337,7 @@ export default function MapPage() {
                 showZoneLabels
                 isLead={role === "lead"}
                 campaignId={campaignId}
+                calibrationLocked={roundNumber > 0}
               />
 
               {/* Sector intel panels — shown next to map */}

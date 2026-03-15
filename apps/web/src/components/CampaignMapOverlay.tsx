@@ -68,6 +68,19 @@
  *                stern bottom-right). parallelPath helper replaces rectPath for
  *                zone outlines and sub-cell sector paths. skewX slider controls
  *                the perspective lean angle. Aspect changed to aspect-square.
+ *   2026-03-15 — FEATURE: Rotation slider for voidship overlay. VoidshipConfig gains
+ *                rotateDeg (-180..180). SVG content wrapped in <g transform="rotate(deg,
+ *                500, 500)"> so the whole overlay pivots around the canvas centre.
+ *                DB fix: map_json populated for voidship test campaign afd02c3d.
+ *   2026-03-15 — FEATURE: Rotation slider added to ring, spokes, and continent overlays.
+ *                rotateDeg added to RingConfig, SpokesConfig, ContinentConfig types and
+ *                defaults. All four Overlay components wrap SVG content in rotate <g>.
+ *                Rotation slider added to RING/SPOKES/CONTINENT_SLIDER_DEFS.
+ *   2026-03-15 — FEATURE: calibrationLocked prop. When true (campaign started, i.e.
+ *                round_number > 0) the calibration toggle and panel are hidden for all
+ *                players including lead. calibToggle renders null; all four isLead &&
+ *                gates additionally check !calibrationLocked. page.tsx passes
+ *                calibrationLocked={roundNumber > 0}.
  *   2026-03-14 — UPDATE: Main export calls all 4 layout hooks unconditionally.
  *                isOverlayLayout in page.tsx extended to include "continent" and
  *                "void_ship". Stub fallback narrowed to truly unimplemented types.
@@ -166,6 +179,13 @@ export type CampaignMapOverlayProps = {
    * so each map remembers its own alignment settings independently.
    */
   campaignId?: string;
+
+  /**
+   * When true, the calibration panel is hidden even for lead players.
+   * Set to true once the campaign has started (round_number > 0) so the
+   * overlay alignment is locked in for all players.
+   */
+  calibrationLocked?: boolean;
 };
 
 // ── Internal types ─────────────────────────────────────────────────────────────
@@ -221,6 +241,9 @@ export type RingConfig = {
   outerCyOffset:  number;
   /** Master opacity for the SVG overlay (0 = invisible, 1 = fully opaque). */
   overlayOpacity: number;
+  /** Rotation of the entire overlay around the SVG viewBox centre (500, 500).
+   *  Positive = clockwise. Range −180 to 180. */
+  rotateDeg:      number;
 };
 
 /** Derives the mid-band radius — computed from config, never stored. */
@@ -235,13 +258,14 @@ function ringMid(cfg: RingConfig): number {
  */
 export const DEFAULT_RING_CONFIG: RingConfig = {
   cx:             500,
-  cy:             410,   // ring visual centre sits above canvas midpoint
-  perspectiveY:   0.55,  // Y-axis compression (1.0 = circle)
-  ringInner:      275,   // inner void edge rx
-  ringOuter:      480,   // outer atmosphere edge rx
-  innerCyOffset:  0,     // inner ellipse cy nudge (positive = down)
-  outerCyOffset:  0,     // outer ellipse cy nudge (positive = down)
-  overlayOpacity: 1.0,   // SVG overlay master opacity (0–1)
+  cy:             410,
+  perspectiveY:   0.55,
+  ringInner:      275,
+  ringOuter:      480,
+  innerCyOffset:  0,
+  outerCyOffset:  0,
+  overlayOpacity: 1.0,
+  rotateDeg:      0,
 };
 
 // ── Spokes geometry config ────────────────────────────────────────────────────
@@ -269,6 +293,9 @@ export type SpokesConfig = {
   innerCyOffset:  number;
   outerCyOffset:  number;
   overlayOpacity: number;
+  /** Rotation of the entire overlay around the SVG viewBox centre (500, 500).
+   *  Positive = clockwise. Range −180 to 180. */
+  rotateDeg:      number;
 };
 
 export const DEFAULT_SPOKES_CONFIG: SpokesConfig = {
@@ -282,6 +309,7 @@ export const DEFAULT_SPOKES_CONFIG: SpokesConfig = {
   innerCyOffset:  0,
   outerCyOffset:  0,
   overlayOpacity: 1.0,
+  rotateDeg:      0,
 };
 
 const CALIB_STORAGE_PREFIX        = "shattered-halo:map-calib:";
@@ -322,6 +350,9 @@ export type ContinentConfig = {
    *   angleOffset — shift this zone's start angle (+ = clockwise, − = counter-CW)
    */
   zoneOverrides:  Array<{ sweepDeg: number; angleOffset: number }>;
+  /** Rotation of the entire overlay around the SVG viewBox centre (500, 500).
+   *  Positive = clockwise. Range −180 to 180. */
+  rotateDeg:      number;
 };
 
 export const DEFAULT_CONTINENT_CONFIG: ContinentConfig = {
@@ -336,6 +367,7 @@ export const DEFAULT_CONTINENT_CONFIG: ContinentConfig = {
   outerCyOffset:  0,
   overlayOpacity: 1.0,
   zoneOverrides:  [],
+  rotateDeg:      0,
 };
 
 const CONTINENT_CALIB_STORAGE_PREFIX = "shattered-halo:continent-calib:";
@@ -365,6 +397,12 @@ export type VoidshipConfig = {
   gapY:           number;
   sectorGap:      number;
   overlayOpacity: number;
+  /**
+   * Rotation of the entire overlay around the SVG viewBox centre (500, 500).
+   * Positive = clockwise. Range −180 to 180.
+   * Use this to align the parallelogram column to the ship's orientation in the AI image.
+   */
+  rotateDeg:      number;
 };
 
 export const DEFAULT_VOIDSHIP_CONFIG: VoidshipConfig = {
@@ -376,6 +414,7 @@ export const DEFAULT_VOIDSHIP_CONFIG: VoidshipConfig = {
   gapY:             6,
   sectorGap:        3,
   overlayOpacity:  1.0,
+  rotateDeg:       0,
 };
 
 const VOIDSHIP_CALIB_STORAGE_PREFIX = "shattered-halo:voidship-calib:";
@@ -1116,7 +1155,7 @@ function RingOverlay({
   cfg: RingConfig;
 }) {
   const { zoneCount, onSectorClick, showZoneLabels, zoneNames } = props;
-  const { cx, cy, perspectiveY, ringInner, ringOuter, innerCyOffset, outerCyOffset } = cfg;
+  const { cx, cy, perspectiveY, ringInner, ringOuter, innerCyOffset, outerCyOffset, rotateDeg } = cfg;
   const innerCy = cy + innerCyOffset;
   const outerCy = cy + outerCyOffset;
   const zoneSweep = 360 / Math.max(zoneCount, 1);
@@ -1138,6 +1177,8 @@ function RingOverlay({
     return entries;
   }, [geometry]);
 
+  const rotateTransform = rotateDeg ? `rotate(${rotateDeg}, 500, 500)` : undefined;
+
   return (
     <svg
       viewBox="0 0 1000 1000"
@@ -1145,6 +1186,7 @@ function RingOverlay({
       aria-label="Tactical map overlay"
       style={{ opacity: cfg.overlayOpacity }}
     >
+      <g transform={rotateTransform}>
       {/* ── Zone boundary outlines (always visible, zone colour) ── */}
       {Array.from({ length: zoneCount }, (_, zi) => {
         const zoneStart = zi * zoneSweep;
@@ -1225,6 +1267,7 @@ function RingOverlay({
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+      </g>{/* end rotate */}
     </svg>
   );
 }
@@ -1244,7 +1287,7 @@ function SpokesOverlay({
   const {
     cx, cy, perspectiveY,
     centerR, spokeInnerR, spokeOuterR, spokeGapDeg,
-    innerCyOffset, outerCyOffset,
+    innerCyOffset, outerCyOffset, rotateDeg,
   } = cfg;
 
   const outerZoneCount  = Math.max(zoneCount - 1, 1);
@@ -1275,6 +1318,8 @@ function SpokesOverlay({
     return entries;
   }, [geometry]);
 
+  const rotateTransform = rotateDeg ? `rotate(${rotateDeg}, 500, 500)` : undefined;
+
   return (
     <svg
       viewBox="0 0 1000 1000"
@@ -1282,6 +1327,7 @@ function SpokesOverlay({
       aria-label="Tactical map overlay"
       style={{ opacity: cfg.overlayOpacity }}
     >
+      <g transform={rotateTransform}>
       {/* ── Hub zone boundary outline ── */}
       <path
         d={hubOutlinePath}
@@ -1365,6 +1411,7 @@ function SpokesOverlay({
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+      </g>{/* end rotate */}
     </svg>
   );
 }
@@ -1384,7 +1431,7 @@ function ContinentOverlay({
   const {
     cx, cy, planetR, perspectiveY,
     innerRFraction, clusterGapDeg, zoneGapDeg,
-    innerCyOffset, outerCyOffset, zoneOverrides,
+    innerCyOffset, outerCyOffset, zoneOverrides, rotateDeg,
   } = cfg;
   const outerCy = cy + outerCyOffset;
 
@@ -1441,6 +1488,8 @@ function ContinentOverlay({
     "Z",
   ].join(" ");
 
+  const rotateTransform = rotateDeg ? `rotate(${rotateDeg}, 500, 500)` : undefined;
+
   return (
     <svg
       viewBox="0 0 1000 1000"
@@ -1448,6 +1497,7 @@ function ContinentOverlay({
       aria-label="Tactical map overlay"
       style={{ opacity: cfg.overlayOpacity }}
     >
+      <g transform={rotateTransform}>
       {/* ── Planet sphere faint background ── */}
       <path
         d={planetOutline}
@@ -1524,6 +1574,7 @@ function ContinentOverlay({
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+      </g>{/* end rotate */}
     </svg>
   );
 }
@@ -1540,7 +1591,7 @@ function VoidshipOverlay({
   cfg: VoidshipConfig;
 }) {
   const { zoneCount, onSectorClick, showZoneLabels, zoneNames } = props;
-  const { shipX, shipY, zoneW, shipH, skewX, gapY } = cfg;
+  const { shipX, shipY, zoneW, shipH, skewX, gapY, rotateDeg } = cfg;
 
   const zoneH = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
 
@@ -1572,6 +1623,8 @@ function VoidshipOverlay({
 
   // Full hull outline — single parallelogram spanning the whole ship
   const hullPath = parallelPath(shipX, shipY, zoneW, shipH, skewX);
+  // Rotation transform around the SVG viewBox centre (500, 500)
+  const rotateTransform = rotateDeg !== 0 ? `rotate(${rotateDeg}, 500, 500)` : undefined;
 
   return (
     <svg
@@ -1580,6 +1633,7 @@ function VoidshipOverlay({
       aria-label="Tactical map overlay"
       style={{ opacity: cfg.overlayOpacity }}
     >
+      <g transform={rotateTransform}>
       {/* ── Hull silhouette faint background ── */}
       <path
         d={hullPath}
@@ -1656,6 +1710,7 @@ function VoidshipOverlay({
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
         ))}
+      </g>{/* end rotate */}
     </svg>
   );
 }
@@ -1717,6 +1772,12 @@ const RING_SLIDER_DEFS: SliderDef[] = [
     label: "Overlay Opacity",
     min: 0.0, max: 1.0, step: 0.01,
     description: "Master transparency of the SVG overlay (0 = invisible, 1 = fully opaque)",
+  },
+  {
+    key: "rotateDeg",
+    label: "Rotation (°)",
+    min: -180, max: 180, step: 0.5,
+    description: "Rotate the entire overlay around the canvas centre — align to map orientation",
   },
 ];
 
@@ -1781,6 +1842,12 @@ const SPOKES_SLIDER_DEFS: SliderDef[] = [
     min: 0.0, max: 1.0, step: 0.01,
     description: "Master transparency of the SVG overlay (0 = invisible, 1 = fully opaque)",
   },
+  {
+    key: "rotateDeg",
+    label: "Rotation (°)",
+    min: -180, max: 180, step: 0.5,
+    description: "Rotate the entire overlay around the canvas centre — align to map orientation",
+  },
 ];
 
 const CONTINENT_SLIDER_DEFS: SliderDef[] = [
@@ -1844,6 +1911,12 @@ const CONTINENT_SLIDER_DEFS: SliderDef[] = [
     min: 0.0, max: 1.0, step: 0.01,
     description: "Master transparency of the SVG overlay (0 = invisible, 1 = fully opaque)",
   },
+  {
+    key: "rotateDeg",
+    label: "Rotation (°)",
+    min: -180, max: 180, step: 0.5,
+    description: "Rotate the entire overlay around the canvas centre — align to map orientation",
+  },
 ];
 
 const VOIDSHIP_SLIDER_DEFS: SliderDef[] = [
@@ -1895,9 +1968,13 @@ const VOIDSHIP_SLIDER_DEFS: SliderDef[] = [
     min: 0.0, max: 1.0, step: 0.01,
     description: "Master transparency of the SVG overlay (0 = invisible, 1 = fully opaque)",
   },
+  {
+    key: "rotateDeg",
+    label: "Rotation (°)",
+    min: -180, max: 180, step: 0.5,
+    description: "Rotate the entire overlay around the canvas centre — align to ship orientation in the AI image",
+  },
 ];
-
-// ── Per-zone overrides panel (continent layout only) ──────────────────────────
 //
 // Renders two sliders per zone: Sweep Width (°) and Angle Offset (°).
 // sweepDeg=0 means "use auto-computed width" — the zone snaps back to the
@@ -2225,7 +2302,7 @@ function useVoidshipCalibConfig(
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
-  const { mapUrl, layout, isLead, campaignId } = props;
+  const { mapUrl, layout, isLead, campaignId, calibrationLocked } = props;
 
   // All four config hooks called unconditionally — React rules of hooks forbid
   // conditional hook calls, so every hook is always initialised regardless of
@@ -2262,7 +2339,8 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
   const voidshipGeometry   = useVoidshipGeometry(props, voidshipCfg);
 
   // ── Calibration toggle button (shared across all layouts) ─────────────────
-  const calibToggle = (
+  // Hidden once the campaign has started (calibrationLocked=true).
+  const calibToggle = calibrationLocked ? null : (
     <button
       onClick={() => setCalibOpen((prev) => !prev)}
       className="flex items-center gap-2 text-xs font-mono text-zinc-500 hover:text-brass/80 transition-colors px-1 select-none"
@@ -2315,6 +2393,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
       `  innerCyOffset:  ${spokesCfg.innerCyOffset},`,
       `  outerCyOffset:  ${spokesCfg.outerCyOffset},`,
       `  overlayOpacity: ${spokesCfg.overlayOpacity.toFixed(2)},`,
+      `  rotateDeg:      ${spokesCfg.rotateDeg},`,
       "};",
     ].join("\n");
 
@@ -2330,7 +2409,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
           <div className="absolute inset-0 bg-black/15" />
           <SpokesOverlay props={props} geometry={spokesGeometry} cfg={spokesCfg} />
         </div>
-        {isLead && (
+        {isLead && !calibrationLocked && (
           <div className="space-y-2 pt-1">
             {calibToggle}
             {calibOpen && (
@@ -2387,6 +2466,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
         `  innerCyOffset:  ${continentCfg.innerCyOffset},`,
         `  outerCyOffset:  ${continentCfg.outerCyOffset},`,
         `  overlayOpacity: ${continentCfg.overlayOpacity.toFixed(2)},`,
+        `  rotateDeg:      ${continentCfg.rotateDeg},`,
         "  zoneOverrides: [",
         ...ovLines,
         "  ],",
@@ -2406,7 +2486,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
           <div className="absolute inset-0 bg-black/15" />
           <ContinentOverlay props={props} geometry={continentGeometry} cfg={continentCfg} />
         </div>
-        {isLead && (
+        {isLead && !calibrationLocked && (
           <div className="space-y-2 pt-1">
             {calibToggle}
             {calibOpen && (
@@ -2460,6 +2540,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
       `  gapY:           ${voidshipCfg.gapY},`,
       `  sectorGap:      ${voidshipCfg.sectorGap},`,
       `  overlayOpacity: ${voidshipCfg.overlayOpacity.toFixed(2)},`,
+      `  rotateDeg:      ${voidshipCfg.rotateDeg},`,
       "};",
     ].join("\n");
 
@@ -2476,7 +2557,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
           <div className="absolute inset-0 bg-black/15" />
           <VoidshipOverlay props={props} geometry={voidshipGeometry} cfg={voidshipCfg} />
         </div>
-        {isLead && (
+        {isLead && !calibrationLocked && (
           <div className="space-y-2 pt-1">
             {calibToggle}
             {calibOpen && (
@@ -2488,12 +2569,13 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                 onReset={resetVoidshipCfg}
                 campaignId={campaignId}
                 derivedValues={[
-                  { label: "zoneH",      value: zoneH.toFixed(1) },
-                  { label: "subW",       value: subW.toFixed(1) },
-                  { label: "subH",       value: subH.toFixed(1) },
+                  { label: "zoneH",       value: zoneH.toFixed(1) },
+                  { label: "subW",        value: subW.toFixed(1) },
+                  { label: "subH",        value: subH.toFixed(1) },
                   { label: "skewPerZone", value: (voidshipCfg.skewX * zoneH / voidshipCfg.shipH).toFixed(1) },
-                  { label: "bowRight",   value: (voidshipCfg.shipX + voidshipCfg.zoneW).toFixed(0) },
-                  { label: "sternLeft",  value: (voidshipCfg.shipX + voidshipCfg.skewX).toFixed(0) },
+                  { label: "bowRight",    value: (voidshipCfg.shipX + voidshipCfg.zoneW).toFixed(0) },
+                  { label: "sternLeft",   value: (voidshipCfg.shipX + voidshipCfg.skewX).toFixed(0) },
+                  { label: "rotate°",     value: voidshipCfg.rotateDeg.toFixed(1) },
                 ]}
               />
             )}
@@ -2530,7 +2612,7 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
         <div className="absolute inset-0 bg-black/15" />
         <RingOverlay props={props} geometry={ringGeometry} cfg={ringCfg} />
       </div>
-      {isLead && (
+      {isLead && !calibrationLocked && (
         <div className="space-y-2 pt-1">
           {calibToggle}
           {calibOpen && (

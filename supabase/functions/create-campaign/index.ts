@@ -3,6 +3,13 @@
 // creates a map record, and fires generate-map as a background task.
 //
 // changelog:
+//   2026-03-15 — FEATURE: Seed map_json at creation time. maps insert now
+//                includes layout, zone_count, and map_json (built by
+//                buildMapTemplate from _shared/mapTemplates.ts). This ensures
+//                generate-map and start-campaign always have named zones to work
+//                with — no more empty map_json requiring DB hotfixes.
+//                normaliseLayout is applied before buildMapTemplate so void_ship
+//                campaigns get ship compartment names, spokes get hub+spoke names.
 //   2026-03-03 — added campaign_narrative field (stored on campaigns row);
 //                added layout/zone_count/biome/mixed_biomes params;
 //                added map record creation (maps table insert);
@@ -19,6 +26,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json, requireUser, adminClient } from "../_shared/utils.ts";
+import { buildMapTemplate } from "../_shared/mapTemplates.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -43,12 +51,13 @@ Deno.serve(async (req) => {
   const rules_overrides     = body?.rules_overrides ?? {};
   const map_id_override     = body?.map_id ?? null;   // allow pre-existing map (legacy)
 
-  // Map generation params
-  // normaliseLayout: maps frontend/template layout values to the canonical
-  // values used by the generate-map edge function's switch statement.
-  //   "void_ship" → "ship_line"  (frontend stores "void_ship" in rules_overrides)
-  //   "spokes"    → "radial"     (frontend stores "spokes" in rules_overrides)
-  // Without this, both fall to the default case and generate a generic terrain map.
+  // Map generation params.
+  // normaliseLayout maps frontend/rules_overrides values to the canonical
+  // values used by generate-map's switch statement AND stored in maps.layout:
+  //   "void_ship" → "ship_line"   (generate-map needs "ship_line")
+  //   "spokes"    → "radial"      (generate-map needs "radial")
+  // buildMapTemplate also accepts these canonical values to pick the right
+  // zone name pool (ship compartments for ship_line, hub+outer for radial, etc.)
   function normaliseLayout(raw: string): string {
     if (raw === "void_ship") return "ship_line";
     if (raw === "spokes")    return "radial";
@@ -106,15 +115,13 @@ Deno.serve(async (req) => {
   }
 
   // ── Add creator as lead ───────────────────────────────────────────────────
-  // Resolve display_name from auth metadata so commander_name is pre-populated
-  // and the Players card shows a real name instead of "Unnamed Commander".
 
   let commanderName: string | null = null;
   try {
     const { data: authUser } = await admin.auth.admin.getUserById(user.id);
     const meta = authUser?.user?.user_metadata ?? {};
     commanderName = (meta.display_name as string | null) ?? (meta.full_name as string | null) ?? null;
-  } catch { /* non-fatal — member row still inserted without name */ }
+  } catch { /* non-fatal */ }
 
   const { error: memErr } = await admin.from("campaign_members").insert({
     campaign_id:    campaign.id,
@@ -141,18 +148,25 @@ Deno.serve(async (req) => {
   }
 
   // ── Create map record ─────────────────────────────────────────────────────
-  // Creates the map row immediately so generate-map has a target to update.
+  // Build map_json with layout-specific zone names immediately so generate-map
+  // and start-campaign have named zones from the moment the campaign exists.
 
   let newMapId: string | null = map_id_override;
 
   if (!map_id_override) {
+    // Build the zone template for this layout — this populates map_json with
+    // proper zone keys, display names, and sector sub-keys right at creation.
+    const mapTemplate = buildMapTemplate(layout, zone_count);
+
     const { data: mapRow, error: mapErr } = await admin
       .from("maps")
       .insert({
         campaign_id:          campaign.id,
         name:                 `${String(campaign_name)} Map`,
         description:          campaign_narrative ? String(campaign_narrative).slice(0, 200) : null,
-        map_json:             {},
+        layout,               // canonical generate-map value (e.g. "ship_line", "radial")
+        zone_count,
+        map_json:             mapTemplate,   // zones with names and sector keys
         visibility:           "private",
         recommended_players:  zone_count,
         max_players:          zone_count,
@@ -163,12 +177,10 @@ Deno.serve(async (req) => {
       .single();
 
     if (mapErr || !mapRow) {
-      // Non-fatal — campaign was created, map generation just won't start
       console.error("[create-campaign] Map insert failed:", mapErr?.message);
     } else {
       newMapId = mapRow.id;
 
-      // Link the map back to the campaign
       await admin
         .from("campaigns")
         .update({ map_id: newMapId })
@@ -177,8 +189,6 @@ Deno.serve(async (req) => {
   }
 
   // ── Fire generate-map in background ──────────────────────────────────────
-  // Uses EdgeRuntime.waitUntil so the response is returned immediately while
-  // generation continues. Falls back to a detached fetch if not available.
 
   if (newMapId) {
     const supabaseUrl     = Deno.env.get("SUPABASE_URL") ?? "";
@@ -208,11 +218,10 @@ Deno.serve(async (req) => {
       console.error("[create-campaign] Background generate-map call failed:", e?.message);
     });
 
-    // Use EdgeRuntime.waitUntil if available (Supabase edge runtime v1.36+)
     try {
       (globalThis as any).EdgeRuntime?.waitUntil?.(generateFetch);
     } catch {
-      // waitUntil not available — fetch is already in flight, ignore
+      // waitUntil not available — fetch is already in flight
     }
   }
 
