@@ -395,7 +395,9 @@ const CONTINENT_CALIB_STORAGE_PREFIX = "shattered-halo:continent-calib:";
 //                         Replaces the raw skewX; skewX is computed as shipH * tan(shearDeg°)
 //   gapY                — bulkhead gap height between zone rows
 //   sectorGap           — gap between the 4 sector sub-parallelograms within each zone
-//   zoneWidthOverrides  — per-zone width in SVG units (0 = use zoneW default)
+//   zoneWidthOverrides  — per-zone half-width in SVG units (0 = use zoneW/2 default).
+//                         The zone is drawn symmetrically around its centre line.
+//                         Full width = override * 2. Slider range 0–350 (full 0–700).
 
 export type VoidshipConfig = {
   shipX:              number;
@@ -1061,16 +1063,27 @@ function useVoidshipGeometry(
 
     for (let zi = 0; zi < zoneCount; zi++) {
       const zoneKey  = zoneKeys[zi] ?? `zone_${zi}`;
-      const thisZoneW = (widthOverrides[zi] ?? 0) > 0 ? widthOverrides[zi] : zoneW;
+      // zoneWidthOverrides stores HALF-width (distance from zone centre to each edge).
+      // 0 = use zoneW/2 as default. Full zone width = halfW * 2.
+      const halfDefault = zoneW / 2;
+      const halfW       = (widthOverrides[zi] ?? 0) > 0 ? widthOverrides[zi] : halfDefault;
+      const thisZoneW   = halfW * 2;
+
       const zoneTopY = curTopY;
       curTopY += uniformH + gapY;
 
-      // Horizontal shift accumulates continuously with the shear angle
-      const zoneTopLeftX  = shipX + skewPerPx * (zoneTopY - shipY);
-      const zoneBotLeftX  = shipX + skewPerPx * (zoneTopY + uniformH - shipY);
+      // Horizontal shift accumulates continuously with the shear angle.
+      // Centre X is fixed at shipX + halfDefault offset from the unsheared left edge.
+      const shearTopLeftX = shipX + skewPerPx * (zoneTopY - shipY);
+      const shearBotLeftX = shipX + skewPerPx * (zoneTopY + uniformH - shipY);
+      // Adjusted left edges so zone is symmetrical around the centre line
+      const centreTopX  = shearTopLeftX + halfDefault;
+      const centreBotX  = shearBotLeftX + halfDefault;
+      const adjTopLeftX = centreTopX - halfW;
+      const adjBotLeftX = centreBotX - halfW;
 
-      // Zone centroid for label placement (mid-height, mid-width, accounting for lean)
-      const labelX = (zoneTopLeftX + zoneBotLeftX) / 2 + thisZoneW / 2;
+      // Zone centroid for label (mid-height, zone centre X)
+      const labelX = (centreTopX + centreBotX) / 2;
       const labelY = zoneTopY + uniformH / 2;
       const zoneLabelPoint = { x: labelX, y: labelY };
 
@@ -1085,8 +1098,8 @@ function useVoidshipGeometry(
         const topDy = gr * (subH + sectorGap);
         const botDy = topDy + subH;
 
-        const subTopLeftX = zoneTopLeftX + skewPerPx * topDy + gc * (subW + sectorGap);
-        const subBotLeftX = zoneTopLeftX + skewPerPx * botDy + gc * (subW + sectorGap);
+        const subTopLeftX = adjTopLeftX + skewPerPx * topDy + gc * (subW + sectorGap);
+        const subBotLeftX = adjBotLeftX + skewPerPx * botDy + gc * (subW + sectorGap);
         const subTopY     = zoneTopY + topDy;
         const subBotY     = zoneTopY + botDy;
 
@@ -1613,21 +1626,27 @@ function VoidshipOverlay({
   // Text rotation angle = shear angle so labels lie along the parallelogram's lean
   const labelAngle = shearDeg;
 
-  // Zone boundary outlines — one parallelogram per zone, respecting per-zone widths
+  // Zone boundary outlines — one parallelogram per zone, respecting per-zone half-widths
   const zoneParallels = useMemo(() => {
     const result: Array<{ zi: number; path: string; cx: number; cy: number; w: number }> = [];
     let curTopY = shipY;
+    const halfDefault = zoneW / 2;
     for (let zi = 0; zi < zoneCount; zi++) {
       const topY      = curTopY;
       curTopY        += uniformH + gapY;
-      const thisW     = (zoneWidthOverrides?.[zi] ?? 0) > 0 ? zoneWidthOverrides[zi] : zoneW;
-      const topLeftX  = shipX + skewPerPx * (topY - shipY);
-      const botLeftX  = shipX + skewPerPx * (topY + uniformH - shipY);
+      const halfW     = (zoneWidthOverrides?.[zi] ?? 0) > 0 ? zoneWidthOverrides[zi] : halfDefault;
+      const thisW     = halfW * 2;
+      const shearTopX = shipX + skewPerPx * (topY - shipY);
+      const shearBotX = shipX + skewPerPx * (topY + uniformH - shipY);
+      const centreTop = shearTopX + halfDefault;
+      const centreBot = shearBotX + halfDefault;
+      const topLeftX  = centreTop - halfW;
+      const botLeftX  = centreBot - halfW;
       const zoneSkewX = botLeftX - topLeftX;
       result.push({
         zi,
         path: parallelPath(topLeftX, topY, thisW, uniformH, zoneSkewX),
-        cx:   (topLeftX + botLeftX) / 2 + thisW / 2,
+        cx:   (centreTop + centreBot) / 2,
         cy:   topY + uniformH / 2,
         w:    thisW,
       });
@@ -2113,42 +2132,52 @@ function VoidshipZoneWidthPanel({
   defaultW:   number;
   onChange:   (zi: number, value: number) => void;
 }) {
+  const [open, setOpen] = useState(true);
+  const halfDefault = Math.round(defaultW / 2);
+
   return (
-    <div className="rounded-lg border border-brass/20 bg-black/75 p-4 space-y-4 text-sm">
-      <p className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
-        Per-Zone Width
-      </p>
-      <p className="text-zinc-500 text-xs leading-snug">
-        Width 0 = use global Zone Width default ({defaultW}px). Drag back to 0 to reset.
-      </p>
-      <div className="space-y-3">
-        {Array.from({ length: zoneCount }, (_, zi) => {
-          const label   = zoneNames?.[zi] ?? (zoneKeys[zi] ?? `Zone ${zi}`).replace(/_/g, " ");
-          const val     = overrides[zi] ?? 0;
-          const colour  = ZONE_COLOURS[zi % ZONE_COLOURS.length];
-          return (
-            <div key={zi} className="space-y-1.5">
-              <div className="flex justify-between">
-                <label
-                  className="text-xs font-mono font-semibold truncate max-w-[180px]"
-                  style={{ color: colour }}
-                >
-                  {label}
-                </label>
-                <span className="text-brass font-mono text-xs tabular-nums shrink-0 ml-2">
-                  {val === 0 ? `auto (${defaultW})` : `${val}px`}
-                </span>
+    <div className="rounded-lg border border-brass/20 bg-black/75 text-sm overflow-hidden">
+      {/* Collapsible header */}
+      <button
+        onClick={() => setOpen((p) => !p)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors"
+      >
+        <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
+          Per-Zone Width
+        </span>
+        <span className="text-zinc-500 text-xs transition-transform duration-200 inline-block"
+          style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3 border-t border-zinc-800/60">
+          <p className="text-zinc-500 text-xs leading-snug pt-3">
+            Slider = half-width from zone centre (0 = auto, {halfDefault}px each side).
+          </p>
+          {Array.from({ length: zoneCount }, (_, zi) => {
+            const label   = zoneNames?.[zi] ?? (zoneKeys[zi] ?? `Zone ${zi}`).replace(/_/g, " ");
+            const val     = overrides[zi] ?? 0;
+            const colour  = ZONE_COLOURS[zi % ZONE_COLOURS.length];
+            const display = val === 0 ? `auto (±${halfDefault})` : `±${val}px`;
+            return (
+              <div key={zi} className="space-y-1.5">
+                <div className="flex justify-between">
+                  <label className="text-xs font-mono font-semibold truncate max-w-[180px]" style={{ color: colour }}>
+                    {label}
+                  </label>
+                  <span className="text-brass font-mono text-xs tabular-nums shrink-0 ml-2">{display}</span>
+                </div>
+                <input
+                  type="range" min={0} max={350} step={1}
+                  value={val}
+                  onChange={(e) => onChange(zi, parseFloat(e.target.value))}
+                  className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+                />
               </div>
-              <input
-                type="range" min={0} max={700} step={1}
-                value={val}
-                onChange={(e) => onChange(zi, parseFloat(e.target.value))}
-                className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
-              />
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -2160,7 +2189,6 @@ function CalibrationPanel({
   onChange,
   onReset,
   campaignId,
-  derivedValues,
 }: {
   cfg: Record<string, number>;
   sliderDefs: SliderDef[];
@@ -2169,10 +2197,9 @@ function CalibrationPanel({
   onChange: (key: string, value: number) => void;
   onReset: () => void;
   campaignId?: string;
-  /** Extra computed values shown at the bottom of the panel for verification. */
-  derivedValues?: Array<{ label: string; value: string }>;
 }) {
   const [copied, setCopied] = useState(false);
+  const [open, setOpen]     = useState(true);
 
   const copyConfig = useCallback(() => {
     navigator.clipboard.writeText(buildCopySnippet()).then(() => {
@@ -2182,20 +2209,19 @@ function CalibrationPanel({
   }, [buildCopySnippet]);
 
   return (
-    <div className="rounded-lg border border-brass/30 bg-black/85 p-4 space-y-4 text-sm">
-      {/* Header row */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
+    <div className="rounded-lg border border-brass/30 bg-black/85 text-sm overflow-hidden">
+      {/* Collapsible header */}
+      <div className="flex items-center justify-between gap-2 px-4 py-3">
+        <button
+          onClick={() => setOpen((p) => !p)}
+          className="flex items-center gap-2 flex-1 min-w-0 hover:text-parchment/80 transition-colors text-left"
+        >
+          <span className="text-zinc-500 text-xs transition-transform duration-200 inline-block shrink-0"
+            style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+          <span className="text-brass font-semibold font-mono tracking-wide text-xs uppercase truncate">
             Map Calibration
-          </p>
-          <p className="text-zinc-500 text-xs mt-0.5">
-            Adjust sliders until the overlay aligns with the background image.
-            {campaignId
-              ? " Values are saved automatically."
-              : " Values apply this session only (no campaignId supplied)."}
-          </p>
-        </div>
+          </span>
+        </button>
         <div className="flex gap-2 shrink-0">
           <button
             onClick={onReset}
@@ -2212,41 +2238,38 @@ function CalibrationPanel({
         </div>
       </div>
 
-      {/* Sliders */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {sliderDefs.map(({ key, label, min, max, step, description }) => {
-          const value = cfg[key] ?? 0;
-          // Show decimal places when step is fractional
-          const displayValue = step < 1 ? value.toFixed(2) : String(value);
-          return (
-            <div key={key} className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-zinc-300 text-xs font-mono">{label}</label>
-                <span className="text-brass font-mono text-xs tabular-nums">
-                  {displayValue}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={value}
-                onChange={(e) => onChange(key, parseFloat(e.target.value))}
-                className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
-              />
-              <p className="text-zinc-600 text-xs leading-tight">{description}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Derived values — layout-specific computed properties for verification */}
-      {derivedValues && derivedValues.length > 0 && (
-        <div className="pt-2 border-t border-zinc-800 flex flex-wrap gap-x-6 gap-y-1 text-xs font-mono text-zinc-600">
-          {derivedValues.map(({ label, value }) => (
-            <span key={label}>{label}: {value}</span>
-          ))}
+      {open && (
+        <div className="px-4 pb-4 space-y-4 border-t border-zinc-800/60 pt-3">
+          <p className="text-zinc-500 text-xs">
+            Adjust sliders until the overlay aligns with the background image.
+            {campaignId ? " Values are saved automatically." : ""}
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {sliderDefs.map(({ key, label, min, max, step, description }) => {
+              const value = cfg[key] ?? 0;
+              const displayValue = step < 1 ? value.toFixed(2) : String(value);
+              return (
+                <div key={key} className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-zinc-300 text-xs font-mono">{label}</label>
+                    <span className="text-brass font-mono text-xs tabular-nums">
+                      {displayValue}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={value}
+                    onChange={(e) => onChange(key, parseFloat(e.target.value))}
+                    className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+                  />
+                  <p className="text-zinc-600 text-xs leading-tight">{description}</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -2541,14 +2564,6 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                 onChange={handleSpokesSliderChange}
                 onReset={resetSpokesCfg}
                 campaignId={campaignId}
-                derivedValues={[
-                  { label: "spokeMid",         value: spokeMid.toFixed(1) },
-                  { label: "innerCy",           value: (spokesCfg.cy + spokesCfg.innerCyOffset).toFixed(0) },
-                  { label: "outerCy",           value: (spokesCfg.cy + spokesCfg.outerCyOffset).toFixed(0) },
-                  { label: "hubRy",             value: (spokesCfg.centerR * spokesCfg.perspectiveY).toFixed(1) },
-                  { label: "outerRy",           value: (spokesCfg.spokeOuterR * spokesCfg.perspectiveY).toFixed(1) },
-                  { label: "effectiveSweep°",   value: Math.max(360 / Math.max(props.zoneCount - 1, 1) - spokesCfg.spokeGapDeg, 5).toFixed(1) },
-                ]}
               />
             )}
           </div>
@@ -2617,14 +2632,6 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                   onChange={handleContinentSliderChange}
                   onReset={resetContinentCfg}
                   campaignId={campaignId}
-                  derivedValues={[
-                    { label: "clusters",        value: String(clusterCount) },
-                    { label: "zonesPerCluster",  value: String(clusterSize) },
-                    { label: "innerR",           value: (continentCfg.planetR * continentCfg.innerRFraction).toFixed(1) },
-                    { label: "outerRy",          value: (continentCfg.planetR * continentCfg.perspectiveY).toFixed(1) },
-                    { label: "innerCy",          value: (continentCfg.cy + continentCfg.innerCyOffset).toFixed(0) },
-                    { label: "outerCy",          value: (continentCfg.cy + continentCfg.outerCyOffset).toFixed(0) },
-                  ]}
                 />
                 <ContinentZoneOverridesPanel
                   zoneCount={props.zoneCount}
@@ -2703,14 +2710,6 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
                   onChange={handleVoidshipSliderChange}
                   onReset={resetVoidshipCfg}
                   campaignId={campaignId}
-                  derivedValues={[
-                    { label: "zoneH",      value: zoneH.toFixed(1) },
-                    { label: "subW",       value: subW.toFixed(1) },
-                    { label: "subH",       value: subH.toFixed(1) },
-                    { label: "totalSkew",  value: `${totalSkew}px` },
-                    { label: "shear°",     value: voidshipCfg.shearDeg.toFixed(1) },
-                    { label: "rotate°",    value: voidshipCfg.rotateDeg.toFixed(1) },
-                  ]}
                 />
                 <VoidshipZoneWidthPanel
                   zoneCount={props.zoneCount}
@@ -2764,13 +2763,6 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
               onChange={handleRingSliderChange}
               onReset={resetRingCfg}
               campaignId={campaignId}
-              derivedValues={[
-                { label: "ringMid",  value: ringMid(ringCfg).toFixed(1) },
-                { label: "innerCy",  value: (ringCfg.cy + ringCfg.innerCyOffset).toFixed(0) },
-                { label: "outerCy",  value: (ringCfg.cy + ringCfg.outerCyOffset).toFixed(0) },
-                { label: "innerRy",  value: (ringCfg.ringInner * ringCfg.perspectiveY).toFixed(1) },
-                { label: "outerRy",  value: (ringCfg.ringOuter * ringCfg.perspectiveY).toFixed(1) },
-              ]}
             />
           )}
         </div>

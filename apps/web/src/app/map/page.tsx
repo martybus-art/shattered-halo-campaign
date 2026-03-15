@@ -1326,42 +1326,44 @@ export default function MapPage() {
           {isOverlayLayout && (
             <div className="space-y-3 lg:sticky lg:top-4">
 
-              {/* Thumbnail — clicking the map image opens the calibration popup */}
-              <div className="relative group cursor-pointer rounded-xl overflow-hidden border border-zinc-700"
-                onClick={() => setMapPopupOpen(true)}
-              >
-                <CampaignMapOverlay
-                  mapUrl={mapImageUrl!}
-                  layout={mapLayout as any}
-                  zoneCount={mapZoneCount ?? effectiveZones.length}
-                  zoneKeys={zoneKeys}
-                  zoneNames={zoneNames}
-                  sectors={sectors as any}
-                  units={myUnits as any}
-                  currentUserId={uid || null}
-                  selectedSectorId={selectedSectorId}
-                  onSectorClick={(zone, sector) => {
-                    setClickedZone(zone);
-                    setClickedSector(sector);
-                    if (canMove && selectedUnit) {
-                      setToZone(zone);
-                      setToSector(sector);
-                    }
-                  }}
-                  showZoneLabels
-                  isLead={role === "lead"}
-                  campaignId={campaignId}
-                  calibrationLocked={calibrationLocked}
-                />
-                {/* Expand hint overlay — visible on hover */}
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center pointer-events-none">
-                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs font-mono text-parchment/80 bg-black/60 rounded px-3 py-1.5 border border-zinc-600">
-                    {role === "lead" && !calibrationLocked
-                      ? "⛶  Expand / Calibrate"
-                      : "⛶  Expand map"}
-                  </span>
+              {/* Thumbnail inside a Card — clicking opens the calibration popup */}
+              <Card title="Theatre Map">
+                <div className="relative group cursor-pointer rounded-lg overflow-hidden -mx-1"
+                  onClick={() => setMapPopupOpen(true)}
+                >
+                  <CampaignMapOverlay
+                    mapUrl={mapImageUrl!}
+                    layout={mapLayout as any}
+                    zoneCount={mapZoneCount ?? effectiveZones.length}
+                    zoneKeys={zoneKeys}
+                    zoneNames={zoneNames}
+                    sectors={sectors as any}
+                    units={myUnits as any}
+                    currentUserId={uid || null}
+                    selectedSectorId={selectedSectorId}
+                    onSectorClick={(zone, sector) => {
+                      setClickedZone(zone);
+                      setClickedSector(sector);
+                      if (canMove && selectedUnit) {
+                        setToZone(zone);
+                        setToSector(sector);
+                      }
+                    }}
+                    showZoneLabels
+                    isLead={role === "lead"}
+                    campaignId={campaignId}
+                    calibrationLocked={true}
+                  />
+                  {/* Expand hint overlay — visible on hover */}
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center pointer-events-none">
+                    <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs font-mono text-parchment/80 bg-black/60 rounded px-3 py-1.5 border border-zinc-600">
+                      {role === "lead" && !calibrationLocked
+                        ? "⛶  Expand / Calibrate"
+                        : "⛶  Expand map"}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              </Card>
 
               {/* Sector intel panels — shown below thumbnail */}
               {targetIntel && (
