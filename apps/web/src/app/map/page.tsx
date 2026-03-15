@@ -2,6 +2,19 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-15 — FIX: Movement targeting broken for isOverlayLayout campaigns.
+//                Root cause: the Theatre Map thumbnail wrapper div had
+//                onClick={() => setMapPopupOpen(true)} which intercepted ALL
+//                clicks — including sector cells — and opened the popup before
+//                the player could confirm their movement destination.
+//                Fix 1: Removed onClick from the thumbnail wrapper div; added
+//                a dedicated ⤢ expand button (absolute top-right, z-10) that
+//                opens the popup without intercepting sector clicks elsewhere.
+//                Fix 2: Added a movement confirmation card at the top of the
+//                popup's popupSidePanel so players who expand the fullscreen
+//                map can confirm movement orders from inside the popup without
+//                having to close it and navigate back to the left column.
+//                No changes to submit-move edge function — it was correct.
 //   2026-03-15 — FIX: Schema alignment — CampaignZoneEffect type updated to use
 //                real DB column names: minor_charges_used, major_charges_used,
 //                global_charges_used (integers, default 0) instead of boolean/
@@ -1846,12 +1859,12 @@ export default function MapPage() {
           {isOverlayLayout && (
             <div className="space-y-3 lg:sticky lg:top-4">
 
-              {/* Thumbnail inside a Card — clicking opens the calibration popup */}
+              {/* Thumbnail inside a Card — sector clicks set movement target.    */}
+              {/* Expand button (⤢) in the corner opens the fullscreen popup.       */}
+              {/* The outer div intentionally has NO onClick so sector clicks can   */}
+              {/* reach CampaignMapOverlay without triggering the popup.            */}
               <Card title="Theatre Map">
-                <div className="relative cursor-pointer rounded-lg overflow-hidden -mx-1"
-                  onClick={() => setMapPopupOpen(true)}
-                  title={role === "lead" && !calibrationLocked ? "Expand / Calibrate" : "Expand map"}
-                >
+                <div className="relative rounded-lg overflow-hidden -mx-1">
                   <CampaignMapOverlay
                     mapUrl={mapImageUrl!}
                     layout={mapLayout as any}
@@ -1876,6 +1889,16 @@ export default function MapPage() {
                     calibrationLocked={true}
                     zoneEffectSummaries={zoneEffectSummaries}
                   />
+                  {/* ⤢ Expand button — absolute-positioned so it does not       */}
+                  {/* intercept sector clicks anywhere else on the map thumbnail. */}
+                  <button
+                    onClick={() => setMapPopupOpen(true)}
+                    className="absolute top-2 right-2 z-10 px-2 py-1 rounded text-xs border border-brass/30 bg-iron/90 backdrop-blur-sm text-parchment/50 hover:text-parchment/90 hover:border-brass/60 hover:bg-iron transition-colors"
+                    title={role === "lead" && !calibrationLocked ? "Expand / Calibrate" : "Expand map"}
+                    aria-label="Expand map"
+                  >
+                    ⤢
+                  </button>
                 </div>
               </Card>
 
@@ -2025,17 +2048,62 @@ export default function MapPage() {
                 popupMode
                 zoneEffectSummaries={zoneEffectSummaries}
                 popupSidePanel={
-                  <SectorInfoPopupPanel
-                    zoneKey={clickedZone}
-                    sectorKey={clickedSector}
-                    sectors={sectors}
-                    zones={effectiveZones}
-                    myUnits={myUnits}
-                    memberById={memberById}
-                    uid={uid}
-                    czeByZone={czeByZone}
-                    revealTierByZone={revealTierByZone}
-                  />
+                  <div className="space-y-3 h-full overflow-y-auto">
+
+                    {/* ── Movement confirmation card (popup context) ─────────── */}
+                    {/* Shown when a unit is selected and a movement target has   */}
+                    {/* been set. Lets the player confirm or cancel without       */}
+                    {/* having to close the popup and find the left-column card.  */}
+                    {canMove && selectedUnit && toZone && toSector && (
+                      <div className="rounded-lg border border-brass/40 bg-brass/10 px-4 py-3 space-y-3">
+                        <p className="text-brass/80 text-xs uppercase tracking-widest font-mono font-semibold">
+                          ◈ Movement Order
+                        </p>
+                        <div className="text-sm text-parchment/70 space-y-0.5">
+                          <p>
+                            <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase mr-2 ${
+                              selectedUnit.unit_type === "scout"
+                                ? "bg-blue-500/20 border-blue-400/40 text-blue-300"
+                                : "bg-brass/20 border-brass/40 text-brass"
+                            }`}>{selectedUnit.unit_type}</span>
+                            {fmtKey(selectedUnit.zone_key)} / {selectedUnit.sector_key.toUpperCase()}
+                          </p>
+                          <p className="text-brass/70 font-semibold pl-1">
+                            → {fmtKey(toZone)} / {toSector.toUpperCase()}
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { submitMove(); setMapPopupOpen(false); }}
+                            disabled={submitting}
+                            className="flex-1 px-3 py-2 rounded bg-brass/25 border border-brass/50 hover:bg-brass/40 disabled:opacity-40 text-brass font-bold text-xs uppercase tracking-wider transition-colors"
+                          >
+                            {submitting ? "Submitting…" : "Confirm Order"}
+                          </button>
+                          <button
+                            onClick={() => setMapPopupOpen(false)}
+                            className="px-3 py-2 rounded border border-parchment/20 hover:border-parchment/40 text-parchment/50 text-xs transition-colors"
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Sector intel panel ─────────────────────────────────── */}
+                    <SectorInfoPopupPanel
+                      zoneKey={clickedZone}
+                      sectorKey={clickedSector}
+                      sectors={sectors}
+                      zones={effectiveZones}
+                      myUnits={myUnits}
+                      memberById={memberById}
+                      uid={uid}
+                      czeByZone={czeByZone}
+                      revealTierByZone={revealTierByZone}
+                    />
+
+                  </div>
                 }
               />
             </div>
