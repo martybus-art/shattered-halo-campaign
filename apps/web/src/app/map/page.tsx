@@ -2,6 +2,12 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-15 — FEATURE: Fullscreen map calibration popup. mapPopupOpen state
+//                added. Right-column map thumbnail now has a hover expand hint;
+//                clicking it opens a fixed fullscreen modal with CampaignMapOverlay
+//                in popupMode (map left, calibration sliders right, always open).
+//                Clicking the backdrop or ✕ closes the popup. Non-leads see the
+//                expanded map without sliders (calibrationLocked=true when started).
 //   2026-03-14 — UPDATE: isOverlayLayout extended to include "continent" and
 //                "void_ship" layouts. normaliseLayout now also maps "ship_line"
 //                -> "void_ship" for legacy DB rows. Both layouts use the full
@@ -663,6 +669,9 @@ export default function MapPage() {
   const [clickedZone,   setClickedZone]   = useState<string>("");
   const [clickedSector, setClickedSector] = useState<string>("");
 
+  // Map calibration popup — fullscreen overlay with map left / sliders right
+  const [mapPopupOpen,  setMapPopupOpen]  = useState(false);
+
   // Deploy unit state
   const [deployType,    setDeployType]    = useState<"scout" | "occupation">("scout");
   const [deployZone,    setDeployZone]    = useState<string>("");
@@ -1311,36 +1320,48 @@ export default function MapPage() {
 
           </div>{/* end LEFT col */}
 
-          {/* ── RIGHT col: overlay map (ring / spokes only) ───────────── */}
+          {/* ── RIGHT col: overlay map thumbnail + expand to popup ──── */}
           {isOverlayLayout && (
             <div className="space-y-3 lg:sticky lg:top-4">
-              <CampaignMapOverlay
-                mapUrl={mapImageUrl!}
-                layout={mapLayout as any}
-                zoneCount={mapZoneCount ?? effectiveZones.length}
-                zoneKeys={zoneKeys}
-                zoneNames={zoneNames}
-                sectors={sectors as any}
-                units={myUnits as any}
-                currentUserId={uid || null}
-                selectedSectorId={selectedSectorId}
-                onSectorClick={(zone, sector) => {
-                  // Always record click for info panel display
-                  setClickedZone(zone);
-                  setClickedSector(sector);
-                  // Also set movement target when a unit is selected and can move
-                  if (canMove && selectedUnit) {
-                    setToZone(zone);
-                    setToSector(sector);
-                  }
-                }}
-                showZoneLabels
-                isLead={role === "lead"}
-                campaignId={campaignId}
-                calibrationLocked={roundNumber > 0}
-              />
 
-              {/* Sector intel panels — shown next to map */}
+              {/* Thumbnail — clicking the map image opens the calibration popup */}
+              <div className="relative group cursor-pointer rounded-xl overflow-hidden border border-zinc-700"
+                onClick={() => setMapPopupOpen(true)}
+              >
+                <CampaignMapOverlay
+                  mapUrl={mapImageUrl!}
+                  layout={mapLayout as any}
+                  zoneCount={mapZoneCount ?? effectiveZones.length}
+                  zoneKeys={zoneKeys}
+                  zoneNames={zoneNames}
+                  sectors={sectors as any}
+                  units={myUnits as any}
+                  currentUserId={uid || null}
+                  selectedSectorId={selectedSectorId}
+                  onSectorClick={(zone, sector) => {
+                    setClickedZone(zone);
+                    setClickedSector(sector);
+                    if (canMove && selectedUnit) {
+                      setToZone(zone);
+                      setToSector(sector);
+                    }
+                  }}
+                  showZoneLabels
+                  isLead={role === "lead"}
+                  campaignId={campaignId}
+                  calibrationLocked={roundNumber > 0}
+                />
+                {/* Expand hint overlay — visible on hover */}
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center pointer-events-none">
+                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs font-mono text-parchment/80 bg-black/60 rounded px-3 py-1.5 border border-zinc-600">
+                    {role === "lead" && !calibrationLocked
+                      ? "⛶  Expand / Calibrate"
+                      : "⛶  Expand map"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Sector intel panels — shown below thumbnail */}
               {targetIntel && (
                 <SectorIntelPanel zoneKey={toZone} sectorKey={toSector} sector={targetIntel} />
               )}
@@ -1360,7 +1381,6 @@ export default function MapPage() {
                 })}
 
               {/* ── Sector click info panel ── */}
-              {/* Shows whenever any sector is clicked — always interactive regardless of phase */}
               {clickedSectorInfo && (
                 <div className="rounded border border-brass/20 bg-void/80 p-4 space-y-2 text-sm">
                   <div className="flex items-center justify-between">
@@ -1375,13 +1395,11 @@ export default function MapPage() {
                   </div>
 
                   {!clickedSectorInfo.isRevealed ? (
-                    /* Fogged — player has no units here and it's not revealed */
                     <p className="text-parchment/30 italic text-xs">
                       Unknown. Deploy a scout to gather intel on this sector.
                     </p>
                   ) : (
                     <>
-                      {/* Ownership */}
                       {clickedSectorInfo.owner ? (
                         <div className={`flex items-center gap-2 px-3 py-1.5 rounded border ${
                           clickedSectorInfo.isMine
@@ -1398,8 +1416,6 @@ export default function MapPage() {
                       ) : (
                         <p className="text-parchment/45 text-xs italic px-1">Uncontrolled sector.</p>
                       )}
-
-                      {/* Units present */}
                       {clickedSectorInfo.myUnit && (
                         <div className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded border ${
                           clickedSectorInfo.myUnit.unit_type === "scout"
@@ -1411,8 +1427,6 @@ export default function MapPage() {
                           <span className="ml-auto font-mono text-parchment/30">R{clickedSectorInfo.myUnit.round_deployed}</span>
                         </div>
                       )}
-
-                      {/* Tags / fortification intel (only if I have a unit here) */}
                       {clickedSectorInfo.myUnit && clickedSectorInfo.s && (
                         <SectorIntelPanel
                           zoneKey={clickedZone}
@@ -1420,8 +1434,6 @@ export default function MapPage() {
                           sector={clickedSectorInfo.s}
                         />
                       )}
-
-                      {/* Movement hint */}
                       {canMove && selectedUnit && (
                         <p className="text-green-400/60 text-xs italic px-1">
                           Click selects this sector as movement target.
@@ -1441,8 +1453,64 @@ export default function MapPage() {
 
         </div>{/* end main layout grid */}
 
-
       </div>
+
+      {/* ── Fullscreen map calibration popup ──────────────────────────────── */}
+      {/* Opens when the lead clicks the map thumbnail in the right column.    */}
+      {/* Map left, calibration sliders right. Click backdrop or ✕ to close.  */}
+      {mapPopupOpen && isOverlayLayout && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setMapPopupOpen(false); }}
+        >
+          <div className="relative w-full max-w-[1400px] max-h-[96vh] flex flex-col bg-zinc-950 border border-zinc-700 rounded-2xl overflow-hidden shadow-2xl">
+
+            {/* Header bar */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 shrink-0">
+              <p className="text-brass font-mono text-sm tracking-widest uppercase">
+                ◈ Theatre Map — {mapLayout.replace(/_/g, " ")}
+              </p>
+              <button
+                onClick={() => setMapPopupOpen(false)}
+                className="text-zinc-400 hover:text-parchment transition-colors text-lg px-2 py-0.5 rounded hover:bg-zinc-800"
+                aria-label="Close map popup"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body — map left, sliders right (popupMode handles layout internally) */}
+            <div className="flex-1 overflow-auto p-4">
+              <CampaignMapOverlay
+                mapUrl={mapImageUrl!}
+                layout={mapLayout as any}
+                zoneCount={mapZoneCount ?? effectiveZones.length}
+                zoneKeys={zoneKeys}
+                zoneNames={zoneNames}
+                sectors={sectors as any}
+                units={myUnits as any}
+                currentUserId={uid || null}
+                selectedSectorId={selectedSectorId}
+                onSectorClick={(zone, sector) => {
+                  setClickedZone(zone);
+                  setClickedSector(sector);
+                  if (canMove && selectedUnit) {
+                    setToZone(zone);
+                    setToSector(sector);
+                  }
+                }}
+                showZoneLabels
+                isLead={role === "lead"}
+                campaignId={campaignId}
+                calibrationLocked={roundNumber > 0}
+                popupMode
+              />
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </Frame>
   );
 }

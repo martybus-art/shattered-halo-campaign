@@ -186,6 +186,13 @@ export type CampaignMapOverlayProps = {
    * overlay alignment is locked in for all players.
    */
   calibrationLocked?: boolean;
+
+  /**
+   * When true, the component renders in side-by-side popup mode:
+   * map on the left, calibration panel always open on the right.
+   * The calibration toggle button is hidden — the panel is always visible.
+   */
+  popupMode?: boolean;
 };
 
 // ── Internal types ─────────────────────────────────────────────────────────────
@@ -381,40 +388,46 @@ const CONTINENT_CALIB_STORAGE_PREFIX = "shattered-halo:continent-calib:";
 // Zone order: zones[0] = bow, zones[N-1] = stern (top to bottom).
 // Sectors within each zone: 2×2 sub-parallelograms using SECTOR_GRID.
 //
-//   shipX / shipY  — top-left corner of the bow zone (SVG units 0–1000)
-//   zoneW          — width of each zone parallelogram
-//   shipH          — total height bow to stern (all zones + gaps)
-//   skewX          — rightward shift of stern bottom vs bow top (perspective lean)
-//   gapY           — bulkhead gap height between zone rows
-//   sectorGap      — gap between the 4 sector sub-parallelograms within each zone
+//   shipX / shipY       — top-left corner of the bow zone (SVG units 0–1000)
+//   zoneW               — default width of each zone parallelogram
+//   shipH               — total height bow to stern (all zones + gaps)
+//   shearDeg            — shear angle in degrees (0 = vertical, positive = lean right)
+//                         Replaces the raw skewX; skewX is computed as shipH * tan(shearDeg°)
+//   gapY                — bulkhead gap height between zone rows
+//   sectorGap           — gap between the 4 sector sub-parallelograms within each zone
+//   zoneWidthOverrides  — per-zone width in SVG units (0 = use zoneW default)
 
 export type VoidshipConfig = {
-  shipX:          number;
-  shipY:          number;
-  zoneW:          number;
-  shipH:          number;
-  skewX:          number;
-  gapY:           number;
-  sectorGap:      number;
-  overlayOpacity: number;
+  shipX:              number;
+  shipY:              number;
+  zoneW:              number;
+  shipH:              number;
+  shearDeg:           number;
+  gapY:               number;
+  sectorGap:          number;
+  overlayOpacity:     number;
   /**
    * Rotation of the entire overlay around the SVG viewBox centre (500, 500).
    * Positive = clockwise. Range −180 to 180.
-   * Use this to align the parallelogram column to the ship's orientation in the AI image.
    */
-  rotateDeg:      number;
+  rotateDeg:          number;
+  /**
+   * Per-zone width overrides. Index = zone order (bow=0). 0 = use zoneW default.
+   */
+  zoneWidthOverrides: number[];
 };
 
 export const DEFAULT_VOIDSHIP_CONFIG: VoidshipConfig = {
-  shipX:          200,
-  shipY:           60,
-  zoneW:          420,
-  shipH:          880,
-  skewX:          200,
-  gapY:             6,
-  sectorGap:        3,
-  overlayOpacity:  1.0,
-  rotateDeg:       0,
+  shipX:              200,
+  shipY:               60,
+  zoneW:              420,
+  shipH:              880,
+  shearDeg:            13,  // ~tan(13°)*880 ≈ 203px lean, matches previous skewX:200
+  gapY:                 6,
+  sectorGap:            3,
+  overlayOpacity:      1.0,
+  rotateDeg:            0,
+  zoneWidthOverrides:  [],
 };
 
 const VOIDSHIP_CALIB_STORAGE_PREFIX = "shattered-halo:voidship-calib:";
@@ -1009,18 +1022,24 @@ function useContinentGeometry(
 //
 // Zone order: zones[0] = bow (top), zones[N-1] = stern (bottom).
 // All zones stacked in a single diagonal column. Each zone is a parallelogram
-// whose bottom edge is shifted right by skewX * zoneH / shipH relative to
-// its top edge, so all zones chain together into one continuous hull shape.
-// Each zone is subdivided into a 2×2 grid of sub-parallelograms for sectors a–d.
+// Zone order: zones[0] = bow, zones[N-1] = stern (top to bottom).
+// shearDeg converts to a per-unit skewX: skewPerPx = tan(shearDeg°).
+// Each zone may have an independent width via zoneWidthOverrides.
 
 function useVoidshipGeometry(
   props: CampaignMapOverlayProps,
   cfg: VoidshipConfig,
 ): SectorGeometry[] {
   const { zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId } = props;
-  const { shipX, shipY, zoneW, shipH, skewX, gapY, sectorGap } = cfg;
+  const { shipX, shipY, zoneW, shipH, shearDeg, gapY, sectorGap, zoneWidthOverrides } = cfg;
+
+  // skewPerPx: horizontal shift per 1 SVG unit of vertical travel
+  const skewPerPx = Math.tan((shearDeg * Math.PI) / 180);
+  const overridesSer = JSON.stringify(zoneWidthOverrides ?? []);
 
   return useMemo(() => {
+    const widthOverrides: number[] = JSON.parse(overridesSer);
+
     const sectorMap = new Map<string, DbSector>();
     for (const s of sectors) sectorMap.set(`${s.zone_key}:${s.sector_key}`, s);
 
@@ -1034,39 +1053,43 @@ function useVoidshipGeometry(
     const result: SectorGeometry[] = [];
     if (zoneCount === 0) return result;
 
-    // Zone height: divide shipH evenly with row gaps between zones
-    const zoneH = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
-    // Width of each sector sub-cell (half of zoneW minus the gap)
-    const subW  = (zoneW - sectorGap) / 2;
-    const subH  = (zoneH - sectorGap) / 2;
+    // Build per-zone heights: divide shipH evenly (gaps already subtracted)
+    const uniformH = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
+
+    // Accumulate absolute top-Y for each zone (zones may have different widths but same height)
+    let curTopY = shipY;
 
     for (let zi = 0; zi < zoneCount; zi++) {
-      const zoneKey = zoneKeys[zi] ?? `zone_${zi}`;
+      const zoneKey  = zoneKeys[zi] ?? `zone_${zi}`;
+      const thisZoneW = (widthOverrides[zi] ?? 0) > 0 ? widthOverrides[zi] : zoneW;
+      const zoneTopY = curTopY;
+      curTopY += uniformH + gapY;
 
-      // Top y of this zone; top-left x accumulates skew proportional to position
-      const zoneTopY     = shipY + zi * (zoneH + gapY);
-      const zoneTopDy    = zi * (zoneH + gapY);           // distance from ship top
-      const zoneTopLeftX = shipX + skewX * zoneTopDy / shipH;
+      // Horizontal shift accumulates continuously with the shear angle
+      const zoneTopLeftX  = shipX + skewPerPx * (zoneTopY - shipY);
+      const zoneBotLeftX  = shipX + skewPerPx * (zoneTopY + uniformH - shipY);
 
-      // Zone label sits centred above the top edge of the zone
-      const zoneLabelPoint = { x: zoneTopLeftX + zoneW / 2, y: zoneTopY - 8 };
+      // Zone centroid for label placement (mid-height, mid-width, accounting for lean)
+      const labelX = (zoneTopLeftX + zoneBotLeftX) / 2 + thisZoneW / 2;
+      const labelY = zoneTopY + uniformH / 2;
+      const zoneLabelPoint = { x: labelX, y: labelY };
+
+      const subW = (thisZoneW - sectorGap) / 2;
+      const subH = (uniformH  - sectorGap) / 2;
 
       for (let si = 0; si < 4; si++) {
         const sectorKey = SECTOR_KEYS[si];
         const id        = `${zoneKey}:${sectorKey}`;
         const [gc, gr]  = SECTOR_GRID[sectorKey] ?? [0, 0];
 
-        // Sub-cell top and bottom local y offsets within the zone
         const topDy = gr * (subH + sectorGap);
         const botDy = topDy + subH;
 
-        // Left x of sub-cell at its top and bottom, applying continuous hull skew
-        const subTopLeftX = zoneTopLeftX + skewX * topDy / shipH + gc * (subW + sectorGap);
-        const subBotLeftX = zoneTopLeftX + skewX * botDy / shipH + gc * (subW + sectorGap);
+        const subTopLeftX = zoneTopLeftX + skewPerPx * topDy + gc * (subW + sectorGap);
+        const subBotLeftX = zoneTopLeftX + skewPerPx * botDy + gc * (subW + sectorGap);
         const subTopY     = zoneTopY + topDy;
         const subBotY     = zoneTopY + botDy;
 
-        // Parallelogram path for this sub-cell
         const path = [
           `M ${subTopLeftX.toFixed(2)} ${subTopY.toFixed(2)}`,
           `L ${(subTopLeftX + subW).toFixed(2)} ${subTopY.toFixed(2)}`,
@@ -1075,7 +1098,6 @@ function useVoidshipGeometry(
           "Z",
         ].join(" ");
 
-        // Centroid at mid-height of sub-cell, averaged over the skew lean
         const centroid = {
           x: (subTopLeftX + subBotLeftX) / 2 + subW / 2,
           y: (subTopY + subBotY) / 2,
@@ -1086,16 +1108,9 @@ function useVoidshipGeometry(
         const state    = deriveSectorState(dbSector, hasUnit, currentUserId, id === selectedSectorId);
 
         result.push({
-          id,
-          zoneKey,
-          sectorKey,
-          zoneIndex: zi,
-          state,
-          fortified: dbSector?.fortified ?? false,
-          hasUnit,
-          path,
-          centroid,
-          zoneLabelPoint,
+          id, zoneKey, sectorKey, zoneIndex: zi,
+          state, fortified: dbSector?.fortified ?? false, hasUnit,
+          path, centroid, zoneLabelPoint,
         });
       }
     }
@@ -1103,7 +1118,7 @@ function useVoidshipGeometry(
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoneCount, zoneKeys, sectors, units, currentUserId, selectedSectorId,
-      shipX, shipY, zoneW, shipH, skewX, gapY, sectorGap]);
+      shipX, shipY, zoneW, shipH, shearDeg, gapY, sectorGap, overridesSer]);
 }
 
 // ── Legend ────────────────────────────────────────────────────────────────────
@@ -1591,24 +1606,36 @@ function VoidshipOverlay({
   cfg: VoidshipConfig;
 }) {
   const { zoneCount, onSectorClick, showZoneLabels, zoneNames } = props;
-  const { shipX, shipY, zoneW, shipH, skewX, gapY, rotateDeg } = cfg;
+  const { shipX, shipY, zoneW, shipH, shearDeg, gapY, rotateDeg, zoneWidthOverrides } = cfg;
 
-  const zoneH = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
+  const skewPerPx  = Math.tan((shearDeg * Math.PI) / 180);
+  const uniformH   = zoneCount > 1 ? (shipH - (zoneCount - 1) * gapY) / zoneCount : shipH;
+  // Text rotation angle = shear angle so labels lie along the parallelogram's lean
+  const labelAngle = shearDeg;
 
-  // Zone boundary outlines — one parallelogram per zone
+  // Zone boundary outlines — one parallelogram per zone, respecting per-zone widths
   const zoneParallels = useMemo(() => {
-    const result: Array<{ zi: number; path: string }> = [];
+    const result: Array<{ zi: number; path: string; cx: number; cy: number; w: number }> = [];
+    let curTopY = shipY;
     for (let zi = 0; zi < zoneCount; zi++) {
-      const topDy      = zi * (zoneH + gapY);
-      const topLeftX   = shipX + skewX * topDy / shipH;
-      const topY       = shipY + topDy;
-      const zoneSkewX  = skewX * zoneH / shipH;
-      result.push({ zi, path: parallelPath(topLeftX, topY, zoneW, zoneH, zoneSkewX) });
+      const topY      = curTopY;
+      curTopY        += uniformH + gapY;
+      const thisW     = (zoneWidthOverrides?.[zi] ?? 0) > 0 ? zoneWidthOverrides[zi] : zoneW;
+      const topLeftX  = shipX + skewPerPx * (topY - shipY);
+      const botLeftX  = shipX + skewPerPx * (topY + uniformH - shipY);
+      const zoneSkewX = botLeftX - topLeftX;
+      result.push({
+        zi,
+        path: parallelPath(topLeftX, topY, thisW, uniformH, zoneSkewX),
+        cx:   (topLeftX + botLeftX) / 2 + thisW / 2,
+        cy:   topY + uniformH / 2,
+        w:    thisW,
+      });
     }
     return result;
-  }, [zoneCount, shipX, shipY, zoneW, shipH, skewX, gapY, zoneH]);
+  }, [zoneCount, shipX, shipY, zoneW, shipH, shearDeg, gapY, uniformH, zoneWidthOverrides]);
 
-  // Deduplicated label points
+  // Deduplicated label points (from geometry centroids)
   const zoneLabelEntries = useMemo(() => {
     const seen = new Set<number>();
     const entries: Array<{ zi: number; zoneKey: string; point: { x: number; y: number } }> = [];
@@ -1621,9 +1648,18 @@ function VoidshipOverlay({
     return entries;
   }, [geometry]);
 
-  // Full hull outline — single parallelogram spanning the whole ship
-  const hullPath = parallelPath(shipX, shipY, zoneW, shipH, skewX);
-  // Rotation transform around the SVG viewBox centre (500, 500)
+  // Full hull outline using first-zone top and last-zone bottom
+  const hullTopLeftX  = shipX;
+  const hullBotLeftX  = shipX + skewPerPx * shipH;
+  const totalW        = zoneW; // hull uses default width as approximation
+  const hullPath = [
+    `M ${hullTopLeftX.toFixed(2)} ${shipY.toFixed(2)}`,
+    `L ${(hullTopLeftX + totalW).toFixed(2)} ${shipY.toFixed(2)}`,
+    `L ${(hullBotLeftX + totalW).toFixed(2)} ${(shipY + shipH).toFixed(2)}`,
+    `L ${hullBotLeftX.toFixed(2)} ${(shipY + shipH).toFixed(2)}`,
+    "Z",
+  ].join(" ");
+
   const rotateTransform = rotateDeg !== 0 ? `rotate(${rotateDeg}, 500, 500)` : undefined;
 
   return (
@@ -1690,22 +1726,24 @@ function VoidshipOverlay({
         </g>
       ))}
 
-      {/* ── Zone name labels ── */}
+      {/* ── Zone name labels — centred in parallelogram, rotated to match lean ── */}
       {showZoneLabels &&
         zoneLabelEntries.map(({ zi, zoneKey, point }) => (
           <text
             key={`vs-label-${zi}`}
             x={point.x.toFixed(1)}
-            y={(point.y - 2).toFixed(1)}
+            y={point.y.toFixed(1)}
             textAnchor="middle"
-            fontSize={15}
+            dominantBaseline="middle"
+            fontSize={13}
             fontWeight="700"
             fill={zoneColour(zi)}
-            stroke="rgba(0,0,0,0.65)"
-            strokeWidth={3}
+            stroke="rgba(0,0,0,0.70)"
+            strokeWidth={2.5}
             paintOrder="stroke"
             pointerEvents="none"
-            style={{ fontFamily: "sans-serif", letterSpacing: "-0.3px" }}
+            transform={`rotate(${labelAngle}, ${point.x.toFixed(1)}, ${point.y.toFixed(1)})`}
+            style={{ fontFamily: "sans-serif", letterSpacing: "-0.2px" }}
           >
             {zoneNames?.[zi] ?? zoneKey.replace(/_/g, " ")}
           </text>
@@ -1945,10 +1983,10 @@ const VOIDSHIP_SLIDER_DEFS: SliderDef[] = [
     description: "Total height bow to stern (all zones + bulkhead gaps)",
   },
   {
-    key: "skewX",
-    label: "Perspective Lean",
-    min: -300, max: 300, step: 1,
-    description: "Rightward shift of stern vs bow — positive = leans upper-left to lower-right",
+    key: "shearDeg",
+    label: "Shear Angle (°)",
+    min: -60, max: 60, step: 0.5,
+    description: "Parallelogram lean angle — 0° = vertical columns, positive = lean right",
   },
   {
     key: "gapY",
@@ -2047,6 +2085,66 @@ function ContinentZoneOverridesPanel({
                   />
                 </div>
               </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Per-zone width panel (voidship layout only) ───────────────────────────────
+//
+// Renders one slider per zone to override its individual width.
+// 0 = use the global zoneW default — drag back to 0 to reset.
+
+function VoidshipZoneWidthPanel({
+  zoneCount,
+  zoneNames,
+  zoneKeys,
+  overrides,
+  defaultW,
+  onChange,
+}: {
+  zoneCount:  number;
+  zoneNames?: string[];
+  zoneKeys:   string[];
+  overrides:  number[];
+  defaultW:   number;
+  onChange:   (zi: number, value: number) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-brass/20 bg-black/75 p-4 space-y-4 text-sm">
+      <p className="text-brass font-semibold font-mono tracking-wide text-xs uppercase">
+        Per-Zone Width
+      </p>
+      <p className="text-zinc-500 text-xs leading-snug">
+        Width 0 = use global Zone Width default ({defaultW}px). Drag back to 0 to reset.
+      </p>
+      <div className="space-y-3">
+        {Array.from({ length: zoneCount }, (_, zi) => {
+          const label   = zoneNames?.[zi] ?? (zoneKeys[zi] ?? `Zone ${zi}`).replace(/_/g, " ");
+          const val     = overrides[zi] ?? 0;
+          const colour  = ZONE_COLOURS[zi % ZONE_COLOURS.length];
+          return (
+            <div key={zi} className="space-y-1.5">
+              <div className="flex justify-between">
+                <label
+                  className="text-xs font-mono font-semibold truncate max-w-[180px]"
+                  style={{ color: colour }}
+                >
+                  {label}
+                </label>
+                <span className="text-brass font-mono text-xs tabular-nums shrink-0 ml-2">
+                  {val === 0 ? `auto (${defaultW})` : `${val}px`}
+                </span>
+              </div>
+              <input
+                type="range" min={0} max={700} step={1}
+                value={val}
+                onChange={(e) => onChange(zi, parseFloat(e.target.value))}
+                className="w-full h-1.5 rounded appearance-none bg-zinc-700 accent-amber-400 cursor-pointer"
+              />
             </div>
           );
         })}
@@ -2278,7 +2376,19 @@ function useVoidshipCalibConfig(
   const [cfg, setCfgState] = useState<VoidshipConfig>(() => {
     try {
       const stored = localStorage.getItem(storageKey);
-      if (stored) return { ...DEFAULT_VOIDSHIP_CONFIG, ...JSON.parse(stored) };
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return {
+          ...DEFAULT_VOIDSHIP_CONFIG,
+          ...parsed,
+          // Migrate legacy skewX → shearDeg for stored configs from before this change
+          shearDeg:           parsed.shearDeg
+            ?? (parsed.skewX != null
+                ? Math.round(Math.atan(parsed.skewX / 880) * 180 / Math.PI)
+                : DEFAULT_VOIDSHIP_CONFIG.shearDeg),
+          zoneWidthOverrides: Array.isArray(parsed.zoneWidthOverrides) ? parsed.zoneWidthOverrides : [],
+        };
+      }
     } catch { /* SSR / private browsing */ }
     return { ...DEFAULT_VOIDSHIP_CONFIG };
   });
@@ -2302,7 +2412,7 @@ function useVoidshipCalibConfig(
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
-  const { mapUrl, layout, isLead, campaignId, calibrationLocked } = props;
+  const { mapUrl, layout, isLead, campaignId, calibrationLocked, popupMode } = props;
 
   // All four config hooks called unconditionally — React rules of hooks forbid
   // conditional hook calls, so every hook is always initialised regardless of
@@ -2339,8 +2449,9 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
   const voidshipGeometry   = useVoidshipGeometry(props, voidshipCfg);
 
   // ── Calibration toggle button (shared across all layouts) ─────────────────
-  // Hidden once the campaign has started (calibrationLocked=true).
-  const calibToggle = calibrationLocked ? null : (
+  // Hidden once the campaign has started (calibrationLocked=true) or in popup
+  // mode (panel is always open there — no toggle needed).
+  const calibToggle = (calibrationLocked || popupMode) ? null : (
     <button
       onClick={() => setCalibOpen((prev) => !prev)}
       className="flex items-center gap-2 text-xs font-mono text-zinc-500 hover:text-brass/80 transition-colors px-1 select-none"
@@ -2356,21 +2467,33 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
     </button>
   );
 
+  // In popup mode the panel is always visible; otherwise respect the toggle state.
+  const effectiveCalibOpen  = popupMode ? true : calibOpen;
+  // Whether the lead calibration section should be rendered at all.
+  const showCalibSection    = isLead && !calibrationLocked;
+
+  // Wrapper classNames: side-by-side in popup, stacked otherwise.
+  const outerCls  = popupMode ? "flex gap-4 items-start w-full"                               : "space-y-2";
+  const mapCls    = popupMode ? "flex-1 min-w-0 space-y-2"                                    : "space-y-2";
+  const calibCls  = popupMode ? "w-80 shrink-0 overflow-y-auto space-y-3 max-h-[85vh] pr-1"  : "space-y-2 pt-1";
+
   // ── Stub for truly unimplemented layouts ──────────────────────────────────
   if (layout !== "ring" && layout !== "spokes" && layout !== "continent" && layout !== "void_ship") {
     return (
-      <div className="space-y-2">
-        <MapLegend />
-        <div className="relative w-full aspect-video overflow-hidden rounded-xl border border-zinc-700 bg-black">
-          <img
-            src={mapUrl}
-            alt="Campaign theatre map"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-          <div className="absolute inset-0 flex items-end justify-center pb-4">
-            <p className="text-zinc-400 text-xs bg-black/70 rounded px-3 py-1">
-              Tactical overlay — {layout} layout coming soon
-            </p>
+      <div className={outerCls}>
+        <div className={mapCls}>
+          <MapLegend />
+          <div className="relative w-full aspect-video overflow-hidden rounded-xl border border-zinc-700 bg-black">
+            <img
+              src={mapUrl}
+              alt="Campaign theatre map"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            <div className="absolute inset-0 flex items-end justify-center pb-4">
+              <p className="text-zinc-400 text-xs bg-black/70 rounded px-3 py-1">
+                Tactical overlay — {layout} layout coming soon
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -2398,21 +2521,19 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
     ].join("\n");
 
     return (
-      <div className="space-y-2">
-        <MapLegend />
-        <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
-          <img
-            src={mapUrl}
-            alt="Campaign theatre map"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-          <div className="absolute inset-0 bg-black/15" />
-          <SpokesOverlay props={props} geometry={spokesGeometry} cfg={spokesCfg} />
+      <div className={outerCls}>
+        <div className={mapCls}>
+          <MapLegend />
+          <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
+            <img src={mapUrl} alt="Campaign theatre map" className="absolute inset-0 h-full w-full object-cover" />
+            <div className="absolute inset-0 bg-black/15" />
+            <SpokesOverlay props={props} geometry={spokesGeometry} cfg={spokesCfg} />
+          </div>
         </div>
-        {isLead && !calibrationLocked && (
-          <div className="space-y-2 pt-1">
+        {showCalibSection && (
+          <div className={calibCls}>
             {calibToggle}
-            {calibOpen && (
+            {effectiveCalibOpen && (
               <CalibrationPanel
                 cfg={spokesCfg as unknown as Record<string, number>}
                 sliderDefs={SPOKES_SLIDER_DEFS}
@@ -2475,21 +2596,19 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
     };
 
     return (
-      <div className="space-y-2">
-        <MapLegend />
-        <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
-          <img
-            src={mapUrl}
-            alt="Campaign theatre map"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-          <div className="absolute inset-0 bg-black/15" />
-          <ContinentOverlay props={props} geometry={continentGeometry} cfg={continentCfg} />
+      <div className={outerCls}>
+        <div className={mapCls}>
+          <MapLegend />
+          <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
+            <img src={mapUrl} alt="Campaign theatre map" className="absolute inset-0 h-full w-full object-cover" />
+            <div className="absolute inset-0 bg-black/15" />
+            <ContinentOverlay props={props} geometry={continentGeometry} cfg={continentCfg} />
+          </div>
         </div>
-        {isLead && !calibrationLocked && (
-          <div className="space-y-2 pt-1">
+        {showCalibSection && (
+          <div className={calibCls}>
             {calibToggle}
-            {calibOpen && (
+            {effectiveCalibOpen && (
               <>
                 <CalibrationPanel
                   cfg={continentCfg as unknown as Record<string, number>}
@@ -2524,60 +2643,84 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
 
   // ── Voidship layout ───────────────────────────────────────────────────────
   if (layout === "void_ship") {
-    const zoneH = props.zoneCount > 1
+    const skewPerPx = Math.tan((voidshipCfg.shearDeg * Math.PI) / 180);
+    const zoneH     = props.zoneCount > 1
       ? (voidshipCfg.shipH - (props.zoneCount - 1) * voidshipCfg.gapY) / props.zoneCount
       : voidshipCfg.shipH;
     const subW  = (voidshipCfg.zoneW - voidshipCfg.sectorGap) / 2;
     const subH  = (zoneH - voidshipCfg.sectorGap) / 2;
-    const buildVoidshipCopySnippet = () => [
-      "// Voidship Calibration — paste into DEFAULT_VOIDSHIP_CONFIG in CampaignMapOverlay.tsx",
-      "export const DEFAULT_VOIDSHIP_CONFIG: VoidshipConfig = {",
-      `  shipX:          ${voidshipCfg.shipX},`,
-      `  shipY:          ${voidshipCfg.shipY},`,
-      `  zoneW:          ${voidshipCfg.zoneW},`,
-      `  shipH:          ${voidshipCfg.shipH},`,
-      `  skewX:          ${voidshipCfg.skewX},`,
-      `  gapY:           ${voidshipCfg.gapY},`,
-      `  sectorGap:      ${voidshipCfg.sectorGap},`,
-      `  overlayOpacity: ${voidshipCfg.overlayOpacity.toFixed(2)},`,
-      `  rotateDeg:      ${voidshipCfg.rotateDeg},`,
-      "};",
-    ].join("\n");
+    const totalSkew = (skewPerPx * voidshipCfg.shipH).toFixed(1);
+
+    const handleZoneWidthChange = (zi: number, value: number) => {
+      const next = [...(voidshipCfg.zoneWidthOverrides ?? [])];
+      while (next.length <= zi) next.push(0);
+      next[zi] = value;
+      setVoidshipCfg({ ...voidshipCfg, zoneWidthOverrides: next });
+    };
+
+    const buildVoidshipCopySnippet = () => {
+      const wLines = (voidshipCfg.zoneWidthOverrides ?? []).map(
+        (w, i) => `    ${w},  // zone ${i}`
+      );
+      return [
+        "// Voidship Calibration — paste into DEFAULT_VOIDSHIP_CONFIG in CampaignMapOverlay.tsx",
+        "export const DEFAULT_VOIDSHIP_CONFIG: VoidshipConfig = {",
+        `  shipX:              ${voidshipCfg.shipX},`,
+        `  shipY:              ${voidshipCfg.shipY},`,
+        `  zoneW:              ${voidshipCfg.zoneW},`,
+        `  shipH:              ${voidshipCfg.shipH},`,
+        `  shearDeg:           ${voidshipCfg.shearDeg},`,
+        `  gapY:               ${voidshipCfg.gapY},`,
+        `  sectorGap:          ${voidshipCfg.sectorGap},`,
+        `  overlayOpacity:     ${voidshipCfg.overlayOpacity.toFixed(2)},`,
+        `  rotateDeg:          ${voidshipCfg.rotateDeg},`,
+        "  zoneWidthOverrides: [",
+        ...wLines,
+        "  ],",
+        "};",
+      ].join("\n");
+    };
 
     return (
-      <div className="space-y-2">
-        <MapLegend />
-        {/* Voidship uses aspect-square — the 1000×1000 SVG viewBox is undistorted */}
-        <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
-          <img
-            src={mapUrl}
-            alt="Campaign theatre map"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-          <div className="absolute inset-0 bg-black/15" />
-          <VoidshipOverlay props={props} geometry={voidshipGeometry} cfg={voidshipCfg} />
+      <div className={outerCls}>
+        <div className={mapCls}>
+          <MapLegend />
+          <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
+            <img src={mapUrl} alt="Campaign theatre map" className="absolute inset-0 h-full w-full object-cover" />
+            <div className="absolute inset-0 bg-black/15" />
+            <VoidshipOverlay props={props} geometry={voidshipGeometry} cfg={voidshipCfg} />
+          </div>
         </div>
-        {isLead && !calibrationLocked && (
-          <div className="space-y-2 pt-1">
+        {showCalibSection && (
+          <div className={calibCls}>
             {calibToggle}
-            {calibOpen && (
-              <CalibrationPanel
-                cfg={voidshipCfg as unknown as Record<string, number>}
-                sliderDefs={VOIDSHIP_SLIDER_DEFS}
-                buildCopySnippet={buildVoidshipCopySnippet}
-                onChange={handleVoidshipSliderChange}
-                onReset={resetVoidshipCfg}
-                campaignId={campaignId}
-                derivedValues={[
-                  { label: "zoneH",       value: zoneH.toFixed(1) },
-                  { label: "subW",        value: subW.toFixed(1) },
-                  { label: "subH",        value: subH.toFixed(1) },
-                  { label: "skewPerZone", value: (voidshipCfg.skewX * zoneH / voidshipCfg.shipH).toFixed(1) },
-                  { label: "bowRight",    value: (voidshipCfg.shipX + voidshipCfg.zoneW).toFixed(0) },
-                  { label: "sternLeft",   value: (voidshipCfg.shipX + voidshipCfg.skewX).toFixed(0) },
-                  { label: "rotate°",     value: voidshipCfg.rotateDeg.toFixed(1) },
-                ]}
-              />
+            {effectiveCalibOpen && (
+              <>
+                <CalibrationPanel
+                  cfg={voidshipCfg as unknown as Record<string, number>}
+                  sliderDefs={VOIDSHIP_SLIDER_DEFS}
+                  buildCopySnippet={buildVoidshipCopySnippet}
+                  onChange={handleVoidshipSliderChange}
+                  onReset={resetVoidshipCfg}
+                  campaignId={campaignId}
+                  derivedValues={[
+                    { label: "zoneH",      value: zoneH.toFixed(1) },
+                    { label: "subW",       value: subW.toFixed(1) },
+                    { label: "subH",       value: subH.toFixed(1) },
+                    { label: "totalSkew",  value: `${totalSkew}px` },
+                    { label: "shear°",     value: voidshipCfg.shearDeg.toFixed(1) },
+                    { label: "rotate°",    value: voidshipCfg.rotateDeg.toFixed(1) },
+                  ]}
+                />
+                <VoidshipZoneWidthPanel
+                  zoneCount={props.zoneCount}
+                  zoneNames={props.zoneNames}
+                  zoneKeys={props.zoneKeys}
+                  overrides={voidshipCfg.zoneWidthOverrides ?? []}
+                  defaultW={voidshipCfg.zoneW}
+                  onChange={handleZoneWidthChange}
+                />
+              </>
             )}
           </div>
         )}
@@ -2601,21 +2744,19 @@ export default function CampaignMapOverlay(props: CampaignMapOverlayProps) {
   ].join("\n");
 
   return (
-    <div className="space-y-2">
-      <MapLegend />
-      <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
-        <img
-          src={mapUrl}
-          alt="Campaign theatre map"
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-        <div className="absolute inset-0 bg-black/15" />
-        <RingOverlay props={props} geometry={ringGeometry} cfg={ringCfg} />
+    <div className={outerCls}>
+      <div className={mapCls}>
+        <MapLegend />
+        <div className="relative w-full aspect-square overflow-hidden rounded-xl border border-zinc-700 bg-black">
+          <img src={mapUrl} alt="Campaign theatre map" className="absolute inset-0 h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-black/15" />
+          <RingOverlay props={props} geometry={ringGeometry} cfg={ringCfg} />
+        </div>
       </div>
-      {isLead && !calibrationLocked && (
-        <div className="space-y-2 pt-1">
+      {showCalibSection && (
+        <div className={calibCls}>
           {calibToggle}
-          {calibOpen && (
+          {effectiveCalibOpen && (
             <CalibrationPanel
               cfg={ringCfg as unknown as Record<string, number>}
               sliderDefs={RING_SLIDER_DEFS}
