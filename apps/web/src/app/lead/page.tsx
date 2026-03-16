@@ -1137,11 +1137,12 @@ export default function LeadControls() {
 
         {/* ── Movement Console (movement/recon stages) ─────────────────── */}
         {allowed && campaign && (currentStage === "movement" || currentStage === "recon") && (
-          <Card title={
-            <div className="flex items-center justify-between w-full">
-              <span>◈ Movement Console — Round {campaign.round_number}</span>
+          <Card title={`◈ Movement Console — Round ${campaign.round_number}`}>
+            {/* Status light header row inside the card body */}
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs text-parchment/40 uppercase tracking-widest font-mono">Order Status</span>
               {consoleLoading
-                ? <span className="text-xs text-parchment/30 font-normal font-sans animate-pulse">Loading...</span>
+                ? <span className="text-xs text-parchment/30 font-mono animate-pulse">Loading...</span>
                 : <StatusLight state={movementOverallLight} size="lg" label={
                     movementOverallLight === "green" ? "All orders submitted" :
                     movementOverallLight === "amber" ? "Orders in progress" :
@@ -1149,7 +1150,6 @@ export default function LeadControls() {
                   } />
               }
             </div>
-          }>
             {consoleLoading ? (
               <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-10 rounded bg-brass/5 animate-pulse" />)}</div>
             ) : moveStatuses.length === 0 ? (
@@ -1214,11 +1214,12 @@ export default function LeadControls() {
 
         {/* ── Engagement Console (missions/results stages) ──────────────── */}
         {allowed && campaign && (currentStage === "missions" || currentStage === "results") && (
-          <Card title={
-            <div className="flex items-center justify-between w-full">
-              <span>◈ Engagement Console — Round {campaign.round_number}</span>
+          <Card title={`◈ Engagement Console — Round ${campaign.round_number}`}>
+            {/* Status light header row inside the card body */}
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs text-parchment/40 uppercase tracking-widest font-mono">Engagement Status</span>
               {consoleLoading
-                ? <span className="text-xs text-parchment/30 font-normal font-sans animate-pulse">Loading...</span>
+                ? <span className="text-xs text-parchment/30 font-mono animate-pulse">Loading...</span>
                 : <StatusLight state={conflictsOverallLight} size="lg" label={
                     conflictsOverallLight === "green" ? "All results confirmed" :
                     conflictsOverallLight === "amber" ? "Results in progress" :
@@ -1226,7 +1227,6 @@ export default function LeadControls() {
                   } />
               }
             </div>
-          }>
             {consoleLoading ? (
               <div className="space-y-2">{[1,2].map(i => <div key={i} className="h-14 rounded bg-brass/5 animate-pulse" />)}</div>
             ) : conflictStatuses.length === 0 ? (
