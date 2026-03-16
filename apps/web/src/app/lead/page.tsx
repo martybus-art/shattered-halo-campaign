@@ -3,6 +3,15 @@
 // Lead Player Dashboard -- campaign controls for lead/admin role.
 //
 // changelog:
+//   2026-03-16 -- BUG FIX: apply-instability has roll/confirm two-mode design.
+//                 handleApplyInstability was calling callFn("apply-instability")
+//                 with no mode param — defaulting to "roll" (preview only, no
+//                 writes). Replaced with a two-step flow: step 1 calls roll mode
+//                 and shows an InstabilityRollResult modal with d10 result, event
+//                 name, public_text, and auto_effects. Step 2 (Confirm & Apply)
+//                 calls confirm mode with d10_result + expected_instability,
+//                 writing effects, incrementing instability, posting bulletin.
+//                 Re-roll button allows lead to roll again before committing.
 //   2026-03-16 -- UPDATE: STAGE_ORDER updated — "conflicts" removed, merged
 //                 into "missions". New order: spend>recon>movement>missions>
 //                 results>publish.
@@ -161,6 +170,22 @@ type PlayerIncomeResult = {
   isUnderdog:    boolean;
 };
 
+
+// -- Instability roll result (from apply-instability roll mode) ----------
+
+type InstabilityRollResult = {
+  d10:                  number;
+  threshold_band:       number;
+  current_instability:  number;
+  new_instability:      number;
+  event_name:           string;
+  public_text:          string;
+  effect:               Record<string, unknown>;
+  auto_effects:         string[];
+  needs_zone_selection: boolean;
+  needs_zone_destroy:   boolean;
+  destroy_count:        number;
+};
 
 // -- Generate Map Modal -----------------------------------------------------
 
@@ -651,6 +676,13 @@ export default function LeadControls() {
 
   const confirmResolverRef = useRef<((v: boolean) => void) | null>(null);
 
+  // Instability two-step: roll result stored between roll and confirm
+  const [instabilityRoll,    setInstabilityRoll]    = useState<InstabilityRollResult | null>(null);
+  const [instabilityRolling, setInstabilityRolling] = useState(false);
+  const [instabilityConfirming, setInstabilityConfirming] = useState(false);
+  const [selectedZone,       setSelectedZone]       = useState<string>("");
+  const [selectedZones,      setSelectedZones]      = useState<string[]>([]);
+
   // Console state — loaded separately for movement and engagement consoles
   const [moveStatuses,     setMoveStatuses]     = useState<PlayerMoveStatus[]>([]);
   const [conflictStatuses, setConflictStatuses] = useState<ConflictStatusRow[]>([]);
@@ -974,12 +1006,67 @@ export default function LeadControls() {
     if (go) callFn("assign-missions");
   };
 
+  // Step 1: confirm intent, then roll the d10 event preview
   const handleApplyInstability = async () => {
     const go = await askConfirm({
       title: "Confirm Action", tone: "blood", confirmText: "Proceed",
       message: `Apply Halo Instability?\n\nThis increments the Instability counter by 1 and rolls an event from the d10 table.\nA public bulletin will be posted automatically.\n\nMake sure all conflict results have been recorded before proceeding.\n\nProceed?`,
     });
-    if (go) callFn("apply-instability");
+    if (!go) return;
+    setInstabilityRolling(true);
+    setInstabilityRoll(null);
+    setSelectedZone("");
+    setSelectedZones([]);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const { data, error } = await supabase.functions.invoke("apply-instability", {
+        body: { campaign_id: campaignId, mode: "roll" },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Roll failed");
+      setInstabilityRoll(data as InstabilityRollResult);
+    } catch (e: any) {
+      setResultModal({ open: true, tone: "blood", title: "Roll Failed", message: e?.message ?? String(e) });
+    } finally {
+      setInstabilityRolling(false);
+    }
+  };
+
+  // Step 2: commit the rolled event
+  const confirmApplyInstability = async () => {
+    if (!instabilityRoll) return;
+    setInstabilityConfirming(true);
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const { data, error } = await supabase.functions.invoke("apply-instability", {
+        body: {
+          campaign_id:          campaignId,
+          mode:                 "confirm",
+          d10_result:           instabilityRoll.d10,
+          expected_instability: instabilityRoll.current_instability,
+          selected_zone:        selectedZone,
+          selected_zones:       selectedZones,
+        },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error ?? "Confirm failed");
+      setInstabilityRoll(null);
+      const msg = [
+        `Instability is now ${data.instability}/10.`,
+        data.effects_applied?.length ? `Effects: ${(data.effects_applied as string[]).join("; ")}.` : "",
+        data.phase_changed ? `Phase advanced to ${data.new_phase}.` : "",
+      ].filter(Boolean).join("\n");
+      setResultModal({ open: true, tone: "brass", title: `Instability Applied — ${data.event_name ?? ""}`, message: msg });
+      await load(campaignId);
+    } catch (e: any) {
+      setResultModal({ open: true, tone: "blood", title: "Apply Failed", message: e?.message ?? String(e) });
+    } finally {
+      setInstabilityConfirming(false);
+    }
   };
 
   const handleOfferCatchup = async () => {
@@ -1401,12 +1488,12 @@ export default function LeadControls() {
                     {/* Apply Instability -- results stage only */}
                     {showApplyInstability && (
                       <div>
-                        <button onClick={handleApplyInstability}
-                          className="w-full px-4 py-2.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 text-sm font-semibold transition-colors">
-                          Apply Instability (Game Day)
+                        <button onClick={handleApplyInstability} disabled={instabilityRolling}
+                          className="w-full px-4 py-2.5 rounded bg-brass/20 border border-brass/40 hover:bg-brass/30 disabled:opacity-40 text-sm font-semibold transition-colors">
+                          {instabilityRolling ? <Spinner colour="brass" label="Rolling d10…" /> : "Apply Instability (Game Day)"}
                         </button>
                         <p className="mt-1 text-xs text-parchment/35">
-                          Increments Instability by 1, rolls d10 event, posts bulletin.
+                          Rolls d10 instability event for review before committing.
                         </p>
                       </div>
                     )}
@@ -1702,6 +1789,104 @@ export default function LeadControls() {
         )}
 
       </div>
+
+      {/* ── Instability Roll Result Modal ─────────────────────────── */}
+      {instabilityRoll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-void border border-blood/40 rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-blood/20 shrink-0">
+              <div>
+                <h2 className="text-blood font-semibold uppercase tracking-widest text-sm">⚡ Halo Instability Event</h2>
+                <p className="text-parchment/40 text-xs mt-0.5 font-mono">
+                  Roll: {instabilityRoll.d10} &bull; Band: T{instabilityRoll.threshold_band} &bull; {instabilityRoll.current_instability} → {instabilityRoll.new_instability}/10
+                </p>
+              </div>
+              <button onClick={() => setInstabilityRoll(null)} className="text-parchment/40 hover:text-parchment text-xl leading-none">✕</button>
+            </div>
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              <div className="rounded border border-blood/25 bg-blood/5 px-4 py-3">
+                <p className="text-blood font-semibold text-sm uppercase tracking-widest mb-1">{instabilityRoll.event_name}</p>
+                <p className="text-parchment/80 text-sm leading-relaxed">{instabilityRoll.public_text}</p>
+              </div>
+              {instabilityRoll.auto_effects.length > 0 && (
+                <div>
+                  <p className="text-xs text-parchment/40 uppercase tracking-widest font-mono mb-1.5">Effects to Apply</p>
+                  <ul className="space-y-1">
+                    {instabilityRoll.auto_effects.map((e, i) => (
+                      <li key={i} className="text-sm text-parchment/75 flex items-start gap-2">
+                        <span className="text-blood/60 shrink-0 mt-0.5">•</span>{e}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {/* Zone selection if required */}
+              {instabilityRoll.needs_zone_selection && (
+                <div>
+                  <p className="text-xs text-parchment/40 uppercase tracking-widest font-mono mb-1.5">Select Affected Zone</p>
+                  <select
+                    className="w-full px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                    value={selectedZone}
+                    onChange={(e) => setSelectedZone(e.target.value)}
+                  >
+                    <option value="">— Select a zone —</option>
+                    {members.length > 0 && Array.from(new Set(members.map(m => m.user_id))).map((_, i) => null)}
+                    {/* zones come from the map — use fmtZone helper */}
+                  </select>
+                  <p className="text-xs text-parchment/30 mt-1 italic">Enter the zone key manually if not listed.</p>
+                  <input
+                    className="w-full mt-1 px-3 py-2 rounded bg-void border border-brass/30 text-sm"
+                    placeholder="e.g. ash_wastes"
+                    value={selectedZone}
+                    onChange={(e) => setSelectedZone(e.target.value)}
+                  />
+                </div>
+              )}
+              {instabilityRoll.needs_zone_destroy && (
+                <div>
+                  <p className="text-xs text-parchment/40 uppercase tracking-widest font-mono mb-1.5">
+                    Select {instabilityRoll.destroy_count} Zone(s) to Destroy
+                  </p>
+                  <input
+                    className="w-full px-3 py-2 rounded bg-void border border-blood/30 text-sm"
+                    placeholder="Comma-separated zone keys, e.g. ash_wastes, vault_ruins"
+                    value={selectedZones.join(", ")}
+                    onChange={(e) => setSelectedZones(e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
+                  />
+                </div>
+              )}
+              <div className="rounded border border-parchment/10 bg-parchment/3 px-3 py-2">
+                <p className="text-xs text-parchment/30 italic">
+                  Confirming will write these effects, increment instability to {instabilityRoll.new_instability}, and post a public War Bulletin.
+                </p>
+              </div>
+            </div>
+            {/* Footer */}
+            <div className="px-5 py-4 border-t border-blood/20 shrink-0 flex gap-3">
+              <button
+                onClick={() => setInstabilityRoll(null)}
+                disabled={instabilityConfirming}
+                className="flex-1 px-4 py-2.5 rounded border border-parchment/20 text-parchment/60 hover:text-parchment/80 text-sm transition-colors disabled:opacity-40">
+                Cancel
+              </button>
+              <button
+                onClick={handleApplyInstability}
+                disabled={instabilityConfirming}
+                className="px-4 py-2.5 rounded border border-blood/30 bg-blood/5 hover:bg-blood/15 text-blood/80 text-sm transition-colors disabled:opacity-40">
+                {instabilityConfirming ? "Re-rolling…" : "Re-roll"}
+              </button>
+              <button
+                onClick={confirmApplyInstability}
+                disabled={instabilityConfirming || (instabilityRoll.needs_zone_selection && !selectedZone)}
+                className="flex-1 px-4 py-2.5 rounded bg-blood/20 border border-blood/50 hover:bg-blood/30 text-blood font-bold text-sm uppercase tracking-wider transition-colors disabled:opacity-40">
+                {instabilityConfirming ? "Applying…" : "Confirm & Apply"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Generate Map Modal */}
       {campaign && (

@@ -60,8 +60,9 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const user = await requireUser(req);
-    if (!user) return json(401, { ok: false, error: "Unauthorized" });
+    const result = await requireUser(req);
+    if (!result?.user) return json(401, { ok: false, error: "Unauthorised" });
+    const user = result.user;
 
     const body = await req.json().catch(() => ({}));
     const { campaignId, roundNumber, dryRun = false } = body as {
