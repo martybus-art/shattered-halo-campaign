@@ -2,6 +2,11 @@
 // Tactical Hololith — campaign map viewer with movement order submission.
 //
 // changelog:
+//   2026-03-16 — UX: Movement Orders card hidden when all units have submitted
+//                orders for the round. New derived constant allUnitsOrdered
+//                (myUnits.every unit has a move in myMoves). The Round N Orders
+//                card already shows what was submitted, so the "Movement is not
+//                available" message is redundant once all orders are in.
 //   2026-03-15 — FIX: Two-layer sector adjacency (zone + sector boundary).
 //                isCrossZoneSectorValid corrected for all four layout types:
 //                Ring: CW col1->col0, CCW col0->col1.
@@ -1577,6 +1582,11 @@ export default function MapPage() {
   const inReconPhase    = stage === "recon";
   const canMove         = inMovementPhase || (inReconPhase && hasRecon);
   const inSpendPhase    = stage === "spend";
+  // True when every active unit has a move submitted this round.
+  // Used to hide the Movement Orders card once all orders are in —
+  // the Round N Orders card already shows what was submitted.
+  const allUnitsOrdered = myUnits.length > 0
+    && myUnits.every((u) => myMoves.some((m) => m.unit_id === u.id));
   // Overlay calibration is locked once the campaign has started (round_number > 0)
   const calibrationLocked = roundNumber > 0;
 
@@ -1957,7 +1967,8 @@ export default function MapPage() {
             )}
 
             {/* ── No movement phase message ── */}
-            {myUnits.length > 0 && !canMove && stage && (
+            {/* Hidden when all units have submitted orders — Round N Orders card covers it */}
+            {myUnits.length > 0 && !canMove && stage && !allUnitsOrdered && (
               <Card title="Movement Orders">
                 <p className="text-parchment/40 text-sm italic">
                   {stage === "spend"
